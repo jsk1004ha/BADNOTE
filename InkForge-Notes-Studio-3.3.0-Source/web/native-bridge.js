@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.10';
+  const VERSION = '3.3.11';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,11 +11,11 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '확대 상태에서 페이지가 뷰포트보다 넓어질 때 좌우 스크롤 가능한 폭을 확보했습니다.',
-    'PDF·이미지 배경 페이지를 200~300% 확대할 때 캔버스와 이미지 캐시 메모리 사용량을 제한했습니다.',
-    '손 도구 드래그, 확대 상태 터치 팬, 트랙패드/Shift 휠의 좌우 이동을 보강했습니다.',
-    '자동 도형 변환에서 화살표 판정을 제거하고 흔들린 사각형 인식률을 높였습니다.',
-    '오각형·육각형 자동 인식은 정교하게 그린 경우만 통과하도록 낮추고, 정형 도형 비율 잠금/해제를 추가했습니다.'
+    '도형 도구에 곡선 그리기를 추가하고 드래그만 해도 곡률이 보이도록 제어점을 자동 보정했습니다.',
+    '라이브러리에 새 폴더 생성 버튼과 폴더 칩을 추가하고 생성한 폴더를 기기에 저장합니다.',
+    '작은 범위에서 국소적으로 문지른 낙서도 지우기 제스처로 인식되도록 밀도 판정을 추가했습니다.',
+    'S Pen 버튼을 누른 상태가 입력 도중 감지되면 진행 중인 펜 획을 즉시 지우개 세션으로 전환합니다.',
+    'S Pen 버튼을 화면에 닿기 전이나 닿은 뒤 눌러도 획 지우개가 더 안정적으로 작동하도록 회귀 테스트를 추가했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;

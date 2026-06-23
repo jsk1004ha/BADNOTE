@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.10');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.11');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -172,6 +172,34 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
           }
         """)
         results["native_update_ui"] = update_ui
+        results["folder_creation"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const before = api.state.folders.length;
+            const folder = await api.createFolder('수학 풀이');
+            const stored = await api.storage.getSetting('folders', []);
+            const doc = api.createDocument('폴더 테스트 노트', 'grid');
+            doc.folderId = folder.id;
+            api.state.documents.push(doc);
+            await api.storage.putDocument(doc);
+            api.renderLibrary();
+            const breadcrumb = document.getElementById('folderBreadcrumb')?.textContent || '';
+            const folderVisible = Array.from(document.querySelectorAll('[data-doc-id]')).some(node => node.dataset.docId === doc.id);
+            const createButtons = document.querySelectorAll('[data-action="create-folder"]').length;
+            api.state.folderId = 'root';
+            api.renderLibrary();
+            return {
+              before,
+              after: api.state.folders.length,
+              storedCount: Array.isArray(stored) ? stored.length : 0,
+              folderId: folder.id,
+              breadcrumb,
+              folderVisible,
+              createButtons,
+              passed: api.state.folders.length === before + 1 && stored.some(item => item.id === folder.id) && breadcrumb.includes('수학 풀이') && folderVisible && createButtons >= 1
+            };
+          }
+        """)
         if args.screenshots:
             args.screenshots.mkdir(parents=True, exist_ok=True)
             await page.screenshot(path=str(args.screenshots / "inkforge-3.2-library.png"), full_page=True)
@@ -523,8 +551,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         """, shapes)
         await page.evaluate("window.__inkforge.setTool('shape')")
         shape_button_count = await page.locator('#activeToolMenu [data-shape]').count()
+        curve_button_count = await page.locator('#activeToolMenu [data-shape="curve"]').count()
         expected_ok = recognized_shapes.get("line") == "line" and recognized_shapes.get("circle") in ("circle", "ellipse") and recognized_shapes.get("ellipse") == "ellipse" and recognized_shapes.get("triangle") == "triangle" and recognized_shapes.get("rectangle") in ("rectangle", "square") and recognized_shapes.get("wobbly_rectangle") in ("rectangle", "square") and recognized_shapes.get("pentagon") == "pentagon" and recognized_shapes.get("hexagon") == "hexagon" and recognized_shapes.get("rough_pentagon") != "pentagon" and recognized_shapes.get("arrow") != "arrow"
-        results["shape_recognition"] = {"recognized": recognized_shapes, "manual_shape_buttons": shape_button_count, "passed": expected_ok and shape_button_count >= 16}
+        results["shape_recognition"] = {"recognized": recognized_shapes, "manual_shape_buttons": shape_button_count, "curve_button_count": curve_button_count, "passed": expected_ok and shape_button_count >= 17 and curve_button_count == 1}
 
         results["zoom_screen_gesture_space"] = await page.evaluate("""
           async () => {
@@ -588,6 +617,66 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const shapesAfter = page.objects.filter(object => object.type === 'shape').length;
             api.setZoom(1.5, { clientX: center.x, clientY: center.y });
             return { targetErased, shapesBefore, shapesAfter, zoom: api.state.zoom, passed: targetErased && shapesAfter === shapesBefore };
+          }
+        """)
+        results["local_scribble_erase"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const pageIndex = api.state.currentPageIndex;
+            const page = api.currentPage();
+            api.setZoom(1);
+            api.setTool('pen');
+            api.state.settings.scribbleErase = true;
+            page.objects = page.objects.filter(object => object.id !== 'local_scribble_target');
+            page.objects.push({
+              id: 'local_scribble_target',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 500, y: 520, p: .6 },
+                { x: 560, y: 520, p: .6 },
+                { x: 620, y: 520, p: .6 }
+              ]
+            });
+            const beforeCount = page.objects.length;
+            api.renderPageCanvas(pageIndex);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const clientFor = (x, y) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + x / 1000 * rect.width, y: rect.top + y / 1414 * rect.height };
+            };
+            const send = (type, point) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 8811,
+              pointerType: 'pen',
+              isPrimary: true,
+              button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              pressure: type === 'pointerup' ? 0 : .55,
+              clientX: point.x,
+              clientY: point.y
+            }));
+            const center = clientFor(560, 520);
+            const path = Array.from({ length: 10 }, (_, index) => ({
+              x: center.x - 16 + index * 3.6,
+              y: center.y + (index % 2 ? -7 : 7)
+            }));
+            send('pointerdown', path[0]);
+            path.slice(1).forEach(point => send('pointermove', point));
+            send('pointerup', path[path.length - 1]);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const erased = !page.objects.some(object => object.id === 'local_scribble_target');
+            return {
+              erased,
+              beforeCount,
+              afterCount: page.objects.length,
+              passed: erased && page.objects.length <= beforeCount - 1
+            };
           }
         """)
 
@@ -703,6 +792,89 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
           }
         """)
         results["s_pen_barrel_button_eraser"] = barrel_eraser
+        barrel_mid_contact = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            api.state.settings.sPenGestures = true;
+            api.state.eraserMode = 'stroke';
+            api.setTool('pen');
+            const page = api.currentPage();
+            page.objects = page.objects.filter(object => object.id !== 'spen_barrel_mid_contact_target');
+            page.objects.push({
+              id: 'spen_barrel_mid_contact_target',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 320, y: 430, p: .6 },
+                { x: 390, y: 430, p: .6 },
+                { x: 460, y: 430, p: .6 }
+              ]
+            });
+            const beforeCount = page.objects.length;
+            api.renderPageCanvas(api.state.currentPageIndex);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+            const clientFor = (x, y) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + x / 1000 * rect.width, y: rect.top + y / 1414 * rect.height };
+            };
+            const dispatchNative = (detail) => window.dispatchEvent(new CustomEvent('inkforge:native-stylus', { detail }));
+            const sendPointer = (type, pointerId, client) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId,
+              pointerType: 'pen',
+              isPrimary: true,
+              button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              pressure: type === 'pointerup' ? 0 : .55,
+              clientX: client.x,
+              clientY: client.y
+            }));
+            sendPointer('pointerdown', 9302, clientFor(390, 430));
+            dispatchNative({
+              action: 2,
+              hover: false,
+              toolType: 2,
+              buttonState: 32,
+              rawButtonState: 32,
+              primaryButton: true,
+              barrelButton: true,
+              x: clientFor(390, 430).x,
+              y: clientFor(390, 430).y,
+              pressure: .55,
+              device: 'Samsung S Pen'
+            });
+            sendPointer('pointermove', 9302, clientFor(410, 430));
+            sendPointer('pointerup', 9302, clientFor(410, 430));
+            dispatchNative({
+              action: 12,
+              hover: true,
+              toolType: 2,
+              buttonState: 0,
+              rawButtonState: 0,
+              x: clientFor(410, 430).x,
+              y: clientFor(410, 430).y,
+              pressure: 0,
+              device: 'Samsung S Pen'
+            });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const erased = !page.objects.some(object => object.id === 'spen_barrel_mid_contact_target');
+            const noExtraStroke = page.objects.length <= beforeCount - 1;
+            return {
+              erased,
+              noExtraStroke,
+              restoredTool: api.state.tool,
+              objectCount: page.objects.length,
+              beforeCount,
+              passed: erased && noExtraStroke && api.state.tool !== 'eraser'
+            };
+          }
+        """)
+        results["s_pen_barrel_mid_contact_eraser"] = barrel_mid_contact
 
         if args.screenshots:
             await page.evaluate("window.__inkforge.setTool('pen')")
@@ -750,7 +922,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.10" and results.get("upgrade_version") == "3.3.10" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.11" and results.get("upgrade_version") == "3.3.11" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.10';
+  const VERSION = '3.3.11';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_PIXEL_LIMIT = 7000000;
@@ -71,6 +71,7 @@
     highlighter: '<path d="m7 16 8-12 5 4-8 12H7z"/><path d="m7 16 5 4M4 21h16"/>',
     shape: '<rect x="4" y="5" width="12" height="12" rx="1"/><circle cx="16" cy="15" r="5"/>',
     line: '<path d="M4 20 20 4"/>',
+    curve: '<path d="M4 18C9 4 15 20 20 6"/>',
     arrow: '<path d="M4 20 20 4M13 4h7v7"/>',
     rectangle: '<rect x="4" y="5" width="16" height="14" rx="1"/>',
     ellipse: '<ellipse cx="12" cy="12" rx="9" ry="7"/>',
@@ -190,6 +191,28 @@
   function randomColor() {
     const colors = ['#2f7fb7', '#6f64c8', '#c95b76', '#2e9b79', '#d2883c', '#677381', '#8a6b4d'];
     return colors[Math.floor(Math.random() * colors.length)];
+  }
+
+  function normalizeFolders(folders) {
+    const source = Array.isArray(folders) ? folders : DEFAULT_FOLDERS;
+    const normalized = [deepClone(DEFAULT_FOLDERS[0])];
+    const seen = new Set(['root']);
+    for (const folder of source) {
+      if (!folder || folder.id === 'root' || seen.has(folder.id)) continue;
+      const title = String(folder.title || '').trim().slice(0, 40);
+      if (!title) continue;
+      normalized.push({
+        id: String(folder.id),
+        title,
+        color: /^#[0-9a-f]{6}$/i.test(folder.color || '') ? folder.color : FOLDER_COLORS[normalized.length % FOLDER_COLORS.length]
+      });
+      seen.add(String(folder.id));
+    }
+    return normalized;
+  }
+
+  async function persistFolders() {
+    await storage.setSetting('folders', normalizeFolders(state.folders));
   }
 
   class AppStorage {
@@ -323,6 +346,13 @@
     fineliner: { title: '파인라이너', icon: 'pen', pressure: .02, smoothing: .6, sharpness: .85, taper: .06, opacity: .98 }
   };
 
+  const DEFAULT_FOLDERS = [
+    { id: 'root', title: '문서', color: '#1b68a6' },
+    { id: 'study', title: '학교·공부', color: '#2b8bc5' },
+    { id: 'work', title: '프로젝트', color: '#6d63c7' }
+  ];
+  const FOLDER_COLORS = ['#2b8bc5', '#6d63c7', '#2e9b79', '#d2883c', '#c95b76', '#677381', '#8a6b4d'];
+
   function blankPage(template = 'grid') {
     return {
       id: uid('page'),
@@ -359,11 +389,7 @@
 
   const state = {
     documents: [],
-    folders: [
-      { id: 'root', title: '문서', color: '#1b68a6' },
-      { id: 'study', title: '학교·공부', color: '#2b8bc5' },
-      { id: 'work', title: '프로젝트', color: '#6d63c7' }
-    ],
+    folders: deepClone(DEFAULT_FOLDERS),
     view: 'library',
     libraryFilter: 'all',
     folderId: 'root',
@@ -1479,20 +1505,28 @@
   function renderLibrary() {
     setView('library');
     const titleMap = { all: '문서', favorite: '즐겨찾기', shared: '공유됨', templates: '템플릿', trash: '휴지통' };
-    $('#libraryTitle').textContent = titleMap[state.libraryFilter] || '문서';
+    const activeFolder = state.folders.find((folder) => folder.id === state.folderId) || state.folders[0];
+    $('#libraryTitle').textContent = state.libraryFilter === 'all' && state.folderId !== 'root' ? activeFolder.title : (titleMap[state.libraryFilter] || '문서');
     $('#sortLabel').textContent = state.sort.startsWith('title') ? '이름' : '날짜';
     $('#globalSearchInput').value = state.globalQuery;
     $('#globalSearchPanel').hidden = !state.globalQuery && $('#globalSearchPanel').dataset.open !== '1';
     $$('.rail-button[data-library-filter], .mobile-nav-button[data-library-filter]').forEach((button) => button.classList.toggle('is-active', button.dataset.libraryFilter === state.libraryFilter));
+    const breadcrumb = $('#folderBreadcrumb');
+    if (breadcrumb) {
+      breadcrumb.innerHTML = state.libraryFilter === 'all' && state.folderId !== 'root'
+        ? `<button class="breadcrumb" data-folder-id="root">문서</button><span class="breadcrumb-separator">/</span><button class="breadcrumb is-current" data-folder-id="${activeFolder.id}">${escapeHtml(activeFolder.title)}</button>`
+        : '<button class="breadcrumb is-current" data-folder-id="root">문서</button>';
+    }
 
     const folderStrip = $('#folderStrip');
     const showFolders = state.libraryFilter === 'all' && state.folderId === 'root' && !state.globalQuery;
     folderStrip.hidden = !showFolders;
     if (showFolders) {
-      folderStrip.innerHTML = state.folders.filter((folder) => folder.id !== 'root').map((folder) => {
+      const folderCards = state.folders.filter((folder) => folder.id !== 'root').map((folder) => {
         const count = state.documents.filter((doc) => !doc.trashed && doc.folderId === folder.id).length;
         return `<button class="folder-chip" data-folder-id="${folder.id}"><span class="folder-glyph" style="background:${hexToRgba(folder.color,.28)};color:${folder.color}">${icon('folder')}</span><span class="folder-copy"><strong>${escapeHtml(folder.title)}</strong><small>${count}개 항목</small></span><span class="folder-menu">${icon('chevron-right')}</span></button>`;
       }).join('');
+      folderStrip.innerHTML = `${folderCards}<button class="folder-chip folder-create-chip" data-action="create-folder"><span class="folder-glyph">${icon('folderPlus')}</span><span class="folder-copy"><strong>새 폴더</strong><small>노트 묶음 만들기</small></span><span class="folder-menu">${icon('plus')}</span></button>`;
     }
 
     const grid = $('#documentGrid');
@@ -2095,7 +2129,7 @@
     } else if (tool === 'lasso') {
       html = `<button class="tool-name-button is-active">${icon('lasso')}<span>자유형 선택</span></button><button class="icon-button" data-action="select-all" aria-label="전체 선택">${icon('check-circle')}</button><button class="icon-button" data-action="paste" aria-label="붙여넣기">${icon('copy')}</button><span class="active-divider"></span><span class="active-label">필기 · 텍스트 · 이미지</span>`;
     } else if (tool === 'shape') {
-      const shapes = ['line','arrow','double-arrow','rectangle','rounded-rectangle','square','ellipse','circle','triangle','diamond','pentagon','hexagon','starshape','trapezoid','parallelogram','heartshape','cloudshape','speech','arc'];
+      const shapes = ['line','curve','arc','rectangle','rounded-rectangle','square','ellipse','circle','triangle','diamond','pentagon','hexagon','starshape','trapezoid','parallelogram','heartshape','cloudshape','speech','arrow','double-arrow'];
       html = shapes.map((shape) => `<button class="icon-button ${state.shape === shape ? 'is-active' : ''}" data-action="set-shape" data-shape="${shape}" aria-label="${shape}">${icon(shape)}</button>`).join('') + `<span class="active-divider"></span>${[2,4,8].map((width) => widthButton(width, state.width)).join('')}${colorButtons(activeColorPalette().slice(0,5), state.color)}`;
     } else if (tool === 'text') {
       html = `<button class="tool-name-button is-active" data-action="insert-text-now">${icon('text')}<span>텍스트 추가</span></button><span class="active-divider"></span><span class="active-label">페이지를 탭해 입력</span><button class="icon-button" data-action="document-search" aria-label="검색">${icon('search')}</button>`;
@@ -2477,19 +2511,21 @@
     const maxDimension = Math.max(metrics.bounds.w, metrics.bounds.h);
     const minDimension = Math.min(metrics.bounds.w, metrics.bounds.h);
     const compact = maxDimension < 560 && minDimension > 8 && diagonal > 24;
+    const localCompact = maxDimension <= 180 && minDimension >= 4 && diagonal >= 12;
     const notClosedShape = metrics.closure > diagonal * .42 || metrics.reversals >= 4;
-    const dense = compact && notClosedShape && metrics.reversals >= 3 && metrics.length > Math.max(110, diagonal * 2.35);
-    return { metrics, diagonal, dense };
+    const broadDense = compact && notClosedShape && metrics.reversals >= 3 && metrics.length > Math.max(110, diagonal * 2.35);
+    const localDense = localCompact && metrics.reversals >= 2 && (notClosedShape || metrics.reversals >= 3) && metrics.length > Math.max(46, diagonal * 1.85);
+    return { metrics, diagonal, dense: broadDense || localDense, local: localDense && !broadDense };
   }
 
   function maybeScribbleErase(pageIndex, points, screenPoints = points) {
-    if (!state.settings.scribbleErase || points.length < 10) return false;
+    if (!state.settings.scribbleErase || points.length < 8) return false;
     const gesture = scribbleGestureProfile(screenPoints);
     if (!gesture.dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
     const metrics = strokeMetrics(points);
-    const margin = Math.max(10, screenToPageDistance(pageIndex, 18));
+    const margin = Math.max(10, screenToPageDistance(pageIndex, gesture.local ? 30 : 18));
     const expanded = { x: metrics.bounds.x - margin, y: metrics.bounds.y - margin, w: metrics.bounds.w + margin * 2, h: metrics.bounds.h + margin * 2 };
     const ids = page.objects.filter((object) => {
       const b = computeBounds(object);
@@ -2728,10 +2764,7 @@
     if (['line', 'arrow', 'double-arrow', 'curve'].includes(object.shape)) {
       object.x2 = point.x;
       object.y2 = point.y;
-      if (object.shape === 'curve') {
-        object.cx = (object.x1 + object.x2) / 2;
-        object.cy = (object.y1 + object.y2) / 2;
-      }
+      if (object.shape === 'curve') updateLiveCurveControl(session);
       return;
     }
     const anchor = session.resizeAnchor || { x: object.x1, y: object.y1 };
@@ -2740,6 +2773,29 @@
     object.y1 = anchor.y;
     object.x2 = next.x;
     object.y2 = next.y;
+  }
+
+  function updateLiveCurveControl(session) {
+    const object = session.object;
+    const dx = object.x2 - object.x1;
+    const dy = object.y2 - object.y1;
+    const length = Math.hypot(dx, dy);
+    const midX = (object.x1 + object.x2) / 2;
+    const midY = (object.y1 + object.y2) / 2;
+    if (length < 2) {
+      object.cx = midX;
+      object.cy = midY;
+      return;
+    }
+    if (!Number.isFinite(session.curveBend)) {
+      const existing = Number.isFinite(object.cx) && Number.isFinite(object.cy)
+        ? ((object.cx - midX) * (-dy / length) + (object.cy - midY) * (dx / length)) / length
+        : .22;
+      session.curveBend = clamp(Math.abs(existing) > .04 ? existing : .22, -.5, .5);
+    }
+    const bow = clamp(Math.abs(session.curveBend) * length, 30, 190) * Math.sign(session.curveBend || .22);
+    object.cx = midX - dy / length * bow;
+    object.cy = midY + dx / length * bow;
   }
 
   function convertStrokeSessionToLiveShape(session) {
@@ -2862,6 +2918,23 @@
     }
     state.touchGesture = null;
     renderActiveToolMenu();
+  }
+
+  function switchStrokeSessionToEraser(session, point) {
+    if (!session || session.kind !== 'stroke') return null;
+    if (session.holdTimer) clearTimeout(session.holdTimer);
+    checkpoint('erase');
+    const nextSession = {
+      kind: 'eraser',
+      pageIndex: session.pageIndex,
+      pointerId: session.pointerId,
+      point,
+      changed: eraseAt(session.pageIndex, point),
+      fromStylusButton: true
+    };
+    state.drawSession = nextSession;
+    scheduleRenderPage(session.pageIndex);
+    return nextSession;
   }
 
   function handlePointerDown(event) {
@@ -2988,6 +3061,10 @@
     const pageIndex = session.pageIndex;
     const point = eventPoint(event, canvas);
     if (session.kind === 'stroke') {
+      if (isStylusEraser(event)) {
+        switchStrokeSessionToEraser(session, point);
+        return;
+      }
       const samples = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
       for (const sample of samples) {
         let next = eventPoint(sample, canvas);
@@ -3545,6 +3622,34 @@
     openDocument(doc.id);
   }
 
+  async function createFolder(title = null) {
+    const requested = title == null ? prompt('새 폴더 이름', '새 폴더') : title;
+    const name = String(requested || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (!name) return null;
+    const duplicate = state.folders.find((folder) => normalizeText(folder.title) === normalizeText(name));
+    if (duplicate) {
+      state.libraryFilter = 'all';
+      state.folderId = duplicate.id;
+      state.globalQuery = '';
+      renderLibrary();
+      toast(`${duplicate.title} 폴더로 이동했습니다.`);
+      return duplicate;
+    }
+    const folder = {
+      id: uid('folder'),
+      title: name,
+      color: FOLDER_COLORS[(state.folders.length - 1) % FOLDER_COLORS.length]
+    };
+    state.folders.push(folder);
+    state.libraryFilter = 'all';
+    state.folderId = folder.id;
+    state.globalQuery = '';
+    await persistFolders();
+    renderLibrary();
+    toast(`${folder.title} 폴더를 만들었습니다.`);
+    return folder;
+  }
+
   function duplicateDocument(id) {
     const source = state.documents.find((doc) => doc.id === id);
     if (!source) return;
@@ -3750,6 +3855,7 @@
       case 'clear-global-search': state.globalQuery = ''; $('#globalSearchInput').value = ''; renderLibrary(); break;
       case 'new-note': openNewNoteSheet(); break;
       case 'new-note-pdf': closeModal(); window.__inkforgePdf?.openPicker({ createNew: true }); break;
+      case 'create-folder': await createFolder(); break;
       case 'create-note': await createNewNote(); break;
       case 'close-modal': closeModal(); break;
       case 'sort-menu': openSortMenu(); break;
@@ -4060,6 +4166,9 @@
     const savedPreferences = await storage.getSetting('preferences', {});
     state.settings = { ...state.settings, ...(legacySettings || {}), ...(savedPreferences || {}) };
     await storage.setSetting('preferences', state.settings);
+    const savedFolders = await storage.getSetting('folders', null);
+    state.folders = Array.isArray(savedFolders) ? normalizeFolders(savedFolders) : deepClone(DEFAULT_FOLDERS);
+    await persistFolders();
     let docs = await storage.allDocuments();
     if (!Array.isArray(docs)) docs = [];
     state.documents = docs.map((doc) => ({
@@ -4086,6 +4195,7 @@
       exportIfnote,
       renderPageCanvas,
       renderEditorPages,
+      renderLibrary,
       updateVirtualPages,
       visiblePageIndexes,
       mountPageCanvas,
@@ -4100,6 +4210,8 @@
       computeBounds,
       toast,
       createDocument,
+      createFolder,
+      persistFolders,
       blankPage,
       maybeShapeFromStroke,
       renderActiveToolMenu,

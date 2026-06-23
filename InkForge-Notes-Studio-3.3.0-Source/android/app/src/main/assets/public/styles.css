@@ -146,6 +146,7 @@ input, textarea { user-select: text; -webkit-user-select: text; }
 }
 .breadcrumb-row { display: flex; align-items: center; min-width: 0; overflow: hidden; }
 .breadcrumb { color: #f0f0f0; font-size: 15px; font-weight: 700; padding: 8px 2px; }
+.breadcrumb-separator { color: #757b86; font-weight: 800; padding: 0 9px; }
 .command-actions { display: flex; align-items: center; gap: 8px; }
 .new-note-button { height: 40px; border-radius: 19px; padding: 0 12px; }
 .new-note-button .split-lock { display: flex; align-items: center; padding-left: 3px; border-left: 1px solid rgba(255,255,255,.22); }
@@ -189,6 +190,8 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   text-align: left;
 }
 .folder-chip:hover { background: #272727; }
+.folder-create-chip { border-style: dashed; color: #d7eaff; }
+.folder-create-chip .folder-glyph { background: rgba(43,139,197,.18); color: #75c9ff; }
 .folder-glyph { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; background: #154d81; color: #67c8ff; }
 .folder-glyph svg { width: 24px; height: 24px; }
 .folder-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
