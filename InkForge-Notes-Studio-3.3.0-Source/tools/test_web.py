@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.14');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.15');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -905,16 +905,24 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               clientY: point.y
             }));
             const path = [
-              clientFor(650, 660),
-              clientFor(650, 540),
-              clientFor(690, 540),
-              clientFor(730, 562),
-              clientFor(728, 590),
-              clientFor(702, 610),
-              clientFor(654, 607),
-              clientFor(680, 620),
-              clientFor(710, 642),
-              clientFor(735, 666)
+              clientFor(648, 674),
+              clientFor(650, 646),
+              clientFor(650, 615),
+              clientFor(649, 583),
+              clientFor(650, 552),
+              clientFor(651, 526),
+              clientFor(674, 522),
+              clientFor(704, 526),
+              clientFor(728, 540),
+              clientFor(740, 562),
+              clientFor(736, 586),
+              clientFor(718, 604),
+              clientFor(688, 611),
+              clientFor(658, 606),
+              clientFor(681, 618),
+              clientFor(706, 638),
+              clientFor(728, 660),
+              clientFor(744, 680)
             ];
             send('pointerdown', path[0]);
             path.slice(1).forEach(point => send('pointermove', point));
@@ -1172,7 +1180,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.14" and results.get("upgrade_version") == "3.3.14" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.15" and results.get("upgrade_version") == "3.3.15" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.14';
+  const VERSION = '3.3.15';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -2619,6 +2619,38 @@
     return { revisits, cells: seen.size };
   }
 
+  function latinRLikeGesture(points, metrics, lengthRatio, revisits) {
+    if (!points || points.length < 7) return false;
+    const bounds = metrics.bounds;
+    if (bounds.w < 12 || bounds.h < 18) return false;
+    const aspect = bounds.h / Math.max(1, bounds.w);
+    if (aspect < .78 || aspect > 3.4) return false;
+    const leftLimit = bounds.x + bounds.w * .44;
+    let verticalLength = 0, verticalMinY = Infinity, verticalMaxY = -Infinity;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const length = Math.hypot(dx, dy);
+      if (length < 2) continue;
+      const midX = (a.x + b.x) / 2;
+      if (midX <= leftLimit && Math.abs(dy) > Math.abs(dx) * 1.55) {
+        verticalLength += length;
+        verticalMinY = Math.min(verticalMinY, a.y, b.y);
+        verticalMaxY = Math.max(verticalMaxY, a.y, b.y);
+      }
+    }
+    const verticalSpan = verticalMaxY - verticalMinY;
+    const hasStem = verticalLength >= bounds.h * .48 && verticalSpan >= bounds.h * .58;
+    if (!hasStem) return false;
+    const upperRight = points.some((point) => point.x >= bounds.x + bounds.w * .48 && point.y <= bounds.y + bounds.h * .5);
+    const midReturn = points.some((point) => point.x <= bounds.x + bounds.w * .62 && point.y >= bounds.y + bounds.h * .34 && point.y <= bounds.y + bounds.h * .72);
+    const lowerLeg = points.slice(Math.floor(points.length * .42)).some((point) => point.x >= bounds.x + bounds.w * .56 && point.y >= bounds.y + bounds.h * .58);
+    const end = points[points.length - 1];
+    const endsLikeLeg = end.x >= bounds.x + bounds.w * .5 && end.y >= bounds.y + bounds.h * .55;
+    const notHeavyScrub = lengthRatio < 5.6 && metrics.axisReversals <= 10 && revisits <= 12;
+    return upperRight && midReturn && (lowerLeg || endsLikeLeg) && notHeavyScrub;
+  }
+
   function scribbleGestureProfile(points) {
     const metrics = strokeMetrics(points);
     const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
@@ -2627,6 +2659,9 @@
     const lengthRatio = metrics.length / Math.max(1, diagonal);
     const intersections = pathSelfIntersections(points);
     const revisit = pathRevisitProfile(points, clamp(diagonal / 7, 12, 24));
+    if (latinRLikeGesture(points, metrics, lengthRatio, revisit.revisits)) {
+      return { metrics, diagonal, intersections, revisits: revisit.revisits, dense: false, local: false, glyphGuard: 'latin-r' };
+    }
     const compact = maxDimension < 560 && minDimension > 8 && diagonal > 24;
     const localCompact = maxDimension <= 180 && minDimension >= 4 && diagonal >= 12;
     const openGesture = metrics.closure > diagonal * .46;
