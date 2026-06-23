@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.15');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.16');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -787,7 +787,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             api.setZoom(1);
             api.setTool('pen');
             api.state.settings.scribbleErase = true;
-            page.objects = page.objects.filter(object => object.id !== 'micro_scribble_target' && object.id !== 'micro_scribble_line_guard');
+            page.objects = page.objects.filter(object => object.id !== 'micro_scribble_target' && object.id !== 'micro_scribble_line_guard' && object.id !== 'micro_scribble_close_guard');
             page.objects.push({
               id: 'micro_scribble_target',
               type: 'stroke',
@@ -812,6 +812,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 { x: 510, y: 650, p: .6 },
                 { x: 560, y: 650, p: .6 },
                 { x: 610, y: 650, p: .6 }
+              ]
+            });
+            page.objects.push({
+              id: 'micro_scribble_close_guard',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 510, y: 610, p: .6 },
+                { x: 560, y: 610, p: .6 },
+                { x: 610, y: 610, p: .6 }
               ]
             });
             api.renderPageCanvas(pageIndex);
@@ -846,6 +859,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             sendPath(8812, localPath);
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             const erased = !page.objects.some(object => object.id === 'micro_scribble_target');
+            const closeGuardStillPresent = page.objects.some(object => object.id === 'micro_scribble_close_guard');
             const guardCenter = clientFor(560, 650);
             const linePath = [
               { x: guardCenter.x - 14, y: guardCenter.y },
@@ -858,8 +872,117 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const guardStillPresent = page.objects.some(object => object.id === 'micro_scribble_line_guard');
             return {
               erased,
+              closeGuardStillPresent,
               guardStillPresent,
-              passed: erased && guardStillPresent
+              passed: erased && closeGuardStillPresent && guardStillPresent
+            };
+          }
+        """)
+        results["stylus_only_blocks_non_stylus_marks"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const pageIndex = api.state.currentPageIndex;
+            const page = api.currentPage();
+            api.setZoom(1);
+            api.setTool('pen');
+            api.state.settings.stylusOnly = true;
+            page.objects = page.objects.filter(object => !String(object.id).startsWith('stylus_only_regression'));
+            api.renderPageCanvas(pageIndex);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const clientFor = (x, y) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + x / 1000 * rect.width, y: rect.top + y / 1414 * rect.height };
+            };
+            const dispatchNative = (client) => window.dispatchEvent(new CustomEvent('inkforge:native-stylus', { detail: {
+              action: 2,
+              hover: false,
+              toolType: 2,
+              buttonState: 0,
+              x: client.x,
+              y: client.y,
+              pressure: .52,
+              device: 'Samsung S Pen'
+            } }));
+            const sendPath = (pointerId, pointerType, path) => {
+              const send = (type, point) => canvas.dispatchEvent(new PointerEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                pointerId,
+                pointerType,
+                isPrimary: true,
+                button: 0,
+                buttons: type === 'pointerup' ? 0 : 1,
+                pressure: type === 'pointerup' ? 0 : .55,
+                clientX: point.x,
+                clientY: point.y
+              }));
+              send('pointerdown', path[0]);
+              path.slice(1).forEach(point => send('pointermove', point));
+              send('pointerup', path[path.length - 1]);
+            };
+            const beforeCount = page.objects.length;
+            const touchStart = clientFor(180, 740);
+            dispatchNative(touchStart);
+            sendPath(8815, 'touch', [
+              touchStart,
+              clientFor(220, 750),
+              clientFor(260, 760)
+            ]);
+            sendPath(8816, 'mouse', [
+              clientFor(180, 900),
+              clientFor(220, 910),
+              clientFor(260, 920)
+            ]);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const afterCount = page.objects.length;
+            const leakedStroke = page.objects.some(object => String(object.id).startsWith('stylus_only_regression'));
+            return {
+              beforeCount,
+              afterCount,
+              leakedStroke,
+              activeSession: !!api.state.drawSession,
+              passed: afterCount === beforeCount && !leakedStroke && !api.state.drawSession
+            };
+          }
+        """)
+        results["pencil_render_budget"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const pageIndex = api.state.currentPageIndex;
+            const page = api.currentPage();
+            api.setZoom(3.2);
+            page.objects = page.objects.filter(object => object.id !== 'pencil_perf_stroke');
+            page.objects.push({
+              id: 'pencil_perf_stroke',
+              type: 'stroke',
+              brush: 'pencil',
+              color: '#2d3340',
+              width: 5.2,
+              screenWidth: 5.2,
+              opacity: .78,
+              points: Array.from({ length: 1200 }, (_, index) => ({
+                x: 80 + index * .7,
+                y: 930 + Math.sin(index / 18) * 24,
+                p: .35 + (index % 11) / 30,
+                tx: index % 5,
+                ty: index % 7,
+                t: index
+              }))
+            });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const startedAt = performance.now();
+            for (let index = 0; index < 3; index++) api.renderPageCanvas(pageIndex);
+            const elapsed = performance.now() - startedAt;
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const scale = canvas.width / 1000;
+            const pixel = Array.from(canvas.getContext('2d').getImageData(Math.round(360 * scale), Math.round(930 * scale), 1, 1).data);
+            page.objects = page.objects.filter(object => object.id !== 'pencil_perf_stroke');
+            api.setZoom(1);
+            return {
+              elapsed,
+              pixel,
+              passed: elapsed < 850 && pixel[3] === 255
             };
           }
         """)
@@ -1180,7 +1303,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.15" and results.get("upgrade_version") == "3.3.15" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.16" and results.get("upgrade_version") == "3.3.16" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

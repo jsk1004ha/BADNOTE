@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.15';
+  const VERSION = '3.3.16';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -179,7 +179,20 @@
 
   function effectivePointerType(event) {
     if (event.pointerType === 'pen') return 'pen';
+    if (event.pointerType === 'touch') return 'touch';
     return recentNativeStylus(event) ? 'pen' : (event.pointerType || 'mouse');
+  }
+
+  function isStylusPointer(pointerType) {
+    return pointerType === 'pen' || pointerType === 'eraser';
+  }
+
+  function isWritingTool(tool) {
+    return ['pen','highlighter','eraser','lasso','shape','tape','laser','text','sticky','math','image'].includes(tool);
+  }
+
+  function shouldBlockNonStylusCanvasInput(pointerType, tool) {
+    return state.settings.stylusOnly && !isStylusPointer(pointerType) && isWritingTool(tool);
   }
 
   function hexToRgba(hex, alpha = 1) {
@@ -894,6 +907,51 @@
     };
   }
 
+  const pencilRenderCache = new WeakMap();
+
+  function decimateRenderPoints(points, minDistance, maxPoints = 260) {
+    if (!Array.isArray(points) || points.length <= 2) return points || [];
+    const output = [points[0]];
+    let last = points[0];
+    const minSquared = minDistance * minDistance;
+    for (let i = 1; i < points.length - 1; i++) {
+      const point = points[i];
+      const dx = point.x - last.x, dy = point.y - last.y;
+      if (dx * dx + dy * dy >= minSquared) {
+        output.push(point);
+        last = point;
+      }
+    }
+    const tail = points[points.length - 1];
+    if (output[output.length - 1] !== tail) output.push(tail);
+    if (output.length <= maxPoints) return output;
+    const stride = Math.ceil(output.length / maxPoints);
+    const thinned = [];
+    for (let i = 0; i < output.length - 1; i += stride) thinned.push(output[i]);
+    thinned.push(tail);
+    return thinned;
+  }
+
+  function pencilRenderPoints(stroke, smoothedPoints, settings) {
+    if (!stroke || typeof stroke !== 'object') return smoothedPoints;
+    const points = stroke.points || [];
+    const last = points[points.length - 1] || {};
+    const key = [
+      points.length,
+      Math.round((last.x || 0) * 10),
+      Math.round((last.y || 0) * 10),
+      Math.round((stroke.width || 4) * 10),
+      Math.round((settings.smoothing || 0) * 100),
+      Math.round((settings.grain || 0) * 100)
+    ].join('|');
+    const cached = pencilRenderCache.get(stroke);
+    if (cached?.key === key) return cached.points;
+    const minDistance = clamp((stroke.width || 4) * .2, 1.2, 3.4);
+    const renderPoints = decimateRenderPoints(smoothedPoints, minDistance, 260);
+    pencilRenderCache.set(stroke, { key, points: renderPoints });
+    return renderPoints;
+  }
+
   function smoothPoints(points, amount = 0.35) {
     if (!Array.isArray(points) || points.length < 3 || amount <= 0) return points || [];
     const output = [points[0]];
@@ -976,36 +1034,44 @@
 
   function renderPencil(ctx, stroke, points) {
     const settings = state.penSettings.pencil || BRUSH_META.pencil;
+    const renderPoints = pencilRenderPoints(stroke, points, settings);
     const random = seededRandom(stroke.id);
     const baseColor = stroke.color || '#30343a';
+    const opacity = stroke.opacity ?? settings.opacity ?? .78;
     ctx.save();
     ctx.globalCompositeOperation = 'multiply';
-    strokePathSegments(ctx, points, stroke, { opacity: (stroke.opacity ?? settings.opacity ?? .78) * .42, color: baseColor, widthScale: .72 });
+    strokePathSegments(ctx, renderPoints, stroke, { opacity: opacity * .56, color: baseColor, widthScale: .7 });
     const grain = clamp(settings.grain ?? .66, 0, 1);
-    const layers = 4 + Math.round(grain * 7);
+    const layers = 2 + Math.round(grain * 2);
+    const transform = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+    const renderScale = Math.max(1, Math.abs(transform?.a || 1));
+    const highCost = renderScale > 2.6 || renderPoints.length > 180;
     for (let layer = 0; layer < layers; layer++) {
-      const offsetPoints = points.map((point) => {
+      if (highCost && layer > 1) break;
+      const offsetPoints = renderPoints.map((point) => {
         const tiltX = (point.tx || 0) / 90;
         const tiltY = (point.ty || 0) / 90;
-        const scatter = (.28 + grain * 1.8) * (stroke.width || 4) / 4;
+        const scatter = (.18 + grain * 1.08) * (stroke.width || 4) / 4;
         return {
           ...point,
-          x: point.x + (random() - .5) * scatter + tiltX * (layer - layers / 2) * .25,
-          y: point.y + (random() - .5) * scatter + tiltY * (layer - layers / 2) * .25
+          x: point.x + (random() - .5) * scatter + tiltX * (layer - layers / 2) * .18,
+          y: point.y + (random() - .5) * scatter + tiltY * (layer - layers / 2) * .18
         };
       });
       strokePathSegments(ctx, offsetPoints, stroke, {
-        opacity: (.035 + random() * .055) * (stroke.opacity ?? .8),
+        opacity: (.05 + random() * .05) * opacity,
         color: baseColor,
-        widthScale: .3 + random() * .38
+        widthScale: .28 + random() * .24
       });
     }
-    for (let i = 0; i < points.length; i += Math.max(1, Math.floor(points.length / 90))) {
-      const point = points[i];
-      const width = brushSegmentWidth(stroke, point, points[i + 1], i, points.length);
-      const particles = 1 + Math.round(grain * 3);
+    const particleLimit = highCost ? 28 : 48;
+    const particleStep = Math.max(1, Math.ceil(renderPoints.length / particleLimit));
+    for (let i = 0; i < renderPoints.length; i += particleStep) {
+      const point = renderPoints[i];
+      const width = brushSegmentWidth(stroke, point, renderPoints[i + 1], i, renderPoints.length);
+      const particles = highCost ? 1 : 1 + Math.round(grain * 2);
       for (let p = 0; p < particles; p++) {
-        ctx.globalAlpha = .04 + random() * .11;
+        ctx.globalAlpha = (.035 + random() * .08) * opacity;
         ctx.fillStyle = baseColor;
         ctx.beginPath();
         ctx.arc(point.x + (random() - .5) * width, point.y + (random() - .5) * width, .28 + random() * .55, 0, Math.PI * 2);
@@ -2687,12 +2753,17 @@
     return a?.some((point) => pointNearPath(point, b, radius)) || b?.some((point) => pointNearPath(point, a, radius));
   }
 
+  function scribbleEraseHitRadius(pageIndex, gesture) {
+    const screenRadius = gesture.local ? 6 : 7.5;
+    return clamp(screenToPageDistance(pageIndex, screenRadius), 2.2, 9);
+  }
+
   function objectIntersectsScribble(object, points, expanded, hitRadius) {
     const bounds = computeBounds(object);
     const overlapsBox = bounds.x < expanded.x + expanded.w && bounds.x + bounds.w > expanded.x && bounds.y < expanded.y + expanded.h && bounds.y + bounds.h > expanded.y;
     if (!overlapsBox) return false;
     if (object.type === 'stroke') {
-      return pathNearPath(object.points || [], points, hitRadius + (object.width || 4) * .55);
+      return pathNearPath(object.points || [], points, hitRadius + (object.width || 4) * .28);
     }
     if (object.type === 'shape') return points.some((point) => shapeIntersectsPoint(object, point, hitRadius));
     return points.some((point) => point.x >= bounds.x - hitRadius && point.x <= bounds.x + bounds.w + hitRadius && point.y >= bounds.y - hitRadius && point.y <= bounds.y + bounds.h + hitRadius);
@@ -2705,8 +2776,8 @@
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
     const metrics = strokeMetrics(points);
-    const hitRadius = Math.max(6, screenToPageDistance(pageIndex, gesture.local ? 14 : 10));
-    const margin = hitRadius + Math.max(4, screenToPageDistance(pageIndex, 8));
+    const hitRadius = scribbleEraseHitRadius(pageIndex, gesture);
+    const margin = hitRadius + Math.max(2, screenToPageDistance(pageIndex, 3));
     const expanded = { x: metrics.bounds.x - margin, y: metrics.bounds.y - margin, w: metrics.bounds.w + margin * 2, h: metrics.bounds.h + margin * 2 };
     const ids = page.objects.filter((object) => objectIntersectsScribble(object, points, expanded, hitRadius)).map((object) => object.id);
     if (!ids.length) return false;
@@ -3156,6 +3227,7 @@
 
     const point = eventPoint(event, canvas);
     const effectiveTool = isStylusEraser(event) ? 'eraser' : (state.readOnly ? 'hand' : state.tool);
+    if (shouldBlockNonStylusCanvasInput(pointerType, effectiveTool)) return;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return;
 
@@ -3244,6 +3316,12 @@
     if (pointerType === 'touch' && state.touchGesture) { updateTouchGesture(event); if (state.settings.stylusOnly || touchPointers().length > 1 || !state.drawSession) return; }
     const session = state.drawSession;
     if (!session || session.pointerId !== event.pointerId) return;
+    if (state.settings.stylusOnly && !isStylusPointer(pointerType) && session.kind !== 'pan' && session.kind !== 'move-ruler') {
+      if (session.holdTimer) clearTimeout(session.holdTimer);
+      state.drawSession = null;
+      renderPageCanvas(session.pageIndex);
+      return;
+    }
     const pageIndex = session.pageIndex;
     const point = eventPoint(event, canvas);
     if (session.kind === 'stroke') {
