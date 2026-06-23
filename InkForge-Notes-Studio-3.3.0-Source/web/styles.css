@@ -1243,6 +1243,12 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   animation: none;
   background: #fff;
 }
+.page-window-spacer {
+  width: 1px;
+  flex: 0 0 auto;
+  pointer-events: none;
+  contain: strict;
+}
 @keyframes page-placeholder-shimmer { to { background-position: -160% 0, 0 0; } }
 
 .new-note-import-row { margin: 16px 0 2px; }

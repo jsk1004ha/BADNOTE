@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.7';
+  const VERSION = '3.3.8';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const AUTO_MATH_DELAY = 1050;

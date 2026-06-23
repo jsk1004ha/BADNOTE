@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.7';
+  const VERSION = '3.3.8';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,10 +11,10 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '앱 시작 시 GitHub Releases의 최신 APK를 확인하는 자동 업데이트를 추가했습니다.',
-    '새 버전이 있으면 앱 안에서 변경 내역을 보고 다운로드 진행률을 확인할 수 있습니다.',
-    '다운로드가 끝나면 Android 설치 화면으로 이어지고, 설치 권한이 필요하면 설정 화면을 안내합니다.',
-    '업데이트 후 현재 버전의 변경 내역은 한 번만 표시됩니다.'
+    '대용량 문서에서 페이지 렌더 요청을 프레임 큐로 나눠 스크롤 중 멈춤을 줄였습니다.',
+    '화면 밖 캔버스는 backing store를 1x1로 줄여 즉시 메모리를 반환합니다.',
+    'PDF 배경과 이미지 캐시를 대용량 문서에서 더 작게 유지해 메모리 압박을 낮췄습니다.',
+    '자동 OCR의 visible-page 계산이 모든 페이지 DOM을 순회하지 않도록 최적화했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;
@@ -484,6 +484,10 @@
 
   function visiblePageIndexes(doc) {
     if (!doc) return [];
+    if (typeof api?.visiblePageIndexes === 'function') {
+      const fastIndexes = api.visiblePageIndexes().filter((index) => Number.isInteger(index) && doc.pages[index]);
+      if (fastIndexes.length) return fastIndexes;
+    }
     const viewport = document.getElementById('editorViewport');
     const wraps = Array.from(document.querySelectorAll('.page-wrap[data-page-index]'));
     if (!viewport || !wraps.length) return [api.state.currentPageIndex];

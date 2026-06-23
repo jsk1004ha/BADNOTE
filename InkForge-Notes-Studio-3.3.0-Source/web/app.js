@@ -1,13 +1,18 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.7';
+  const VERSION = '3.3.8';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const SHAPE_HOLD_MS = 650;
   const LIVE_SHAPE_HOLD_MS = 1000;
   const ZOOM_PAGE_SUPPRESS_MS = 320;
   const ZOOM_DRAG_LOCK_MS = 1000;
   const ZOOM_RENDER_DEBOUNCE_MS = 90;
+  const RENDER_FRAME_BUDGET_MS = 7;
+  const NORMAL_RENDER_FRAME_BUDGET_MS = 12;
+  const LARGE_DOC_IMAGE_CACHE_LIMIT = 8;
+  const NORMAL_IMAGE_CACHE_LIMIT = 28;
+  const LARGE_DOC_DOM_WINDOW_RADIUS = 6;
   const MAX_PASSIVE_PAGE_DELTA = 2;
   const LARGE_DOC_PAGE_THRESHOLD = 120;
   const SIDEBAR_WINDOW_RADIUS = 40;
@@ -411,12 +416,15 @@
     assetUrlCache: new Map(),
     assetLoadQueue: new Map(),
     renderFrames: new Map(),
+    renderQueue: new Set(),
+    renderQueueFrame: 0,
     zoomRenderFrame: 0,
     zoomRenderTimer: 0,
     suppressPageUpdateUntil: 0,
     zoomDragLockUntil: 0,
     allowLargePageJumpUntil: 0,
     activePageWrapIndex: -1,
+    virtualPageWindow: { start: -1, end: -1 },
     testReady: false
   };
 
@@ -1097,14 +1105,36 @@
     return lines;
   }
 
+  function getCached(map, key) {
+    if (!map.has(key)) return null;
+    const value = map.get(key);
+    map.delete(key);
+    map.set(key, value);
+    return value;
+  }
+
+  function currentImageCacheLimit() {
+    const doc = currentDocument();
+    return doc?.pages?.length > LARGE_DOC_PAGE_THRESHOLD
+      ? LARGE_DOC_IMAGE_CACHE_LIMIT
+      : NORMAL_IMAGE_CACHE_LIMIT;
+  }
+
+  function rememberImage(key, image) {
+    state.imageCache.set(key, image);
+    trimImageCache();
+    return image;
+  }
+
   function loadImageObject(object, pageIndex) {
     if (!object?.src) return null;
-    let image = state.imageCache.get(object.src);
+    let image = getCached(state.imageCache, object.src);
     if (!image) {
       image = new Image();
-      image.onload = () => renderPageCanvas(pageIndex);
+      image.decoding = 'async';
+      image.onload = () => scheduleRenderPage(pageIndex);
       image.src = object.src;
-      state.imageCache.set(object.src, image);
+      rememberImage(object.src, image);
     }
     return image;
   }
@@ -1261,7 +1291,7 @@
     }
   }
 
-  function trimImageCache(limit = 28) {
+  function trimImageCache(limit = currentImageCacheLimit()) {
     while (state.imageCache.size > limit) {
       const key = state.imageCache.keys().next().value;
       state.imageCache.delete(key);
@@ -1276,20 +1306,20 @@
   function loadPageBackground(page, pageIndex = 0) {
     const source = page?.backgroundImage;
     if (source) {
-      let image = state.imageCache.get(source);
+      let image = getCached(state.imageCache, source);
       if (!image) {
         image = new Image(); image.decoding = 'async';
         image.onload = () => { if (state.view === 'editor') scheduleRenderPage(pageIndex); else renderLibrary(); };
-        image.src = source; state.imageCache.set(source, image); trimImageCache();
+        image.src = source; rememberImage(source, image);
       }
       return image;
     }
     const assetId = page?.backgroundAssetId;
     if (!assetId) return null;
-    const cachedUrl = state.assetUrlCache.get(assetId);
+    const cachedUrl = getCached(state.assetUrlCache, assetId);
     if (cachedUrl) {
-      let image = state.imageCache.get(cachedUrl);
-      if (!image) { image = new Image(); image.decoding = 'async'; image.src = cachedUrl; state.imageCache.set(cachedUrl, image); trimImageCache(); }
+      let image = getCached(state.imageCache, cachedUrl);
+      if (!image) { image = new Image(); image.decoding = 'async'; image.onload = () => scheduleRenderPage(pageIndex); image.src = cachedUrl; rememberImage(cachedUrl, image); }
       return image;
     }
     if (!state.assetLoadQueue.has(assetId)) {
@@ -1299,7 +1329,7 @@
         state.assetUrlCache.set(assetId, url);
         const image = new Image(); image.decoding = 'async';
         image.onload = () => { scheduleRenderPage(pageIndex); if (state.view === 'library') renderLibrary(); };
-        image.src = url; state.imageCache.set(url, image); trimImageCache();
+        image.src = url; rememberImage(url, image);
         return image;
       }).finally(() => state.assetLoadQueue.delete(assetId));
       state.assetLoadQueue.set(assetId, request);
@@ -1328,13 +1358,39 @@
     renderTransient(ctx, pageIndex);
   }
 
-  function scheduleRenderPage(pageIndex) {
-    if (state.renderFrames.has(pageIndex)) return;
-    const frame = requestAnimationFrame(() => {
-      state.renderFrames.delete(pageIndex);
+  function processRenderQueue() {
+    state.renderQueueFrame = 0;
+    const doc = currentDocument();
+    if (!doc || !state.renderQueue.size) return;
+    const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
+    const budget = largeDoc ? RENDER_FRAME_BUDGET_MS : NORMAL_RENDER_FRAME_BUDGET_MS;
+    const maxPages = largeDoc ? 1 : 2;
+    const startedAt = performance.now();
+    let rendered = 0;
+    const pages = [...state.renderQueue].sort((a, b) =>
+      Math.abs(a - state.currentPageIndex) - Math.abs(b - state.currentPageIndex)
+    );
+    for (const pageIndex of pages) {
+      if (!state.renderQueue.has(pageIndex)) continue;
+      state.renderQueue.delete(pageIndex);
+      const canvas = $(`canvas.page-canvas[data-page-index="${pageIndex}"]`);
+      if (!canvas?.isConnected) continue;
       renderPageCanvas(pageIndex);
-    });
-    state.renderFrames.set(pageIndex, frame);
+      rendered++;
+      if (rendered >= maxPages || performance.now() - startedAt >= budget) break;
+    }
+    if (state.renderQueue.size) {
+      state.renderQueueFrame = requestAnimationFrame(processRenderQueue);
+    }
+  }
+
+  function scheduleRenderPage(pageIndex) {
+    const index = Number(pageIndex);
+    if (!Number.isFinite(index)) return;
+    state.renderQueue.add(index);
+    if (!state.renderQueueFrame) {
+      state.renderQueueFrame = requestAnimationFrame(processRenderQueue);
+    }
   }
 
   function renderPageCanvas(pageIndex) {
@@ -1517,12 +1573,16 @@
   }
 
   function pageLayoutMetrics() {
-    const first = $('.page-wrap[data-page-index="0"]');
+    const first = $('.page-wrap[data-page-index]');
     if (!first) return null;
-    const second = $('.page-wrap[data-page-index="1"]');
-    const firstTop = first.offsetTop;
+    const firstIndex = Number(first.dataset.pageIndex) || 0;
+    const second = first.nextElementSibling?.classList?.contains('page-wrap')
+      ? first.nextElementSibling
+      : null;
     const pageHeight = Math.max(1, first.offsetHeight);
-    const step = second ? Math.max(1, second.offsetTop - firstTop) : pageHeight + 34;
+    const gap = parseFloat(getComputedStyle($('#pageStack')).rowGap || '34') || 34;
+    const step = second ? Math.max(1, second.offsetTop - first.offsetTop) : pageHeight + gap;
+    const firstTop = first.offsetTop - firstIndex * step;
     return { firstTop, pageHeight, step };
   }
 
@@ -1553,6 +1613,22 @@
       if (currentDistance < bestDistance) { bestDistance = currentDistance; best = index; }
     }
     return clamp(best, 0, doc.pages.length - 1);
+  }
+
+  function visiblePageIndexes() {
+    const doc = currentDocument();
+    const viewport = $('#editorViewport');
+    const metrics = pageLayoutMetrics();
+    if (!doc || !viewport || !metrics) return [state.currentPageIndex];
+    if (state.pageMode === 'single') return [state.currentPageIndex];
+    const top = viewport.scrollTop;
+    const bottom = top + viewport.clientHeight;
+    const first = clamp(Math.floor((top - metrics.firstTop) / metrics.step) - 1, 0, doc.pages.length - 1);
+    const last = clamp(Math.ceil((bottom - metrics.firstTop) / metrics.step) + 1, 0, doc.pages.length - 1);
+    const indexes = [];
+    for (let index = first; index <= last; index++) indexes.push(index);
+    if (!indexes.includes(state.currentPageIndex)) indexes.unshift(state.currentPageIndex);
+    return [...new Set(indexes)].sort((a, b) => Math.abs(a - state.currentPageIndex) - Math.abs(b - state.currentPageIndex));
   }
 
   function viewportClientPoint(anchor, viewport) {
@@ -1649,14 +1725,22 @@
     canvas.width = PAGE_WIDTH; canvas.height = PAGE_HEIGHT;
     canvas.setAttribute('aria-label', `${index + 1}페이지`);
     (placeholder || wrap.firstChild)?.replaceWith(canvas);
-    renderPageCanvas(index);
+    scheduleRenderPage(index);
   }
 
   function unmountPageCanvas(index) {
     const wrap = $(`.page-wrap[data-page-index="${index}"]`);
     const canvas = wrap?.querySelector('.page-canvas');
     if (!wrap || !canvas || state.drawSession?.pageIndex === index || index === state.currentPageIndex) return;
+    state.renderQueue.delete(index);
+    const frame = state.renderFrames.get(index);
+    if (frame) {
+      cancelAnimationFrame(frame);
+      state.renderFrames.delete(index);
+    }
     const placeholder = document.createElement('div'); placeholder.className = 'page-placeholder';
+    canvas.width = 1;
+    canvas.height = 1;
     canvas.replaceWith(placeholder);
   }
 
@@ -1665,6 +1749,8 @@
     if (!doc || !viewport) return;
     if (state.pageMode === 'single') { mountPageCanvas(state.currentPageIndex); return; }
     const center = bestVisiblePageIndex();
+    const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
+    if (largeDoc) renderLargePageWindow(center);
     const radius = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD ? 1 : 4;
     const start = Math.max(0, Math.min(center, state.currentPageIndex) - radius);
     const end = Math.min(doc.pages.length - 1, Math.max(center, state.currentPageIndex) + radius);
@@ -1673,6 +1759,46 @@
       const index = Number(canvas.dataset.pageIndex);
       if ((index < start || index > end) && index !== state.currentPageIndex) unmountPageCanvas(index);
     });
+  }
+
+  function pageStackMetrics() {
+    const stack = $('#pageStack');
+    if (!stack) return { pageHeight: PAGE_HEIGHT, gap: 34, step: PAGE_HEIGHT + 34 };
+    const style = getComputedStyle(stack);
+    const widthValue = parseFloat(style.getPropertyValue('--page-width')) || parseFloat(style.width) || 880;
+    const pageHeight = Math.max(1, widthValue * PAGE_HEIGHT / PAGE_WIDTH);
+    const gap = parseFloat(style.rowGap || style.gap || '34') || 34;
+    return { pageHeight, gap, step: pageHeight + gap };
+  }
+
+  function appendPageSpacer(fragment, className, missingPages) {
+    if (missingPages <= 0) return;
+    const { step, gap } = pageStackMetrics();
+    const spacer = document.createElement('div');
+    spacer.className = `page-window-spacer ${className}`;
+    spacer.style.height = `${Math.max(0, missingPages * step - gap)}px`;
+    spacer.setAttribute('aria-hidden', 'true');
+    fragment.appendChild(spacer);
+  }
+
+  function renderLargePageWindow(centerIndex = state.currentPageIndex, force = false) {
+    const doc = currentDocument();
+    const stack = $('#pageStack');
+    if (!doc || !stack || doc.pages.length <= LARGE_DOC_PAGE_THRESHOLD || state.pageMode === 'single') return false;
+    const center = clamp(Math.round(centerIndex), 0, doc.pages.length - 1);
+    const low = Math.min(center, state.currentPageIndex);
+    const high = Math.max(center, state.currentPageIndex);
+    const start = Math.max(0, low - LARGE_DOC_DOM_WINDOW_RADIUS);
+    const end = Math.min(doc.pages.length - 1, high + LARGE_DOC_DOM_WINDOW_RADIUS);
+    if (!force && state.virtualPageWindow.start === start && state.virtualPageWindow.end === end) return false;
+    const fragment = document.createDocumentFragment();
+    appendPageSpacer(fragment, 'top', start);
+    for (let index = start; index <= end; index++) fragment.appendChild(createPageWrap(index, doc.pages.length, true));
+    appendPageSpacer(fragment, 'bottom', doc.pages.length - end - 1);
+    stack.replaceChildren(fragment);
+    state.virtualPageWindow = { start, end };
+    state.activePageWrapIndex = -1;
+    return true;
   }
 
   function createPageWrap(index, pageCount, largeDoc) {
@@ -1704,10 +1830,15 @@
     stack.dataset.tool = state.readOnly ? 'hand' : state.tool;
     const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
     stack.dataset.largeDoc = largeDoc ? '1' : '0';
-    const fragment = document.createDocumentFragment();
-    doc.pages.forEach((_, index) => fragment.appendChild(createPageWrap(index, doc.pages.length, largeDoc)));
-    stack.replaceChildren(fragment);
-    updatePageSizing();
+    updatePageSizing({ render: false });
+    state.virtualPageWindow = { start: -1, end: -1 };
+    if (largeDoc && state.pageMode !== 'single') {
+      renderLargePageWindow(state.currentPageIndex, true);
+    } else {
+      const fragment = document.createDocumentFragment();
+      doc.pages.forEach((_, index) => fragment.appendChild(createPageWrap(index, doc.pages.length, largeDoc)));
+      stack.replaceChildren(fragment);
+    }
     mountPageCanvas(state.currentPageIndex);
     for (let index = Math.max(0, state.currentPageIndex - 1); index <= Math.min(doc.pages.length - 1, state.currentPageIndex + 1); index++) mountPageCanvas(index);
     requestAnimationFrame(updateVirtualPages);
@@ -1761,16 +1892,54 @@
     updatePageScrollRail();
   }
 
+  function pageScrollTarget(index) {
+    const viewport = $('#editorViewport');
+    const stack = $('#pageStack');
+    const metrics = pageLayoutMetrics();
+    if (!viewport || !stack || !metrics) return null;
+    const first = $('.page-wrap[data-page-index]');
+    const pageTop = metrics.firstTop + metrics.step * index;
+    const pageLeft = first ? first.offsetLeft : Math.max(0, (stack.scrollWidth - metrics.pageHeight * PAGE_WIDTH / PAGE_HEIGHT) / 2);
+    const pageWidth = first?.offsetWidth || Math.round(PAGE_WIDTH * state.zoom);
+    return {
+      top: clamp(pageTop + metrics.pageHeight / 2 - viewport.clientHeight / 2, 0, Math.max(0, viewport.scrollHeight - viewport.clientHeight)),
+      left: clamp(pageLeft + pageWidth / 2 - viewport.clientWidth / 2, 0, Math.max(0, viewport.scrollWidth - viewport.clientWidth))
+    };
+  }
+
   function scrollToPage(index, smooth = true) {
     const doc = currentDocument();
     if (!doc) return;
+    const nextPageIndex = clamp(index, 0, doc.pages.length - 1);
+    const viewport = $('#editorViewport');
+    const target = state.pageMode !== 'single' ? pageScrollTarget(nextPageIndex) : null;
+    if (nextPageIndex === state.currentPageIndex) {
+      mountPageCanvas(nextPageIndex);
+      if (target && viewport) {
+        const closeEnough = Math.abs(viewport.scrollTop - target.top) < 2 && Math.abs(viewport.scrollLeft - target.left) < 2;
+        if (!closeEnough) viewport.scrollTo({ top: target.top, left: target.left, behavior: smooth ? 'smooth' : 'auto' });
+      }
+      updateVirtualPages();
+      updatePageIndicator();
+      return;
+    }
     const previousPageIndex = state.currentPageIndex;
     state.allowLargePageJumpUntil = performance.now() + 900;
-    state.currentPageIndex = clamp(index, 0, doc.pages.length - 1);
+    state.currentPageIndex = nextPageIndex;
     notifyPageChanged(previousPageIndex, 'scroll-to-page');
+    if (doc.pages.length > LARGE_DOC_PAGE_THRESHOLD && state.pageMode !== 'single') {
+      renderLargePageWindow(state.currentPageIndex);
+    }
     mountPageCanvas(state.currentPageIndex);
-    const wrap = $(`.page-wrap[data-page-index="${state.currentPageIndex}"]`);
-    if (wrap && state.pageMode !== 'single') wrap.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center', inline: 'center' });
+    if (state.pageMode !== 'single') {
+      if (target) {
+        const closeEnough = Math.abs(viewport.scrollTop - target.top) < 2 && Math.abs(viewport.scrollLeft - target.left) < 2;
+        if (!closeEnough) viewport.scrollTo({ top: target.top, left: target.left, behavior: smooth ? 'smooth' : 'auto' });
+      } else {
+        const wrap = $(`.page-wrap[data-page-index="${state.currentPageIndex}"]`);
+        if (wrap) wrap.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center', inline: 'center' });
+      }
+    }
     updatePageIndicator();
     renderActiveToolMenu();
     renderSidebar();
@@ -3751,6 +3920,7 @@
       renderPageCanvas,
       renderEditorPages,
       updateVirtualPages,
+      visiblePageIndexes,
       mountPageCanvas,
       scheduleRenderPage,
       renderSidebar,
