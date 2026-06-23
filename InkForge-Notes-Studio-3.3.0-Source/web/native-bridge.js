@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.4';
+  const VERSION = '3.3.5';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;

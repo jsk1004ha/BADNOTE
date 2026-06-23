@@ -426,7 +426,7 @@ public final class MainActivity extends Activity {
             JSONObject result = new JSONObject();
             try {
                 result.put("native", true);
-                result.put("version", "3.3.4");
+                result.put("version", "3.3.5");
                 result.put("digitalInk", true);
                 result.put("koreanImageOcr", true);
                 result.put("koreanEnglishImageOcr", true);

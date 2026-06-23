@@ -233,6 +233,58 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             };
           }
         """)
+        results["zoom_drag_lock"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            api.setTool('hand');
+            const viewport = document.getElementById('editorViewport');
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+            const point = () => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + rect.width * .5, y: rect.top + rect.height * .52 };
+            };
+            const send = (type, pointerId, x, y) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId,
+              pointerType: 'mouse',
+              isPrimary: true,
+              button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              clientX: x,
+              clientY: y
+            }));
+            const anchor = point();
+            api.setZoom(api.state.zoom * 1.04, { clientX: anchor.x, clientY: anchor.y });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const start = viewport.scrollTop;
+            const locked = api.state.zoomDragLockUntil - performance.now();
+            const lockedPoint = point();
+            send('pointerdown', 9001, lockedPoint.x, lockedPoint.y);
+            send('pointermove', 9001, lockedPoint.x, lockedPoint.y + 120);
+            send('pointerup', 9001, lockedPoint.x, lockedPoint.y + 120);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const afterLockedDrag = viewport.scrollTop;
+            api.state.zoomDragLockUntil = 0;
+            const freePoint = point();
+            send('pointerdown', 9002, freePoint.x, freePoint.y);
+            send('pointermove', 9002, freePoint.x, freePoint.y + 120);
+            send('pointerup', 9002, freePoint.x, freePoint.y + 120);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const afterUnlockedDrag = viewport.scrollTop;
+            const lockedDelta = Math.abs(afterLockedDrag - start);
+            const unlockedDelta = Math.abs(afterUnlockedDrag - afterLockedDrag);
+            return {
+              lockedMsRemaining: locked,
+              start,
+              afterLockedDrag,
+              afterUnlockedDrag,
+              lockedDelta,
+              unlockedDelta,
+              passed: locked > 850 && lockedDelta <= 2 && unlockedDelta >= 40
+            };
+          }
+        """)
 
         # Automatic handwritten equation recognition from normal page strokes.
         auto_math_result = await page.evaluate("""
@@ -393,7 +445,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.4" and results.get("upgrade_version") == "3.3.4" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.5" and results.get("upgrade_version") == "3.3.5" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

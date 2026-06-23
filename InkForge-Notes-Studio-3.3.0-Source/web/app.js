@@ -1,11 +1,12 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.4';
+  const VERSION = '3.3.5';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const SHAPE_HOLD_MS = 650;
   const LIVE_SHAPE_HOLD_MS = 1000;
   const ZOOM_PAGE_SUPPRESS_MS = 320;
+  const ZOOM_DRAG_LOCK_MS = 1000;
   const ZOOM_RENDER_DEBOUNCE_MS = 90;
   const MAX_PASSIVE_PAGE_DELTA = 2;
   const LARGE_DOC_PAGE_THRESHOLD = 120;
@@ -403,6 +404,7 @@
     zoomRenderFrame: 0,
     zoomRenderTimer: 0,
     suppressPageUpdateUntil: 0,
+    zoomDragLockUntil: 0,
     allowLargePageJumpUntil: 0,
     activePageWrapIndex: -1,
     testReady: false
@@ -1622,6 +1624,12 @@
     return true;
   }
 
+  function lockZoomAftermath() {
+    const nowTime = performance.now();
+    state.suppressPageUpdateUntil = Math.max(state.suppressPageUpdateUntil, nowTime + ZOOM_PAGE_SUPPRESS_MS);
+    state.zoomDragLockUntil = Math.max(state.zoomDragLockUntil, nowTime + ZOOM_DRAG_LOCK_MS);
+  }
+
   function mountPageCanvas(index) {
     const wrap = $(`.page-wrap[data-page-index="${index}"]`);
     if (!wrap || wrap.querySelector('.page-canvas')) return;
@@ -1952,7 +1960,7 @@
     const oldZoom = state.zoom;
     const newZoom = clamp(value, .08, 8);
     if (Math.abs(newZoom - oldZoom) < .001) return;
-    state.suppressPageUpdateUntil = performance.now() + ZOOM_PAGE_SUPPRESS_MS;
+    lockZoomAftermath();
     const point = viewportClientPoint(anchor, viewport);
     const zoomAnchor = captureZoomAnchor(anchor, state.currentPageIndex);
     const contentX = (viewport.scrollLeft + point.viewportX) / oldZoom;
@@ -2490,7 +2498,7 @@
       if (gesture.initialDistance > 0 && Math.abs(currentDistance - gesture.initialDistance) > 3) {
         const nextZoom = clamp(gesture.initialZoom * currentDistance / gesture.initialDistance, .08, 8);
         gesture.pinched = true;
-        state.suppressPageUpdateUntil = performance.now() + ZOOM_PAGE_SUPPRESS_MS;
+        lockZoomAftermath();
         const rect = viewport.getBoundingClientRect();
         const anchorX = center.x - rect.left, anchorY = center.y - rect.top;
         const contentX = (gesture.initialScrollLeft + (gesture.startCenter.x - rect.left)) / gesture.initialZoom;
@@ -2503,11 +2511,11 @@
           viewport.scrollTop = Math.max(0, contentY * nextZoom - anchorY);
         }
         scheduleZoomRender();
-      } else {
+      } else if (!gesture.pinched && performance.now() >= state.zoomDragLockUntil) {
         viewport.scrollLeft = gesture.initialScrollLeft - deltaX;
         viewport.scrollTop = gesture.initialScrollTop - deltaY;
       }
-    } else if (state.settings.stylusOnly || state.tool === 'hand') {
+    } else if (!gesture.pinched && performance.now() >= state.zoomDragLockUntil && (state.settings.stylusOnly || state.tool === 'hand')) {
       viewport.scrollLeft = gesture.initialScrollLeft - deltaX;
       viewport.scrollTop = gesture.initialScrollTop - deltaY;
     }
@@ -2622,6 +2630,7 @@
     } else if (effectiveTool === 'laser') {
       state.drawSession = { kind: 'laser', pageIndex, pointerId: event.pointerId, points: [point] };
     } else if (effectiveTool === 'hand') {
+      if (performance.now() < state.zoomDragLockUntil) return;
       const viewport = $('#editorViewport');
       state.drawSession = { kind: 'pan', pageIndex, pointerId: event.pointerId, startClient: { x: event.clientX, y: event.clientY }, scroll: { x: viewport.scrollLeft, y: viewport.scrollTop } };
     } else if (effectiveTool === 'text' || effectiveTool === 'sticky') {
@@ -2695,6 +2704,7 @@
       state.ruler.y = clamp(session.startRuler.y + point.y - session.startPoint.y, 40, PAGE_HEIGHT - 40);
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'pan') {
+      if (performance.now() < state.zoomDragLockUntil) return;
       const viewport = $('#editorViewport');
       viewport.scrollLeft = session.scroll.x - (event.clientX - session.startClient.x);
       viewport.scrollTop = session.scroll.y - (event.clientY - session.startClient.y);
