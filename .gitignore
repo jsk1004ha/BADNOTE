@@ -1,0 +1,12 @@
+.omx/
+**/.omx/
+
+# Local build tool caches and generated outputs
+**/.build-tools/
+**/.gradle/
+**/build/
+
+# Local Android environment and signing material
+**/local.properties
+**/local-signing.properties
+**/*.jks

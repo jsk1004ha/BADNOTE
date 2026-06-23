@@ -1,0 +1,4 @@
+storeFile=/absolute/path/to/release.jks
+storePassword=change-me
+keyAlias=inkforge
+keyPassword=change-me

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#2f5688" />
+  <meta name="color-scheme" content="light dark" />
+  <title>InkForge Notes Studio 3.3.2</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+</head>
+<body>
+  <div id="app" aria-live="polite">
+    <section id="libraryView" class="view library-view is-active" aria-label="노트 라이브러리">
+      <aside class="library-rail" aria-label="라이브러리 탐색">
+        <button class="rail-brand icon-button" data-action="library-home" data-icon="notebook" aria-label="문서"></button>
+        <div class="rail-spacer"></div>
+        <button class="rail-button icon-button is-active" data-library-filter="all" data-icon="folder" aria-label="모든 문서"></button>
+        <button class="rail-button icon-button" data-library-filter="favorite" data-icon="star" aria-label="즐겨찾기"></button>
+        <button class="rail-button icon-button" data-library-filter="shared" data-icon="users" aria-label="공유됨"></button>
+        <button class="rail-button icon-button" data-library-filter="templates" data-icon="store" aria-label="템플릿"></button>
+        <div class="rail-divider"></div>
+        <button class="rail-button icon-button" data-library-filter="trash" data-icon="trash" aria-label="휴지통"></button>
+      </aside>
+
+      <main class="library-main">
+        <header class="library-topbar">
+          <div class="library-top-left">
+            <h1 id="libraryTitle">문서</h1>
+            <span id="libraryCount" class="count-label">0개</span>
+          </div>
+          <div class="library-top-actions">
+            <button class="icon-button plain" data-action="toggle-global-search" data-icon="search" aria-label="노트 검색"></button>
+            <button class="icon-button plain" data-action="open-settings" data-icon="settings" aria-label="설정"></button>
+          </div>
+        </header>
+
+        <section id="globalSearchPanel" class="global-search-panel" hidden>
+          <span class="search-leading" data-icon-host="search"></span>
+          <input id="globalSearchInput" type="search" inputmode="search" autocomplete="off" placeholder="제목, 손글씨 OCR, 텍스트, 수식 검색" aria-label="전체 노트 검색" />
+          <button class="icon-button compact" data-action="clear-global-search" data-icon="close" aria-label="검색어 지우기"></button>
+        </section>
+
+        <section class="library-commandbar">
+          <div class="breadcrumb-row" id="folderBreadcrumb">
+            <button class="breadcrumb is-current" data-folder-id="root">문서</button>
+          </div>
+          <div class="command-actions">
+            <button class="primary-button new-note-button" data-action="new-note"><span data-icon-host="plus"></span><span>신규</span><span class="split-lock" data-icon-host="chevron-down"></span></button>
+            <span class="command-divider"></span>
+            <button class="sort-button" data-action="sort-menu"><span id="sortLabel">날짜</span><span data-icon-host="chevron-down"></span></button>
+            <button class="icon-button plain" data-action="toggle-view" data-icon="grid" aria-label="보기 방식 전환"></button>
+            <button class="icon-button plain" data-action="selection-mode" data-icon="check-circle" aria-label="문서 선택"></button>
+          </div>
+        </section>
+
+        <section id="libraryBanner" class="library-banner">
+          <span class="banner-icon" data-icon-host="sparkles"></span>
+          <div class="banner-copy">
+            <strong>기기 안에서 빠르고 안전하게</strong>
+            <span>필기, 손글씨 OCR, 수식 계산, 페이지 검색을 오프라인으로 사용할 수 있습니다.</span>
+          </div>
+          <button class="secondary-button" data-action="show-gesture-guide">사용법</button>
+        </section>
+
+        <section id="folderStrip" class="folder-strip" aria-label="폴더"></section>
+        <section id="documentGrid" class="document-grid" aria-label="노트 목록"></section>
+        <section id="libraryEmpty" class="empty-state" hidden>
+          <span class="empty-icon" data-icon-host="notebook-plus"></span>
+          <h2>노트를 만들어 보세요</h2>
+          <p>+ 신규 버튼으로 템플릿을 고르고 바로 필기를 시작할 수 있습니다.</p>
+          <button class="primary-button" data-action="new-note"><span data-icon-host="plus"></span><span>새 노트</span></button>
+        </section>
+      </main>
+
+      <nav class="library-mobile-nav" aria-label="모바일 라이브러리 탐색">
+        <button class="mobile-nav-button is-active" data-library-filter="all" data-icon="folder"><span>문서</span></button>
+        <button class="mobile-nav-button" data-library-filter="favorite" data-icon="star"><span>즐겨찾기</span></button>
+        <button class="mobile-nav-button" data-action="new-note" data-icon="plus-circle"><span>신규</span></button>
+        <button class="mobile-nav-button" data-library-filter="templates" data-icon="store"><span>템플릿</span></button>
+        <button class="mobile-nav-button" data-action="open-settings" data-icon="settings"><span>설정</span></button>
+      </nav>
+    </section>
+
+    <section id="editorView" class="view editor-view" aria-label="노트 편집기">
+      <header class="document-tabs" aria-label="열린 문서 탭">
+        <button class="tab-home icon-button" data-action="back-library" data-icon="home" aria-label="라이브러리"></button>
+        <div id="tabList" class="tab-list"></div>
+        <button class="icon-button tab-add" data-action="new-note" data-icon="plus" aria-label="새 문서"></button>
+      </header>
+
+      <header class="editor-navbar">
+        <div class="nav-left">
+          <button class="icon-button toolbar-button" data-action="back-library" data-icon="home" aria-label="라이브러리"></button>
+          <span class="toolbar-divider"></span>
+          <button class="icon-button toolbar-button" data-action="toggle-pages" data-icon="sidebar" aria-label="페이지 사이드바"></button>
+          <button class="icon-button toolbar-button optional-tablet" data-action="open-assistant" data-icon="sparkles" aria-label="학습 도우미"></button>
+        </div>
+
+        <div id="mainToolbar" class="main-toolbar" role="toolbar" aria-label="편집 도구">
+          <button class="icon-button toolbar-button tool-button is-active" data-tool="lasso" data-icon="lasso" aria-label="올가미"></button>
+          <button class="icon-button toolbar-button tool-button" data-tool="pen" data-icon="pen" aria-label="펜"></button>
+          <button class="icon-button toolbar-button tool-button" data-tool="eraser" data-icon="eraser" aria-label="지우개"></button>
+          <button class="icon-button toolbar-button tool-button" data-tool="text" data-icon="text" aria-label="텍스트"></button>
+          <button class="icon-button toolbar-button tool-button" data-tool="sticky" data-icon="sticky" aria-label="스티키 노트"></button>
+          <button class="icon-button toolbar-button tool-button" data-tool="image" data-icon="image" aria-label="이미지"></button>
+          <button class="icon-button toolbar-button overflow-button" data-action="tools-overflow" data-icon="chevron-down" aria-label="도구 더보기"></button>
+          <span class="toolbar-divider"></span>
+          <button class="icon-button toolbar-button" data-action="toggle-ruler" data-icon="ruler" aria-label="자"></button>
+          <button class="icon-button toolbar-button" data-action="toggle-audio" data-icon="mic" aria-label="오디오 녹음"><span id="recordDot" class="record-dot"></span></button>
+        </div>
+
+        <div class="nav-right">
+          <button class="icon-button toolbar-button" data-action="add-page" data-icon="page-plus" aria-label="새 페이지"></button>
+          <button class="icon-button toolbar-button" data-action="share" data-icon="share" aria-label="공유와 내보내기"></button>
+          <button class="icon-button toolbar-button" data-action="editor-more" data-icon="more" aria-label="더 보기"></button>
+        </div>
+      </header>
+
+      <div id="activeToolDock" class="active-tool-dock top">
+        <div id="activeToolMenu" class="active-tool-menu" role="toolbar" aria-label="활성 도구 설정"></div>
+        <button class="dock-grip" data-action="cycle-dock" aria-label="활성 도구 메뉴 위치 변경"><span></span></button>
+      </div>
+
+      <div id="undoPill" class="undo-pill">
+        <button class="icon-button" data-action="undo" data-icon="undo" aria-label="실행 취소"></button>
+        <button class="icon-button" data-action="redo" data-icon="redo" aria-label="다시 실행"></button>
+      </div>
+
+      <aside id="pageSidebar" class="page-sidebar" aria-label="페이지 사이드바">
+        <header class="sidebar-header">
+          <div class="sidebar-tabs">
+            <button class="sidebar-tab is-active" data-sidebar-tab="pages">페이지</button>
+            <button class="sidebar-tab" data-sidebar-tab="outline">목차</button>
+            <button class="sidebar-tab" data-sidebar-tab="audio">오디오</button>
+          </div>
+          <button class="icon-button compact" data-action="close-pages" data-icon="close" aria-label="닫기"></button>
+        </header>
+        <div id="sidebarContent" class="sidebar-content"></div>
+      </aside>
+
+      <aside id="documentSearch" class="document-search" aria-label="문서 검색">
+        <header class="search-drawer-header">
+          <strong>문서 검색</strong>
+          <button class="icon-button compact" data-action="close-document-search" data-icon="close" aria-label="닫기"></button>
+        </header>
+        <div class="drawer-search-field">
+          <span data-icon-host="search"></span>
+          <input id="documentSearchInput" type="search" placeholder="손글씨 OCR·텍스트·수식 검색" />
+        </div>
+        <div id="documentSearchResults" class="document-search-results"></div>
+      </aside>
+
+      <main id="editorViewport" class="editor-viewport">
+        <div id="pageStack" class="page-stack"></div>
+      </main>
+
+      <div id="pageIndicator" class="page-indicator" aria-live="polite">1 / 1</div>
+      <div id="zoomIndicator" class="zoom-indicator">100%</div>
+      <div id="stylusTelemetry" class="stylus-telemetry" hidden>펜 입력 대기</div>
+      <div id="objectMenu" class="object-menu" hidden></div>
+    </section>
+
+    <div id="modalBackdrop" class="modal-backdrop" hidden></div>
+
+    <section id="newNoteSheet" class="sheet modal" hidden aria-label="새 노트 만들기">
+      <header class="sheet-header">
+        <div>
+          <span class="eyebrow">새 문서</span>
+          <h2>노트 템플릿 선택</h2>
+        </div>
+        <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
+      </header>
+      <label class="field-label" for="newNoteTitle">노트 제목</label>
+      <input id="newNoteTitle" class="text-field" type="text" value="새 노트" maxlength="80" />
+      <div id="templatePicker" class="template-picker"></div>
+      <div class="new-note-import-row">
+        <button class="pdf-new-note-button" data-action="new-note-pdf"><span data-icon-host="page-plus"></span><span><strong>PDF로 새 노트</strong><small>페이지와 검색 텍스트를 가져옵니다</small></span></button>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" data-action="close-modal">취소</button>
+        <button class="primary-button" data-action="create-note"><span data-icon-host="plus"></span><span>만들기</span></button>
+      </div>
+    </section>
+
+    <section id="textSheet" class="sheet modal compact-sheet" hidden aria-label="텍스트 입력">
+      <header class="sheet-header">
+        <div><span class="eyebrow" id="textSheetEyebrow">텍스트</span><h2 id="textSheetTitle">내용 입력</h2></div>
+        <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
+      </header>
+      <textarea id="textObjectInput" class="text-area" rows="5" placeholder="페이지에 넣을 내용을 입력하세요."></textarea>
+      <div class="sheet-actions">
+        <button class="secondary-button" data-action="close-modal">취소</button>
+        <button class="primary-button" data-action="insert-text-object"><span data-icon-host="check"></span><span>삽입</span></button>
+      </div>
+    </section>
+
+    <section id="mathSheet" class="sheet modal math-sheet legacy-math-sheet" hidden aria-hidden="true" aria-label="기존 수식 입력">
+      <header class="sheet-header">
+        <div><span class="eyebrow">Math Assist</span><h2>수학 자동 계산</h2></div>
+        <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
+      </header>
+      <p class="sheet-description">사칙연산, 괄호, 거듭제곱, 제곱근, 삼각함수, 로그와 변수를 기기에서 계산합니다.</p>
+      <div class="math-input-row">
+        <input id="mathExpressionInput" class="text-field math-input" type="text" inputmode="text" autocomplete="off" placeholder="예: (12+8)*3 또는 sqrt(144)" />
+        <button class="icon-button math-equals" data-action="calculate-math" data-icon="equals" aria-label="계산"></button>
+      </div>
+      <div id="mathResultCard" class="math-result-card">
+        <span class="math-result-label">결과</span>
+        <strong id="mathResultValue">식을 입력하세요</strong>
+        <span id="mathResultDetail"></span>
+      </div>
+      <div class="math-keypad" id="mathKeypad"></div>
+      <div class="math-options">
+        <label><input id="mathDegreeMode" type="checkbox" /> 각도를 도 단위로 계산</label>
+        <label><input id="mathInsertBoth" type="checkbox" checked /> 식과 결과를 함께 삽입</label>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" data-action="close-modal">닫기</button>
+        <button class="primary-button" data-action="insert-math"><span data-icon-host="math"></span><span>페이지에 삽입</span></button>
+      </div>
+    </section>
+
+    <section id="penSettingsSheet" class="sheet modal pen-settings-sheet" hidden aria-label="펜 설정">
+      <header class="sheet-header">
+        <div><span class="eyebrow">Writing Tool</span><h2>펜 세부 설정</h2></div>
+        <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
+      </header>
+      <div class="pen-preview-wrap"><canvas id="penPreviewCanvas" width="760" height="150"></canvas></div>
+      <div id="penSettingsFields" class="settings-fields"></div>
+      <div class="sheet-actions">
+        <button class="secondary-button" data-action="reset-pen-settings">기본값</button>
+        <button class="primary-button" data-action="close-modal"><span data-icon-host="check"></span><span>완료</span></button>
+      </div>
+    </section>
+
+    <section id="menuSheet" class="sheet modal menu-sheet" hidden aria-label="메뉴">
+      <header class="sheet-header">
+        <div><span class="eyebrow" id="menuEyebrow">메뉴</span><h2 id="menuTitle">더 보기</h2></div>
+        <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
+      </header>
+      <div id="menuItems" class="menu-items"></div>
+    </section>
+
+    <section id="settingsSheet" class="sheet modal settings-sheet" hidden aria-label="설정">
+      <header class="sheet-header">
+        <div><span class="eyebrow">InkForge Notes Studio</span><h2>설정</h2></div>
+        <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
+      </header>
+      <div class="settings-list">
+        <label class="setting-row"><span><strong>스타일러스 전용 필기</strong><small>손바닥과 손가락 입력을 필기에서 제외합니다.</small></span><input id="stylusOnlyToggle" type="checkbox" checked /></label>
+        <label class="setting-row"><span><strong>낙서해서 지우기</strong><small>빠른 지그재그 획으로 겹친 필기를 지웁니다.</small></span><input id="scribbleEraseToggle" type="checkbox" checked /></label>
+        <label class="setting-row"><span><strong>그려서 도형 만들기</strong><small>직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.</small></span><input id="drawHoldToggle" type="checkbox" checked /></label>
+        <label class="setting-row"><span><strong>스타일러스 정보 표시</strong><small>필압, 기울기, 입력 장치를 화면에 표시합니다.</small></span><input id="telemetryToggle" type="checkbox" /></label>
+        <label class="setting-row"><span><strong>연속 페이지 보기</strong><small>모든 페이지를 세로로 이어서 표시합니다.</small></span><input id="continuousToggle" type="checkbox" checked /></label>
+      </div>
+      <div class="sheet-actions"><button class="primary-button" data-action="close-modal"><span data-icon-host="check"></span><span>완료</span></button></div>
+    </section>
+
+    <input id="imageInput" type="file" accept="image/*" hidden />
+    <input id="importInput" type="file" accept=".ifnote,.json,application/json" hidden />
+    <input id="pdfInput" type="file" accept="application/pdf,.pdf" hidden />
+    <div id="toastHost" class="toast-host" aria-live="assertive"></div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="recognition.js"></script>
+  <script src="pdf-tools.js"></script>
+  <script src="upgrade32.js"></script>
+  <script src="native-bridge.js"></script>
+</body>
+</html>
