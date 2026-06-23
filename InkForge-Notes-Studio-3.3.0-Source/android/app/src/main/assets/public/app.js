@@ -2099,12 +2099,12 @@
   }
 
   function maybeScribbleErase(pageIndex, points) {
-    if (!state.settings.scribbleErase || points.length < 12) return false;
+    if (!state.settings.scribbleErase || points.length < 10) return false;
     const metrics = strokeMetrics(points);
     const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
     const compact = Math.max(metrics.bounds.w, metrics.bounds.h) < 460 && Math.min(metrics.bounds.w, metrics.bounds.h) > 12;
-    const notClosedShape = metrics.closure > diagonal * .42 || metrics.reversals >= 6;
-    const dense = compact && notClosedShape && metrics.length > Math.max(240, diagonal * 5.3) && metrics.reversals >= 5;
+    const notClosedShape = metrics.closure > diagonal * .44 || metrics.reversals >= 4;
+    const dense = compact && notClosedShape && metrics.length > Math.max(180, diagonal * 4.0) && metrics.reversals >= 3;
     if (!dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
