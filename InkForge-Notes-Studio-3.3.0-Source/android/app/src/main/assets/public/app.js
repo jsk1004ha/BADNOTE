@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.5';
+  const VERSION = '3.3.6';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const SHAPE_HOLD_MS = 650;
   const LIVE_SHAPE_HOLD_MS = 1000;
@@ -146,11 +146,21 @@
   function recentNativeStylus(event, maxAge = 220) {
     const detail = window.__inkforgeNativeBridge?.lastStylus || window.__inkforgeLastNativeStylus;
     if (!detail || !Number.isFinite(detail.receivedAt)) return null;
-    if (performance.now() - detail.receivedAt > maxAge) return null;
+    const nativeButtons = Number(detail.buttonState || 0);
+    const barrelActive = !!(
+      detail.primaryButton ||
+      detail.secondaryButton ||
+      detail.barrelButton ||
+      detail.latchedBarrelButton ||
+      window.__inkforgeNativeBridge?.barrelButtonActive ||
+      (nativeButtons & 96) !== 0
+    );
+    const effectiveMaxAge = barrelActive ? Math.max(maxAge, 3500) : maxAge;
+    if (performance.now() - detail.receivedAt > effectiveMaxAge) return null;
     if (event && Number.isFinite(detail.x) && Number.isFinite(detail.y)) {
       const dx = Math.abs(Number(event.clientX || 0) - detail.x);
       const dy = Math.abs(Number(event.clientY || 0) - detail.y);
-      if (Math.hypot(dx, dy) > 96 && !detail.hover) return null;
+      if (Math.hypot(dx, dy) > 96 && !detail.hover && !barrelActive) return null;
     }
     return detail;
   }

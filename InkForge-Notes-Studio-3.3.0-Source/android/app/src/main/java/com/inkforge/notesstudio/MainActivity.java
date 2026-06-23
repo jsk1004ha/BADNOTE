@@ -311,6 +311,8 @@ public final class MainActivity extends Activity {
 
     private final class InkWebView extends WebView {
         private long lastMoveDispatchNanos;
+        private boolean stylusPrimaryButtonDown;
+        private boolean stylusSecondaryButtonDown;
 
         InkWebView(Activity context) {
             super(context);
@@ -357,6 +359,23 @@ public final class MainActivity extends Activity {
                     now - lastMoveDispatchNanos < 8_000_000L) return;
             lastMoveDispatchNanos = now;
             int index = Math.max(0, Math.min(event.getActionIndex(), event.getPointerCount() - 1));
+            int buttonState = event.getButtonState();
+            boolean primaryNow = (buttonState & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
+            boolean secondaryNow = (buttonState & MotionEvent.BUTTON_STYLUS_SECONDARY) != 0;
+            if (action == MotionEvent.ACTION_BUTTON_RELEASE ||
+                    action == MotionEvent.ACTION_CANCEL ||
+                    action == MotionEvent.ACTION_UP) {
+                stylusPrimaryButtonDown = primaryNow;
+                stylusSecondaryButtonDown = secondaryNow;
+            } else {
+                if (primaryNow) stylusPrimaryButtonDown = true;
+                if (secondaryNow) stylusSecondaryButtonDown = true;
+            }
+            boolean primaryButton = primaryNow || stylusPrimaryButtonDown;
+            boolean secondaryButton = secondaryNow || stylusSecondaryButtonDown;
+            int latchedButtonState = buttonState;
+            if (primaryButton) latchedButtonState |= MotionEvent.BUTTON_STYLUS_PRIMARY;
+            if (secondaryButton) latchedButtonState |= MotionEvent.BUTTON_STYLUS_SECONDARY;
             JSONObject detail = new JSONObject();
             try {
                 detail.put("action", action);
@@ -372,15 +391,17 @@ public final class MainActivity extends Activity {
                 detail.put("tilt", event.getAxisValue(MotionEvent.AXIS_TILT, index));
                 detail.put("orientation", event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index));
                 detail.put("distance", event.getAxisValue(MotionEvent.AXIS_DISTANCE, index));
-                detail.put("buttonState", event.getButtonState());
+                detail.put("buttonState", latchedButtonState);
+                detail.put("rawButtonState", buttonState);
                 detail.put(
                         "primaryButton",
-                        (event.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+                        primaryButton
                 );
                 detail.put(
                         "secondaryButton",
-                        (event.getButtonState() & MotionEvent.BUTTON_STYLUS_SECONDARY) != 0
+                        secondaryButton
                 );
+                detail.put("barrelButton", primaryButton || secondaryButton);
                 detail.put("eventTime", event.getEventTime());
                 detail.put("historySize", event.getHistorySize());
                 InputDevice device = event.getDevice();
@@ -426,7 +447,7 @@ public final class MainActivity extends Activity {
             JSONObject result = new JSONObject();
             try {
                 result.put("native", true);
-                result.put("version", "3.3.5");
+                result.put("version", "3.3.6");
                 result.put("digitalInk", true);
                 result.put("koreanImageOcr", true);
                 result.put("koreanEnglishImageOcr", true);

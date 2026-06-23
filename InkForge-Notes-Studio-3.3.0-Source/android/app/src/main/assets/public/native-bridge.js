@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.5';
+  const VERSION = '3.3.6';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -9,6 +9,7 @@
   const OCR_ACTIVITY_GRACE_MS = 1400;
   const IDLE_OCR_TIMEOUT_MS = 2400;
   const SHAPE_HOLD_MS = 650;
+  const BARREL_BUTTON_LATCH_MS = 3500;
   const nativeApi = window.InkForgeNative;
   const pending = new Map();
   const ocrTimers = new Map();
@@ -30,6 +31,7 @@
   let modelStatusNode = null;
   let recognitionReadyChipShown = false;
   let barrelRestoreTool = null;
+  let barrelButtonLatchUntil = 0;
 
   const uid = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -718,7 +720,16 @@
   }
 
   function rememberNativeStylus(detail) {
+    const action = Number(detail?.action);
+    const nowTime = performance.now();
     const buttonState = Number(detail?.buttonState || 0);
+    const rawButtonState = Number(detail?.rawButtonState ?? buttonState);
+    const rawPrimary = !!detail?.primaryButton || (buttonState & 32) !== 0 || (rawButtonState & 32) !== 0;
+    const rawSecondary = !!detail?.secondaryButton || (buttonState & 64) !== 0 || (rawButtonState & 64) !== 0;
+    const rawBarrel = !!detail?.barrelButton || rawPrimary || rawSecondary || (buttonState & 96) !== 0 || (rawButtonState & 96) !== 0;
+    if (rawBarrel && action !== 1 && action !== 3 && action !== 12) barrelButtonLatchUntil = nowTime + BARREL_BUTTON_LATCH_MS;
+    else if (action === 1 || action === 3 || action === 12) barrelButtonLatchUntil = 0;
+    const latchedBarrel = nowTime < barrelButtonLatchUntil;
     lastStylusDetail = {
       ...detail,
       x: Number(detail?.x),
@@ -726,11 +737,13 @@
       pressure: Number(detail?.pressure),
       toolType: Number(detail?.toolType),
       buttonState,
-      primaryButton: !!detail?.primaryButton || (buttonState & 32) !== 0,
-      secondaryButton: !!detail?.secondaryButton || (buttonState & 64) !== 0,
-      barrelButton: !!detail?.barrelButton || !!detail?.primaryButton || !!detail?.secondaryButton || (buttonState & 96) !== 0,
+      rawButtonState,
+      primaryButton: rawPrimary || (latchedBarrel && !rawSecondary),
+      secondaryButton: rawSecondary,
+      barrelButton: rawBarrel || latchedBarrel,
+      latchedBarrelButton: latchedBarrel && !rawBarrel,
       eraser: Number(detail?.toolType) === 4,
-      receivedAt: performance.now()
+      receivedAt: nowTime
     };
     window.__inkforgeLastNativeStylus = lastStylusDetail;
   }
@@ -764,7 +777,7 @@
     const detail = event.detail || {};
     rememberNativeStylus(detail);
     setStylusChip(detail);
-    const button = !!(detail.primaryButton || detail.secondaryButton);
+    const button = !!(lastStylusDetail?.primaryButton || lastStylusDetail?.secondaryButton || lastStylusDetail?.barrelButton);
     const toolType = Number(detail.toolType);
     const action = Number(detail.action);
     if (button && action !== 1 && action !== 3 && !barrelRestoreTool && api.state.tool !== 'eraser') {
@@ -984,7 +997,8 @@
       autoIndexPage,
       recognizeNativeInk,
       isRecentStylusEvent,
-      get lastStylus() { return lastStylusDetail; }
+      get lastStylus() { return lastStylusDetail; },
+      get barrelButtonActive() { return performance.now() < barrelButtonLatchUntil; }
     };
   }
 

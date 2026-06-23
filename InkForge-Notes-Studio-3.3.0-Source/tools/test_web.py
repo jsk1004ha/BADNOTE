@@ -398,6 +398,100 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         """)
         spen["passed"] = spen["bridge"] and spen["afterClick"] == "eraser" and spen["afterDouble"] == "lasso"
         results["s_pen_gestures"] = spen
+        barrel_eraser = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            api.state.settings.sPenGestures = true;
+            api.state.eraserMode = 'stroke';
+            api.setTool('pen');
+            const page = api.currentPage();
+            page.objects = page.objects.filter(object => object.id !== 'spen_barrel_target');
+            page.objects.push({
+              id: 'spen_barrel_target',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 320, y: 360, p: .6 },
+                { x: 380, y: 360, p: .6 },
+                { x: 450, y: 360, p: .6 }
+              ]
+            });
+            api.renderPageCanvas(api.state.currentPageIndex);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+            const clientFor = (x, y) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + x / 1000 * rect.width, y: rect.top + y / 1414 * rect.height };
+            };
+            const dispatchNative = (detail) => window.dispatchEvent(new CustomEvent('inkforge:native-stylus', { detail }));
+            const sendPointer = (type, pointerId, client) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId,
+              pointerType: 'pen',
+              isPrimary: true,
+              button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              pressure: type === 'pointerup' ? 0 : .55,
+              clientX: client.x,
+              clientY: client.y
+            }));
+            const client = clientFor(390, 360);
+            dispatchNative({
+              action: 11,
+              hover: true,
+              toolType: 2,
+              buttonState: 32,
+              primaryButton: true,
+              barrelButton: true,
+              x: client.x,
+              y: client.y,
+              pressure: 0,
+              device: 'Samsung S Pen'
+            });
+            await new Promise(resolve => setTimeout(resolve, 320));
+            dispatchNative({
+              action: 0,
+              hover: false,
+              toolType: 2,
+              buttonState: 0,
+              rawButtonState: 0,
+              x: client.x,
+              y: client.y,
+              pressure: .55,
+              device: 'Samsung S Pen'
+            });
+            const latchedBeforeDown = !!window.__inkforgeNativeBridge.lastStylus?.barrelButton;
+            sendPointer('pointerdown', 9301, clientFor(390, 360));
+            sendPointer('pointermove', 9301, clientFor(410, 360));
+            sendPointer('pointerup', 9301, clientFor(410, 360));
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            dispatchNative({
+              action: 12,
+              hover: true,
+              toolType: 2,
+              buttonState: 0,
+              rawButtonState: 0,
+              x: client.x,
+              y: client.y,
+              pressure: 0,
+              device: 'Samsung S Pen'
+            });
+            const erased = !page.objects.some(object => object.id === 'spen_barrel_target');
+            const restoredTool = api.state.tool;
+            return {
+              latchedBeforeDown,
+              erased,
+              restoredTool,
+              objectCount: page.objects.length,
+              passed: latchedBeforeDown && erased && restoredTool !== 'eraser'
+            };
+          }
+        """)
+        results["s_pen_barrel_button_eraser"] = barrel_eraser
 
         if args.screenshots:
             await page.evaluate("window.__inkforge.setTool('pen')")
@@ -445,7 +539,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.5" and results.get("upgrade_version") == "3.3.5" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.6" and results.get("upgrade_version") == "3.3.6" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 
