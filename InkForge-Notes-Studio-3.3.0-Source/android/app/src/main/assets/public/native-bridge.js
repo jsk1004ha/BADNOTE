@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.8';
+  const VERSION = '3.3.9';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,10 +11,10 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '대용량 문서에서 페이지 렌더 요청을 프레임 큐로 나눠 스크롤 중 멈춤을 줄였습니다.',
-    '화면 밖 캔버스는 backing store를 1x1로 줄여 즉시 메모리를 반환합니다.',
-    'PDF 배경과 이미지 캐시를 대용량 문서에서 더 작게 유지해 메모리 압박을 낮췄습니다.',
-    '자동 OCR의 visible-page 계산이 모든 페이지 DOM을 순회하지 않도록 최적화했습니다.'
+    '확대 상태에서 낙서 지우기와 도형 자동 변환이 화면 픽셀 기준으로 판정되도록 수정했습니다.',
+    '저장되는 획과 도형 좌표는 문서 기준으로 유지해 확대율과 관계없이 선명하게 렌더링합니다.',
+    '낙서 지우기 제스처가 도형으로 먼저 변환되는 경우를 막고 지우기 판정을 우선 적용합니다.',
+    '3.8배 확대 상태에서 짧은 지그재그 지우기가 도형으로 변하지 않는 회귀 테스트를 추가했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;

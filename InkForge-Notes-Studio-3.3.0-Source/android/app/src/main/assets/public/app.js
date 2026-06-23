@@ -1,10 +1,12 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.8';
+  const VERSION = '3.3.9';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const SHAPE_HOLD_MS = 650;
   const LIVE_SHAPE_HOLD_MS = 1000;
+  const STROKE_SAMPLE_SCREEN_PX = 1.1;
+  const STROKE_HOLD_RESET_SCREEN_PX = 3.5;
   const ZOOM_PAGE_SUPPRESS_MS = 320;
   const ZOOM_DRAG_LOCK_MS = 1000;
   const ZOOM_RENDER_DEBOUNCE_MS = 90;
@@ -2182,6 +2184,21 @@
     };
   }
 
+  function eventScreenPoint(event) {
+    return {
+      x: Number.isFinite(event.clientX) ? event.clientX : 0,
+      y: Number.isFinite(event.clientY) ? event.clientY : 0,
+      t: Number(event.timeStamp || performance.now())
+    };
+  }
+
+  function screenToPageDistance(pageIndex, pixels) {
+    const canvas = $(`.page-canvas[data-page-index="${pageIndex}"]`);
+    const rect = canvas?.getBoundingClientRect();
+    if (rect?.width > 0) return pixels / rect.width * PAGE_WIDTH;
+    return pixels / Math.max(.1, state.zoom || 1);
+  }
+
   function constrainToRuler(point) {
     if (!state.ruler.visible) return point;
     const cx = state.ruler.x ?? PAGE_WIDTH / 2, cy = state.ruler.y;
@@ -2431,17 +2448,26 @@
     return { length, bounds, reversals, closure: distance(points[0], points[points.length - 1]) };
   }
 
-  function maybeScribbleErase(pageIndex, points) {
-    if (!state.settings.scribbleErase || points.length < 10) return false;
+  function scribbleGestureProfile(points) {
     const metrics = strokeMetrics(points);
     const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
-    const compact = Math.max(metrics.bounds.w, metrics.bounds.h) < 460 && Math.min(metrics.bounds.w, metrics.bounds.h) > 12;
-    const notClosedShape = metrics.closure > diagonal * .44 || metrics.reversals >= 4;
-    const dense = compact && notClosedShape && metrics.length > Math.max(180, diagonal * 4.0) && metrics.reversals >= 3;
-    if (!dense) return false;
+    const maxDimension = Math.max(metrics.bounds.w, metrics.bounds.h);
+    const minDimension = Math.min(metrics.bounds.w, metrics.bounds.h);
+    const compact = maxDimension < 560 && minDimension > 8 && diagonal > 24;
+    const notClosedShape = metrics.closure > diagonal * .42 || metrics.reversals >= 4;
+    const dense = compact && notClosedShape && metrics.reversals >= 3 && metrics.length > Math.max(110, diagonal * 2.35);
+    return { metrics, diagonal, dense };
+  }
+
+  function maybeScribbleErase(pageIndex, points, screenPoints = points) {
+    if (!state.settings.scribbleErase || points.length < 10) return false;
+    const gesture = scribbleGestureProfile(screenPoints);
+    if (!gesture.dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
-    const expanded = { x: metrics.bounds.x - 14, y: metrics.bounds.y - 14, w: metrics.bounds.w + 28, h: metrics.bounds.h + 28 };
+    const metrics = strokeMetrics(points);
+    const margin = Math.max(10, screenToPageDistance(pageIndex, 18));
+    const expanded = { x: metrics.bounds.x - margin, y: metrics.bounds.y - margin, w: metrics.bounds.w + margin * 2, h: metrics.bounds.h + margin * 2 };
     const ids = page.objects.filter((object) => {
       const b = computeBounds(object);
       return b.x < expanded.x + expanded.w && b.x + b.w > expanded.x && b.y < expanded.y + expanded.h && b.y + b.h > expanded.y;
@@ -2552,8 +2578,11 @@
     return radialDeviation < .3 ? (aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse') : null;
   }
 
-  function maybeShapeFromStroke(points, duration, holdDuration = 0) {
+  function maybeShapeFromStroke(points, duration, holdDuration = 0, screenPoints = points) {
     if (!state.settings.drawHold || points.length < 4) return null;
+    const screenMetrics = strokeMetrics(screenPoints);
+    const screenDiagonal = Math.max(1, Math.hypot(screenMetrics.bounds.w, screenMetrics.bounds.h));
+    if (screenDiagonal < 18 || scribbleGestureProfile(screenPoints).dense) return null;
     const metrics = strokeMetrics(points);
     const diagonal = Math.max(1, Math.hypot(metrics.bounds.w, metrics.bounds.h));
     if (diagonal < 18) return null;
@@ -2563,7 +2592,7 @@
     if (!highConfidence) return null;
     const direct = distance(points[0], points[points.length - 1]);
     const straightness = direct / Math.max(1, metrics.length);
-    const obviousStroke = duration > 80 || diagonal > 42;
+    const obviousStroke = duration > 80 || screenDiagonal > 42;
     if (straightness > (highConfidence ? .84 : obviousStroke ? .92 : .965)) return { shape: 'line', x1: points[0].x, y1: points[0].y, x2: points[points.length - 1].x, y2: points[points.length - 1].y, autoConfidence: straightness };
     const arrow = looksLikeArrow(points, diagonal);
     if (arrow && (highConfidence || metrics.length / diagonal < 3.35)) return { ...arrow, autoConfidence: .9 };
@@ -2604,9 +2633,10 @@
   function convertStrokeSessionToLiveShape(session) {
     if (!session || session.kind !== 'stroke' || session.convertedShape || session.object.brush === 'highlighter') return false;
     const points = session.object.points;
+    const screenPoints = session.screenPoints || points;
     const duration = performance.now() - session.startedAt;
     const holdDuration = performance.now() - (session.lastMovedAt || session.startedAt);
-    const shape = maybeShapeFromStroke(points, duration, Math.max(holdDuration, LIVE_SHAPE_HOLD_MS));
+    const shape = maybeShapeFromStroke(points, duration, Math.max(holdDuration, LIVE_SHAPE_HOLD_MS), screenPoints);
     if (!shape) return false;
     const object = { id: uid('shape'), type: 'shape', ...shape, color: session.object.color, width: session.object.width, createdAt: now() };
     const bounds = computeBounds(object);
@@ -2789,8 +2819,10 @@
     if (effectiveTool === 'pen' || effectiveTool === 'highlighter') {
       const brush = effectiveTool === 'highlighter' ? 'highlighter' : state.brush;
       const first = state.ruler.visible ? constrainToRuler(point) : point;
+      const screen = eventScreenPoint(event);
       state.drawSession = {
         kind: 'stroke', pageIndex, startedAt: performance.now(), lastMovedAt: performance.now(), pointerId: event.pointerId,
+        screenPoints: [screen], holdScreenPoint: screen,
         object: { id: uid('stroke'), type: 'stroke', brush, color: brush === 'highlighter' ? state.highlighterColor : state.color, width: brush === 'highlighter' ? state.highlighterWidth : state.width, opacity: brush === 'highlighter' ? .3 : 1, createdAt: now(), points: [first] }
       };
       scheduleLiveShapeHold(state.drawSession);
@@ -2841,13 +2873,18 @@
       const samples = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
       for (const sample of samples) {
         let next = eventPoint(sample, canvas);
+        const nextScreen = eventScreenPoint(sample);
         if (state.ruler.visible) next = constrainToRuler(next);
-        const last = session.object.points[session.object.points.length - 1];
-        const movedDistance = last ? distance(last, next) : Infinity;
-        if (!last || movedDistance > .45) {
+        const lastScreen = session.screenPoints?.[session.screenPoints.length - 1];
+        const movedDistance = lastScreen ? distance(lastScreen, nextScreen) : Infinity;
+        if (!lastScreen || movedDistance > STROKE_SAMPLE_SCREEN_PX) {
           session.object.points.push(next);
-          if (movedDistance > 2.2) {
+          if (!session.screenPoints) session.screenPoints = [];
+          session.screenPoints.push(nextScreen);
+          const holdDistance = session.holdScreenPoint ? distance(session.holdScreenPoint, nextScreen) : movedDistance;
+          if (holdDistance > STROKE_HOLD_RESET_SCREEN_PX) {
             session.lastMovedAt = performance.now();
+            session.holdScreenPoint = nextScreen;
             scheduleLiveShapeHold(session);
           }
         }
@@ -2905,11 +2942,13 @@
     if (session.holdTimer) clearTimeout(session.holdTimer);
     if (session.kind === 'stroke') {
       const points = session.object.points;
+      const screenPoints = session.screenPoints || points;
       const duration = performance.now() - session.startedAt;
       const holdDuration = performance.now() - (session.lastMovedAt || session.startedAt);
-      const shape = session.object.brush !== 'highlighter' ? maybeShapeFromStroke(points, duration, holdDuration) : null;
-      const allowScribbleErase = !shape && holdDuration < Math.max(260, SHAPE_HOLD_MS * .65);
-      if (points.length > 1 && (!allowScribbleErase || !maybeScribbleErase(session.pageIndex, points))) {
+      const allowScribbleErase = holdDuration < Math.max(260, SHAPE_HOLD_MS * .65);
+      const scribbleErased = allowScribbleErase && maybeScribbleErase(session.pageIndex, points, screenPoints);
+      const shape = !scribbleErased && session.object.brush !== 'highlighter' ? maybeShapeFromStroke(points, duration, holdDuration, screenPoints) : null;
+      if (points.length > 1 && !scribbleErased) {
         checkpoint(shape ? 'draw-shape' : 'draw-stroke');
         let committedObject;
         if (shape) { committedObject = { id: uid('shape'), type: 'shape', ...shape, color: session.object.color, width: session.object.width, createdAt: now() }; page.objects.push(committedObject); }

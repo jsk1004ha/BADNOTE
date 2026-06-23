@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.8');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.9');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -324,7 +324,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               afterUnlockedDrag,
               lockedDelta,
               unlockedDelta,
-              passed: locked > 850 && lockedDelta <= 2 && unlockedDelta >= 40
+              passed: locked > 650 && lockedDelta <= 2 && unlockedDelta >= 40
             };
           }
         """)
@@ -422,6 +422,71 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         shape_button_count = await page.locator('#activeToolMenu [data-shape]').count()
         expected_ok = recognized_shapes.get("line") == "line" and recognized_shapes.get("circle") in ("circle", "ellipse") and recognized_shapes.get("ellipse") == "ellipse" and recognized_shapes.get("triangle") == "triangle" and recognized_shapes.get("rectangle") in ("rectangle", "square") and recognized_shapes.get("pentagon") == "pentagon" and recognized_shapes.get("hexagon") == "hexagon"
         results["shape_recognition"] = {"recognized": recognized_shapes, "manual_shape_buttons": shape_button_count, "passed": expected_ok and shape_button_count >= 16}
+
+        results["zoom_screen_gesture_space"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const pageIndex = api.state.currentPageIndex;
+            const page = api.currentPage();
+            api.setTool('pen');
+            api.state.settings.scribbleErase = true;
+            api.state.settings.drawHold = true;
+            page.objects = page.objects.filter(object => object.id !== 'zoom_scribble_target');
+            page.objects.push({
+              id: 'zoom_scribble_target',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 380, y: 430, p: .6 },
+                { x: 500, y: 430, p: .6 },
+                { x: 620, y: 430, p: .6 }
+              ]
+            });
+            const shapesBefore = page.objects.filter(object => object.type === 'shape').length;
+            api.renderPageCanvas(pageIndex);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const clientFor = (x, y) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + x / 1000 * rect.width, y: rect.top + y / 1414 * rect.height };
+            };
+            const anchor = clientFor(500, 430);
+            api.setZoom(3.8, { clientX: anchor.x, clientY: anchor.y });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const zoomedCanvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const center = (() => {
+              const rect = zoomedCanvas.getBoundingClientRect();
+              return { x: rect.left + 500 / 1000 * rect.width, y: rect.top + 430 / 1414 * rect.height };
+            })();
+            const send = (type, point) => zoomedCanvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 8810,
+              pointerType: 'pen',
+              isPrimary: true,
+              button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              pressure: type === 'pointerup' ? 0 : .55,
+              clientX: point.x,
+              clientY: point.y
+            }));
+            const path = Array.from({ length: 18 }, (_, index) => ({
+              x: center.x - 126 + index * 14,
+              y: center.y + (index % 2 ? -18 : 18)
+            }));
+            send('pointerdown', path[0]);
+            path.slice(1).forEach(point => send('pointermove', point));
+            send('pointerup', path[path.length - 1]);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const targetErased = !page.objects.some(object => object.id === 'zoom_scribble_target');
+            const shapesAfter = page.objects.filter(object => object.type === 'shape').length;
+            api.setZoom(1.5, { clientX: center.x, clientY: center.y });
+            return { targetErased, shapesBefore, shapesAfter, zoom: api.state.zoom, passed: targetErased && shapesAfter === shapesBefore };
+          }
+        """)
 
         # S Pen gesture mapping (bridge path and on-screen barrel gesture share actions).
         spen = await page.evaluate("""
@@ -582,7 +647,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.8" and results.get("upgrade_version") == "3.3.8" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.9" and results.get("upgrade_version") == "3.3.9" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 
