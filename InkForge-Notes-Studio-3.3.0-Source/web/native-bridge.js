@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.9';
+  const VERSION = '3.3.10';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,10 +11,11 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '확대 상태에서 낙서 지우기와 도형 자동 변환이 화면 픽셀 기준으로 판정되도록 수정했습니다.',
-    '저장되는 획과 도형 좌표는 문서 기준으로 유지해 확대율과 관계없이 선명하게 렌더링합니다.',
-    '낙서 지우기 제스처가 도형으로 먼저 변환되는 경우를 막고 지우기 판정을 우선 적용합니다.',
-    '3.8배 확대 상태에서 짧은 지그재그 지우기가 도형으로 변하지 않는 회귀 테스트를 추가했습니다.'
+    '확대 상태에서 페이지가 뷰포트보다 넓어질 때 좌우 스크롤 가능한 폭을 확보했습니다.',
+    'PDF·이미지 배경 페이지를 200~300% 확대할 때 캔버스와 이미지 캐시 메모리 사용량을 제한했습니다.',
+    '손 도구 드래그, 확대 상태 터치 팬, 트랙패드/Shift 휠의 좌우 이동을 보강했습니다.',
+    '자동 도형 변환에서 화살표 판정을 제거하고 흔들린 사각형 인식률을 높였습니다.',
+    '오각형·육각형 자동 인식은 정교하게 그린 경우만 통과하도록 낮추고, 정형 도형 비율 잠금/해제를 추가했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;

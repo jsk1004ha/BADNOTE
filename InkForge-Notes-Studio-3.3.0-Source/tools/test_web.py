@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.9');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.10');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -328,6 +328,106 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             };
           }
         """)
+        results["zoom_horizontal_scroll"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const viewport = document.getElementById('editorViewport');
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+            const viewportRect = viewport.getBoundingClientRect();
+            const anchor = { clientX: viewportRect.left + viewport.clientWidth / 2, clientY: viewportRect.top + viewport.clientHeight / 2 };
+            api.setZoom(3.2, anchor);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            api.state.zoomDragLockUntil = 0;
+            const maxScrollLeft = viewport.scrollWidth - viewport.clientWidth;
+            const send = (type, pointerId, pointerType, x, y) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              pointerId,
+              pointerType,
+              isPrimary: true,
+              button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              pressure: pointerType === 'pen' ? .55 : .5,
+              clientX: x,
+              clientY: y
+            }));
+            const gesturePoint = () => {
+              const rect = viewport.getBoundingClientRect();
+              return { x: rect.left + rect.width * .52, y: rect.top + rect.height * .52 };
+            };
+            const startLeft = Math.max(0, Math.min(maxScrollLeft - 180, maxScrollLeft / 2));
+            viewport.scrollLeft = startLeft;
+            api.setTool('hand');
+            let point = gesturePoint();
+            send('pointerdown', 9811, 'mouse', point.x, point.y);
+            send('pointermove', 9811, 'mouse', point.x - 140, point.y);
+            send('pointerup', 9811, 'mouse', point.x - 140, point.y);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const handDelta = viewport.scrollLeft - startLeft;
+            viewport.scrollLeft = startLeft;
+            api.setTool('pen');
+            api.state.zoomDragLockUntil = 0;
+            point = gesturePoint();
+            send('pointerdown', 9812, 'touch', point.x, point.y);
+            send('pointermove', 9812, 'touch', point.x - 140, point.y);
+            send('pointerup', 9812, 'touch', point.x - 140, point.y);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const touchDelta = viewport.scrollLeft - startLeft;
+            return {
+              maxScrollLeft,
+              startLeft,
+              handDelta,
+              touchDelta,
+              passed: maxScrollLeft > 180 && handDelta > 70 && touchDelta > 70
+            };
+          }
+        """)
+        results["pdf_zoom_canvas_budget"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const doc = api.currentDocument();
+            const pageIndex = api.state.currentPageIndex;
+            const page = doc.pages[pageIndex];
+            const source = document.createElement('canvas');
+            source.width = 1000;
+            source.height = 1414;
+            const ctx = source.getContext('2d', { alpha: false });
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, source.width, source.height);
+            ctx.fillStyle = '#e5edf7';
+            for (let y = 80; y < source.height; y += 120) ctx.fillRect(80, y, 840, 28);
+            const blob = await new Promise(resolve => source.toBlob(resolve, 'image/jpeg', .75));
+            const assetId = 'pdf_zoom_budget_asset';
+            await api.storage.putAsset({ id: assetId, kind: 'pdf-page-jpeg', blob, width: 1000, height: 1414, pageNumber: 1, createdAt: new Date().toISOString() });
+            page.backgroundAssetId = assetId;
+            page.importedFromPdf = true;
+            page.needsImageOcr = false;
+            api.renderEditorPages();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const viewport = document.getElementById('editorViewport');
+            const rect = viewport.getBoundingClientRect();
+            api.setZoom(3.0, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            api.updateVirtualPages();
+            api.renderPageCanvas(pageIndex);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const pixels = (canvas?.width || 0) * (canvas?.height || 0);
+            const mounted = document.querySelectorAll('.page-canvas').length;
+            api.setZoom(1.5, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+            return {
+              zoom: 3,
+              backingWidth: canvas?.width || 0,
+              backingHeight: canvas?.height || 0,
+              clientWidth: canvas?.clientWidth || 0,
+              pixels,
+              mounted,
+              imageCacheSize: api.state.imageCache.size,
+              assetUrlCacheSize: api.state.assetUrlCache.size,
+              passed: pixels > 0 && pixels <= 7000000 && mounted <= 2 && api.state.imageCache.size <= 3 && api.state.assetUrlCache.size <= 3
+            };
+          }
+        """)
 
         # Automatic handwritten equation recognition from normal page strokes.
         auto_math_result = await page.evaluate("""
@@ -412,15 +512,18 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "ellipse": circle_points(rx=130, ry=70),
             "triangle": polygon_points([(200,80),(80,300),(330,300)]),
             "rectangle": polygon_points([(70,90),(350,90),(350,260),(70,260)]),
+            "wobbly_rectangle": polygon_points([(72,92),(352,84),(365,250),(80,268)], samples=12),
             "pentagon": polygon_points([(210,60),(350,160),(300,320),(120,320),(70,160)]),
             "hexagon": polygon_points([(120,70),(300,70),(380,200),(300,330),(120,330),(40,200)]),
+            "rough_pentagon": polygon_points([(210,60),(390,150),(285,300),(155,255),(70,155)]),
+            "arrow": [{"x": 60, "y": 210}, {"x": 130, "y": 210}, {"x": 210, "y": 210}, {"x": 185, "y": 185}, {"x": 210, "y": 210}, {"x": 185, "y": 235}],
         }
         recognized_shapes = await page.evaluate("""
           shapes => Object.fromEntries(Object.entries(shapes).map(([key,points])=>[key,window.__inkforge.maybeShapeFromStroke(points,1100,650)?.shape||null]))
         """, shapes)
         await page.evaluate("window.__inkforge.setTool('shape')")
         shape_button_count = await page.locator('#activeToolMenu [data-shape]').count()
-        expected_ok = recognized_shapes.get("line") == "line" and recognized_shapes.get("circle") in ("circle", "ellipse") and recognized_shapes.get("ellipse") == "ellipse" and recognized_shapes.get("triangle") == "triangle" and recognized_shapes.get("rectangle") in ("rectangle", "square") and recognized_shapes.get("pentagon") == "pentagon" and recognized_shapes.get("hexagon") == "hexagon"
+        expected_ok = recognized_shapes.get("line") == "line" and recognized_shapes.get("circle") in ("circle", "ellipse") and recognized_shapes.get("ellipse") == "ellipse" and recognized_shapes.get("triangle") == "triangle" and recognized_shapes.get("rectangle") in ("rectangle", "square") and recognized_shapes.get("wobbly_rectangle") in ("rectangle", "square") and recognized_shapes.get("pentagon") == "pentagon" and recognized_shapes.get("hexagon") == "hexagon" and recognized_shapes.get("rough_pentagon") != "pentagon" and recognized_shapes.get("arrow") != "arrow"
         results["shape_recognition"] = {"recognized": recognized_shapes, "manual_shape_buttons": shape_button_count, "passed": expected_ok and shape_button_count >= 16}
 
         results["zoom_screen_gesture_space"] = await page.evaluate("""
@@ -647,7 +750,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.9" and results.get("upgrade_version") == "3.3.9" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.10" and results.get("upgrade_version") == "3.3.10" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

@@ -1,8 +1,11 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.9';
+  const VERSION = '3.3.10';
   const PAGE_RENDER_SCALE_LIMIT = 4;
+  const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
+  const RASTER_PAGE_RENDER_PIXEL_LIMIT = 7000000;
+  const HIGH_ZOOM_CANVAS_WINDOW = 1.65;
   const SHAPE_HOLD_MS = 650;
   const LIVE_SHAPE_HOLD_MS = 1000;
   const STROKE_SAMPLE_SCREEN_PX = 1.1;
@@ -1117,9 +1120,26 @@
 
   function currentImageCacheLimit() {
     const doc = currentDocument();
+    const rasterDoc = documentHasRasterBackgrounds(doc);
+    if (rasterDoc && state.zoom > HIGH_ZOOM_CANVAS_WINDOW) return 3;
+    if (rasterDoc) return Math.min(6, NORMAL_IMAGE_CACHE_LIMIT);
     return doc?.pages?.length > LARGE_DOC_PAGE_THRESHOLD
       ? LARGE_DOC_IMAGE_CACHE_LIMIT
       : NORMAL_IMAGE_CACHE_LIMIT;
+  }
+
+  function pageHasRasterBackground(page) {
+    return !!(page?.backgroundAssetId || page?.backgroundImage || page?.importedFromPdf);
+  }
+
+  function documentHasRasterBackgrounds(doc = currentDocument()) {
+    return !!doc?.pages?.some(pageHasRasterBackground);
+  }
+
+  function renderScaleLimitForPage(page) {
+    if (!pageHasRasterBackground(page)) return PAGE_RENDER_SCALE_LIMIT;
+    const pixelScale = Math.sqrt(RASTER_PAGE_RENDER_PIXEL_LIMIT / (PAGE_WIDTH * PAGE_HEIGHT));
+    return Math.max(1, Math.min(RASTER_PAGE_RENDER_SCALE_LIMIT, pixelScale));
   }
 
   function rememberImage(key, image) {
@@ -1402,7 +1422,7 @@
     if (!page || !canvas) return;
     const rect = canvas.getBoundingClientRect();
     const cssScale = rect.width > 0 ? rect.width / PAGE_WIDTH : state.zoom;
-    const renderScale = clamp(cssScale * (window.devicePixelRatio || 1), 1, PAGE_RENDER_SCALE_LIMIT);
+    const renderScale = clamp(cssScale * (window.devicePixelRatio || 1), 1, renderScaleLimitForPage(page));
     const targetWidth = Math.max(PAGE_WIDTH, Math.round(PAGE_WIDTH * renderScale));
     const targetHeight = Math.max(PAGE_HEIGHT, Math.round(PAGE_HEIGHT * renderScale));
     if (canvas.width !== targetWidth) canvas.width = targetWidth;
@@ -1557,6 +1577,7 @@
     const stack = $('#pageStack');
     stack.style.setProperty('--zoom', String(state.zoom));
     stack.style.setProperty('--page-width', `${width}px`);
+    stack.style.setProperty('--page-stack-width', `${Math.max(viewport.clientWidth, width + 128)}px`);
     $('#zoomIndicator').textContent = `${Math.round(state.zoom * 100)}%`;
     if (render) $$('.page-canvas').forEach((canvas) => scheduleRenderPage(Number(canvas.dataset.pageIndex)));
   }
@@ -1753,9 +1774,10 @@
     const center = bestVisiblePageIndex();
     const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
     if (largeDoc) renderLargePageWindow(center);
-    const radius = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD ? 1 : 4;
-    const start = Math.max(0, Math.min(center, state.currentPageIndex) - radius);
-    const end = Math.min(doc.pages.length - 1, Math.max(center, state.currentPageIndex) + radius);
+    const highZoom = state.zoom > HIGH_ZOOM_CANVAS_WINDOW;
+    const radius = highZoom ? 0 : doc.pages.length > LARGE_DOC_PAGE_THRESHOLD ? 1 : 4;
+    const start = highZoom ? center : Math.max(0, Math.min(center, state.currentPageIndex) - radius);
+    const end = highZoom ? center : Math.min(doc.pages.length - 1, Math.max(center, state.currentPageIndex) + radius);
     for (let index = start; index <= end; index++) mountPageCanvas(index);
     $$('.page-canvas').forEach((canvas) => {
       const index = Number(canvas.dataset.pageIndex);
@@ -2148,6 +2170,7 @@
     const contentY = (viewport.scrollTop + point.viewportY) / oldZoom;
     state.zoom = newZoom;
     updatePageSizing({ render: false });
+    trimImageCache();
     if (!restoreZoomAnchor(zoomAnchor)) {
       viewport.scrollLeft = Math.max(0, contentX * newZoom - point.viewportX);
       viewport.scrollTop = Math.max(0, contentY * newZoom - point.viewportY);
@@ -2523,6 +2546,52 @@
     return value;
   }
 
+  function rectangleLikeShape(points, metrics, diagonal, vertices) {
+    if (!points?.length || diagonal < 28 || metrics.closure > diagonal * .42) return null;
+    if (vertices.length < 4 || vertices.length > 7) return null;
+    const left = metrics.bounds.x, right = metrics.bounds.x + metrics.bounds.w;
+    const top = metrics.bounds.y, bottom = metrics.bounds.y + metrics.bounds.h;
+    if (metrics.bounds.w < diagonal * .18 || metrics.bounds.h < diagonal * .18) return null;
+    const tolerance = Math.max(7, diagonal * .05);
+    const sideHits = { left: 0, right: 0, top: 0, bottom: 0 };
+    let totalEdgeDistance = 0;
+    for (const point of points) {
+      const distances = [
+        ['left', Math.abs(point.x - left)],
+        ['right', Math.abs(point.x - right)],
+        ['top', Math.abs(point.y - top)],
+        ['bottom', Math.abs(point.y - bottom)]
+      ].sort((a, b) => a[1] - b[1]);
+      totalEdgeDistance += distances[0][1];
+      if (distances[0][1] <= tolerance) sideHits[distances[0][0]]++;
+    }
+    const averageEdgeDistance = totalEdgeDistance / Math.max(1, points.length);
+    const minimumSideHits = Math.max(2, Math.floor(points.length * .055));
+    const allSidesPresent = Object.values(sideHits).every((count) => count >= minimumSideHits);
+    if (!allSidesPresent || averageEdgeDistance > Math.max(5.5, diagonal * .038)) return null;
+    const angles = vertices.map((vertex, index) => angleAt(vertices[(index + vertices.length - 1) % vertices.length], vertex, vertices[(index + 1) % vertices.length]));
+    const rightish = angles.filter((value) => Math.abs(value - Math.PI / 2) < .62).length;
+    if (vertices.length <= 5 && rightish < 3) return null;
+    const aspect = metrics.bounds.w / Math.max(1, metrics.bounds.h);
+    return aspect > .82 && aspect < 1.22 ? 'square' : 'rectangle';
+  }
+
+  function regularPolygonLike(vertices, sides, metrics, diagonal, radialDeviation, loopRatio) {
+    if (vertices.length !== sides || diagonal < 70) return false;
+    if (metrics.closure > diagonal * .24 || loopRatio < 2.15 || loopRatio > 5.3) return false;
+    const cx = metrics.bounds.x + metrics.bounds.w / 2, cy = metrics.bounds.y + metrics.bounds.h / 2;
+    const lengths = vertices.map((point, index) => distance(point, vertices[(index + 1) % vertices.length]));
+    const meanLength = lengths.reduce((sum, value) => sum + value, 0) / lengths.length;
+    const sideSpread = Math.max(...lengths.map((value) => Math.abs(value - meanLength))) / Math.max(1, meanLength);
+    const expectedAngle = (sides - 2) * Math.PI / sides;
+    const angles = vertices.map((vertex, index) => angleAt(vertices[(index + vertices.length - 1) % sides], vertex, vertices[(index + 1) % sides]));
+    const angleSpread = Math.max(...angles.map((value) => Math.abs(value - expectedAngle)));
+    const radii = vertices.map((point) => Math.hypot(point.x - cx, point.y - cy));
+    const meanRadius = radii.reduce((sum, value) => sum + value, 0) / radii.length;
+    const radiusSpread = Math.max(...radii.map((value) => Math.abs(value - meanRadius))) / Math.max(1, meanRadius);
+    return sideSpread < .32 && angleSpread < .58 && radiusSpread < .3 && radialDeviation < .46;
+  }
+
   function looksLikeArrow(points, diagonal) {
     const simplified = simplifyPath(points, Math.max(5, diagonal * .025));
     if (simplified.length < 5 || simplified.length > 8) return null;
@@ -2553,6 +2622,10 @@
     const loopRatio = metrics.length / diagonal;
     const ellipseLike = radialDeviation < .16 && loopRatio > 2.35 && loopRatio < 5.15;
     const strongEllipse = radialDeviation < .13 && loopRatio > 2.45 && loopRatio < 4.65;
+    if (regularPolygonLike(vertices, 5, metrics, diagonal, radialDeviation, loopRatio)) return 'pentagon';
+    if (regularPolygonLike(vertices, 6, metrics, diagonal, radialDeviation, loopRatio)) return 'hexagon';
+    const rectangleLike = rectangleLikeShape(points, metrics, diagonal, vertices);
+    if (rectangleLike) return rectangleLike;
 
     if (vertices.length >= 8 && vertices.length <= 13 && radialDeviation > .18) return 'starshape';
     if (strongEllipse && vertices.length >= 5) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
@@ -2572,8 +2645,6 @@
       if (axisDiamond && rightish < 3) return 'diamond';
       return aspect > .82 && aspect < 1.22 ? 'square' : 'rectangle';
     }
-    if (vertices.length === 5) return 'pentagon';
-    if (vertices.length === 6) return 'hexagon';
     if (radialDeviation < .19 && loopRatio > 2.35 && loopRatio < 4.9) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
     return radialDeviation < .3 ? (aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse') : null;
   }
@@ -2594,8 +2665,6 @@
     const straightness = direct / Math.max(1, metrics.length);
     const obviousStroke = duration > 80 || screenDiagonal > 42;
     if (straightness > (highConfidence ? .84 : obviousStroke ? .92 : .965)) return { shape: 'line', x1: points[0].x, y1: points[0].y, x2: points[points.length - 1].x, y2: points[points.length - 1].y, autoConfidence: straightness };
-    const arrow = looksLikeArrow(points, diagonal);
-    if (arrow && (highConfidence || metrics.length / diagonal < 3.35)) return { ...arrow, autoConfidence: .9 };
     if (metrics.closure < diagonal * (highConfidence ? .34 : obviousStroke ? .24 : .15) && metrics.length / diagonal > 1.85 && metrics.length / diagonal < 9.1) {
       const shape = classifyClosedShape(points, metrics, diagonal);
       if (shape) return { shape, x1: metrics.bounds.x, y1: metrics.bounds.y, x2: metrics.bounds.x + metrics.bounds.w, y2: metrics.bounds.y + metrics.bounds.h, autoConfidence: highConfidence ? .94 : .84 };
@@ -2611,6 +2680,48 @@
     return null;
   }
 
+  function aspectLockedShape(shape) {
+    return ['square', 'circle', 'triangle', 'diamond', 'pentagon', 'hexagon', 'starshape'].includes(shape);
+  }
+
+  function ensureAspectLock(session) {
+    const object = session?.object;
+    if (!object || !aspectLockedShape(object.shape)) return null;
+    if (!session.aspectLock) {
+      const bounds = computeBounds(object);
+      const ratio = bounds.w > 4 && bounds.h > 4 ? bounds.w / Math.max(1, bounds.h) : 1;
+      session.aspectLock = {
+        ratio: clamp(ratio, .18, 5.5),
+        unlocked: false
+      };
+    }
+    return session.aspectLock;
+  }
+
+  function aspectLockedPoint(session, point) {
+    const lock = ensureAspectLock(session);
+    if (!lock?.ratio || lock.unlocked) return point;
+    const anchor = session.resizeAnchor || { x: session.object.x1, y: session.object.y1 };
+    const dx = point.x - anchor.x, dy = point.y - anchor.y;
+    const absDx = Math.abs(dx), absDy = Math.abs(dy);
+    if (Math.max(absDx, absDy) < 12) return point;
+    const rawRatio = absDx / Math.max(1, absDy);
+    const ratioIntent = Math.abs(Math.log(rawRatio / lock.ratio));
+    const unlockDistance = Math.max(48, screenToPageDistance(session.pageIndex, 58));
+    if (ratioIntent > .42 && Math.hypot(dx, dy) > unlockDistance) {
+      lock.unlocked = true;
+      return point;
+    }
+    let width = absDx, height = absDy;
+    if (rawRatio > lock.ratio) height = width / lock.ratio;
+    else width = height * lock.ratio;
+    return {
+      ...point,
+      x: anchor.x + (dx < 0 ? -width : width),
+      y: anchor.y + (dy < 0 ? -height : height)
+    };
+  }
+
   function resizeLiveShape(session, point) {
     const object = session.object;
     if (!object) return;
@@ -2624,10 +2735,11 @@
       return;
     }
     const anchor = session.resizeAnchor || { x: object.x1, y: object.y1 };
+    const next = aspectLockedPoint(session, point);
     object.x1 = anchor.x;
     object.y1 = anchor.y;
-    object.x2 = point.x;
-    object.y2 = point.y;
+    object.x2 = next.x;
+    object.y2 = next.y;
   }
 
   function convertStrokeSessionToLiveShape(session) {
@@ -2648,6 +2760,7 @@
       x: last.x >= bounds.x + bounds.w / 2 ? bounds.x : bounds.x + bounds.w,
       y: last.y >= bounds.y + bounds.h / 2 ? bounds.y : bounds.y + bounds.h
     };
+    ensureAspectLock(session);
     scheduleRenderPage(session.pageIndex);
     return true;
   }
@@ -2670,6 +2783,10 @@
 
   function touchPointers() {
     return [...state.activePointers.values()].filter((pointer) => pointer.pointerType === 'touch');
+  }
+
+  function shouldTouchPan() {
+    return state.settings.stylusOnly || state.tool === 'hand' || state.zoom > 1.02;
   }
 
   function startTouchGesture(event) {
@@ -2724,7 +2841,7 @@
         viewport.scrollLeft = gesture.initialScrollLeft - deltaX;
         viewport.scrollTop = gesture.initialScrollTop - deltaY;
       }
-    } else if (!gesture.pinched && performance.now() >= state.zoomDragLockUntil && (state.settings.stylusOnly || state.tool === 'hand')) {
+    } else if (!gesture.pinched && performance.now() >= state.zoomDragLockUntil && shouldTouchPan()) {
       viewport.scrollLeft = gesture.initialScrollLeft - deltaX;
       viewport.scrollTop = gesture.initialScrollTop - deltaY;
     }
@@ -2778,7 +2895,7 @@
         }
         if (state.drawSession?.kind === 'stroke') { state.drawSession = null; renderPageCanvas(pageIndex); }
       }
-      if (state.settings.stylusOnly || touchPointers().length > 1 || state.tool === 'hand') return;
+      if (state.settings.stylusOnly || touchPointers().length > 1 || state.tool === 'hand' || state.zoom > 1.02) return;
     }
 
     const point = eventPoint(event, canvas);
@@ -2835,7 +2952,8 @@
       state.drawSession = { kind: 'lasso', pageIndex, pointerId: event.pointerId, points: [point], closed: false };
       renderPageCanvas(pageIndex); updateObjectMenu();
     } else if (effectiveTool === 'shape') {
-      state.drawSession = { kind: 'shape', pageIndex, pointerId: event.pointerId, object: { id: uid('shape'), type: 'shape', shape: state.shape, color: state.color, width: state.width, x1: point.x, y1: point.y, x2: point.x, y2: point.y } };
+      state.drawSession = { kind: 'shape', pageIndex, pointerId: event.pointerId, resizeAnchor: { x: point.x, y: point.y }, object: { id: uid('shape'), type: 'shape', shape: state.shape, color: state.color, width: state.width, x1: point.x, y1: point.y, x2: point.x, y2: point.y } };
+      ensureAspectLock(state.drawSession);
     } else if (effectiveTool === 'tape') {
       state.drawSession = { kind: 'tape', pageIndex, pointerId: event.pointerId, start: point, object: { id: uid('tape'), type: 'tape', color: state.tapeColor, x1: point.x, y1: point.y, x2: point.x, y2: point.y + 54, revealed: false } };
     } else if (effectiveTool === 'laser') {
@@ -2902,7 +3020,7 @@
       if (!last || distance(last, point) > 3) session.points.push(point);
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'shape') {
-      session.object.x2 = point.x; session.object.y2 = point.y; scheduleRenderPage(pageIndex);
+      resizeLiveShape(session, point); scheduleRenderPage(pageIndex);
     } else if (session.kind === 'tape') {
       session.object.x2 = point.x; session.object.y2 = Math.max(session.start.y + 34, point.y); scheduleRenderPage(pageIndex);
     } else if (session.kind === 'laser') {
@@ -3825,9 +3943,19 @@
   }
 
   function handleWheel(event) {
-    if (state.view !== 'editor' || !(event.ctrlKey || event.metaKey)) return;
-    event.preventDefault();
-    setZoom(state.zoom * Math.exp(-event.deltaY * .002), { clientX: event.clientX, clientY: event.clientY });
+    if (state.view !== 'editor') return;
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      setZoom(state.zoom * Math.exp(-event.deltaY * .002), { clientX: event.clientX, clientY: event.clientY });
+      return;
+    }
+    const viewport = $('#editorViewport');
+    const horizontalDelta = Math.abs(event.deltaX) > .1 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+    if (viewport && state.zoom > 1.02 && Math.abs(horizontalDelta) > .1) {
+      const before = viewport.scrollLeft;
+      viewport.scrollLeft += horizontalDelta;
+      if (Math.abs(viewport.scrollLeft - before) > .1 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) event.preventDefault();
+    }
   }
 
   let scrollFrame = 0;

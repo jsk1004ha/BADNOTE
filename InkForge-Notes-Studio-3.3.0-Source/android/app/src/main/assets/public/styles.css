@@ -390,6 +390,7 @@ input, textarea { user-select: text; -webkit-user-select: text; }
 .page-stack {
   --zoom: 1;
   --page-width: min(880px, calc(100vw - 104px));
+  width: var(--page-stack-width, 100%);
   min-width: 100%;
   min-height: 100%;
   display: flex;
