@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.12';
+  const VERSION = '3.3.13';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,10 +11,10 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '국소적인 작은 낙서 지우기 인식률을 더 높였습니다.',
-    '6포인트 수준의 짧은 왕복 낙서도 축 방향 왕복과 선 밀도가 충분하면 지우기로 처리합니다.',
-    '작은 낙서는 실제 제스처 근처 객체만 지우도록 좁혀 주변 객체 오삭제 위험을 낮췄습니다.',
-    '짧은 직선 입력은 낙서 지우기로 오인하지 않도록 회귀 테스트를 추가했습니다.'
+    '펜, 형광펜, 도형, 지우개 굵기를 슬라이더로 세밀하게 조절할 수 있습니다.',
+    '새로 그리는 획과 도형 굵기, 지우개 반경을 화면 픽셀 기준으로 적용해 확대 상태에서도 체감 굵기를 일정하게 맞췄습니다.',
+    '낙서해서 지우기는 낙서 경로에 실제로 닿은 객체만 삭제하도록 바운딩 박스 삭제를 제거했습니다.',
+    '낙서 지우기 민감도는 3.3.12보다 낮추고, 기존보다 살짝 더 민감한 수준으로 조정했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;

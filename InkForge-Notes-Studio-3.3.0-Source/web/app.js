@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.12';
+  const VERSION = '3.3.13';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_PIXEL_LIMIT = 7000000;
@@ -1332,7 +1332,7 @@
       ctx.lineWidth = 2;
       ctx.setLineDash([8, 6]);
       ctx.beginPath();
-      ctx.arc(session.point.x, session.point.y, state.eraserRadius, 0, Math.PI * 2);
+      ctx.arc(session.point.x, session.point.y, session.radius ?? screenToolWidthToPage(pageIndex, state.eraserRadius), 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
@@ -2103,6 +2103,26 @@
     return `<button class="width-slot ${Math.abs(width - current) < .2 ? 'is-active' : ''}" data-action="set-width" data-width="${width}" aria-label="굵기 ${width}"><span class="width-swatch" style="height:${clamp(width / 2.2,2,13)}px;color:${color}"></span></button>`;
   }
 
+  function widthControl(tool, current, options = {}) {
+    const min = options.min ?? .5;
+    const max = options.max ?? 160;
+    const step = options.step ?? .5;
+    const value = Math.round(current * 10) / 10;
+    const progress = clamp((value - min) / Math.max(.001, max - min), 0, 1);
+    return `<label class="width-slider" aria-label="굵기 조절" style="--progress:${progress}"><input type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-width-input data-width-tool="${tool}" aria-label="굵기 조절" /><span>${value}px</span></label>`;
+  }
+
+  function setToolWidth(width, tool = state.tool, render = true) {
+    const target = tool === 'eraser' ? 'eraser' : tool === 'highlighter' ? 'highlighter' : 'pen';
+    const max = target === 'eraser' ? 180 : target === 'highlighter' ? 120 : 80;
+    const value = clamp(Number(width) || 1, .5, max);
+    if (target === 'eraser') state.eraserRadius = value;
+    else if (target === 'highlighter') state.highlighterWidth = value;
+    else state.width = value;
+    if (render) renderActiveToolMenu();
+    return value;
+  }
+
   function colorButtons(colors, active) {
     return colors.map((color) => `<button class="color-slot ${normalizeText(color) === normalizeText(active) ? 'is-active' : ''}" style="--swatch:${color}" data-action="set-color" data-color="${color}" aria-label="색상 ${color}"></button>`).join('') + `<button class="color-slot add-color" data-action="custom-color" aria-label="사용자 색상">${icon('plus')}</button>`;
   }
@@ -2119,18 +2139,18 @@
       const brush = BRUSH_META[state.brush] || BRUSH_META.fountain;
       const widths = state.brush === 'pencil' ? [2.4, 5.2, 10] : state.brush === 'brush' ? [4, 9, 18] : [2, 4.2, 8.5];
       html = `<button class="tool-name-button" data-action="brush-menu">${icon(brush.icon)}<span>${escapeHtml(brush.title)}</span>${icon('chevron-down')}</button>
-        <span class="active-divider"></span>${widths.map((width) => widthButton(width, state.width)).join('')}
+        <span class="active-divider"></span>${widths.map((width) => widthButton(width, state.width)).join('')}${widthControl('pen', state.width, { min:.5, max:80, step:.5 })}
         <button class="icon-button" data-action="pen-settings" aria-label="펜 설정">${icon('settings')}</button><span class="active-divider"></span>${colorButtons(activeColorPalette(), state.color)}`;
     } else if (tool === 'highlighter') {
-      html = `<button class="tool-name-button" data-action="set-tool" data-tool="highlighter">${icon('highlighter')}<span>형광펜</span></button><span class="active-divider"></span>${[12,22,34].map((width) => widthButton(width, state.highlighterWidth)).join('')}<span class="active-divider"></span>${colorButtons(activeColorPalette(), state.highlighterColor)}`;
+      html = `<button class="tool-name-button" data-action="set-tool" data-tool="highlighter">${icon('highlighter')}<span>형광펜</span></button><span class="active-divider"></span>${[12,22,34].map((width) => widthButton(width, state.highlighterWidth)).join('')}${widthControl('highlighter', state.highlighterWidth, { min:2, max:120, step:1 })}<span class="active-divider"></span>${colorButtons(activeColorPalette(), state.highlighterColor)}`;
     } else if (tool === 'eraser') {
       const modes = [{ id:'stroke', icon:'eraser', title:'획' }, { id:'precision', icon:'lasso', title:'정밀' }, { id:'whole', icon:'trash', title:'전체' }];
-      html = modes.map((mode) => `<button class="tool-name-button ${state.eraserMode === mode.id ? 'is-active' : ''}" data-action="set-eraser-mode" data-mode="${mode.id}">${icon(mode.icon)}<span>${mode.title}</span></button>`).join('') + `<span class="active-divider"></span>${[12,26,48].map((width) => widthButton(width, state.eraserRadius)).join('')}<button class="icon-button" data-action="clear-page" aria-label="페이지 지우기">${icon('trash')}</button>`;
+      html = modes.map((mode) => `<button class="tool-name-button ${state.eraserMode === mode.id ? 'is-active' : ''}" data-action="set-eraser-mode" data-mode="${mode.id}">${icon(mode.icon)}<span>${mode.title}</span></button>`).join('') + `<span class="active-divider"></span>${[12,26,48].map((width) => widthButton(width, state.eraserRadius)).join('')}${widthControl('eraser', state.eraserRadius, { min:2, max:180, step:1 })}<button class="icon-button" data-action="clear-page" aria-label="페이지 지우기">${icon('trash')}</button>`;
     } else if (tool === 'lasso') {
       html = `<button class="tool-name-button is-active">${icon('lasso')}<span>자유형 선택</span></button><button class="icon-button" data-action="select-all" aria-label="전체 선택">${icon('check-circle')}</button><button class="icon-button" data-action="paste" aria-label="붙여넣기">${icon('copy')}</button><span class="active-divider"></span><span class="active-label">필기 · 텍스트 · 이미지</span>`;
     } else if (tool === 'shape') {
       const shapes = ['line','curve','arc','rectangle','rounded-rectangle','square','ellipse','circle','triangle','diamond','pentagon','hexagon','starshape','trapezoid','parallelogram','heartshape','cloudshape','speech','arrow','double-arrow'];
-      html = shapes.map((shape) => `<button class="icon-button ${state.shape === shape ? 'is-active' : ''}" data-action="set-shape" data-shape="${shape}" aria-label="${shape}">${icon(shape)}</button>`).join('') + `<span class="active-divider"></span>${[2,4,8].map((width) => widthButton(width, state.width)).join('')}${colorButtons(activeColorPalette().slice(0,5), state.color)}`;
+      html = shapes.map((shape) => `<button class="icon-button ${state.shape === shape ? 'is-active' : ''}" data-action="set-shape" data-shape="${shape}" aria-label="${shape}">${icon(shape)}</button>`).join('') + `<span class="active-divider"></span>${[2,4,8].map((width) => widthButton(width, state.width)).join('')}${widthControl('pen', state.width, { min:.5, max:80, step:.5 })}${colorButtons(activeColorPalette().slice(0,5), state.color)}`;
     } else if (tool === 'text') {
       html = `<button class="tool-name-button is-active" data-action="insert-text-now">${icon('text')}<span>텍스트 추가</span></button><span class="active-divider"></span><span class="active-label">페이지를 탭해 입력</span><button class="icon-button" data-action="document-search" aria-label="검색">${icon('search')}</button>`;
     } else if (tool === 'sticky') {
@@ -2254,6 +2274,10 @@
     const rect = canvas?.getBoundingClientRect();
     if (rect?.width > 0) return pixels / rect.width * PAGE_WIDTH;
     return pixels / Math.max(.1, state.zoom || 1);
+  }
+
+  function screenToolWidthToPage(pageIndex, width) {
+    return Math.max(.25, screenToPageDistance(pageIndex, Math.max(.5, Number(width) || 1)));
   }
 
   function constrainToRuler(point) {
@@ -2461,7 +2485,7 @@
     return runs.map((points) => ({ ...deepClone(stroke), id: uid('stroke'), points }));
   }
 
-  function eraseAt(pageIndex, point) {
+  function eraseAt(pageIndex, point, overrideRadius = null) {
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
     if (state.eraserMode === 'whole') {
@@ -2469,7 +2493,8 @@
       page.objects = [];
       return true;
     }
-    const candidates = objectsIntersectingPoint(page, point, state.eraserRadius);
+    const radius = Number.isFinite(overrideRadius) ? overrideRadius : screenToolWidthToPage(pageIndex, state.eraserRadius);
+    const candidates = objectsIntersectingPoint(page, point, radius);
     if (!candidates.length) return false;
     if (state.eraserMode === 'stroke') {
       const ids = new Set(candidates.map((item) => item.id));
@@ -2479,7 +2504,7 @@
       const next = [];
       for (const object of page.objects) {
         if (!candidateIds.has(object.id)) next.push(object);
-        else if (object.type === 'stroke') next.push(...splitStrokeByEraser(object, point, state.eraserRadius));
+        else if (object.type === 'stroke') next.push(...splitStrokeByEraser(object, point, radius));
       }
       page.objects = next;
     }
@@ -2523,39 +2548,51 @@
     const maxDimension = Math.max(metrics.bounds.w, metrics.bounds.h);
     const minDimension = Math.min(metrics.bounds.w, metrics.bounds.h);
     const compact = maxDimension < 560 && minDimension > 8 && diagonal > 24;
-    const localCompact = maxDimension <= 140 && minDimension >= 2.5 && diagonal >= 7;
+    const localCompact = maxDimension <= 180 && minDimension >= 4 && diagonal >= 12;
     const openGesture = metrics.closure > diagonal * .42;
     const jaggedClosedGesture = metrics.reversals >= 4 && metrics.length > diagonal * 2.7;
     const notClosedShape = openGesture || jaggedClosedGesture;
     const broadDense = compact && notClosedShape && metrics.reversals >= 3 && metrics.length > Math.max(110, diagonal * 2.35);
     const localTurns = Math.max(metrics.reversals, metrics.axisReversals);
-    const localDense = localCompact && localTurns >= 2 && metrics.length > Math.max(26, diagonal * 1.35) && (notClosedShape || localTurns >= 3 || metrics.length > diagonal * 2.15);
+    const localDense = localCompact && metrics.reversals >= 2 && metrics.axisReversals >= 2 && metrics.length > Math.max(44, diagonal * 1.8) && (notClosedShape || metrics.reversals >= 3);
     return { metrics, diagonal, dense: broadDense || localDense, local: localDense && !broadDense };
   }
 
-  function objectIntersectsScribble(object, points, expanded, margin, local) {
+  function pointNearPath(point, path, radius) {
+    if (!path?.length) return false;
+    if (path.some((sample) => distance(point, sample) <= radius)) return true;
+    for (let index = 1; index < path.length; index++) {
+      if (distanceToSegment(point, path[index - 1], path[index]) <= radius) return true;
+    }
+    return false;
+  }
+
+  function pathNearPath(a, b, radius) {
+    return a?.some((point) => pointNearPath(point, b, radius)) || b?.some((point) => pointNearPath(point, a, radius));
+  }
+
+  function objectIntersectsScribble(object, points, expanded, hitRadius) {
     const bounds = computeBounds(object);
     const overlapsBox = bounds.x < expanded.x + expanded.w && bounds.x + bounds.w > expanded.x && bounds.y < expanded.y + expanded.h && bounds.y + bounds.h > expanded.y;
     if (!overlapsBox) return false;
-    if (!local) return true;
     if (object.type === 'stroke') {
-      const tolerance = margin + (object.width || 4) * .75;
-      return object.points?.some((sample) => points.some((point) => distance(sample, point) <= tolerance));
+      return pathNearPath(object.points || [], points, hitRadius + (object.width || 4) * .55);
     }
-    if (object.type === 'shape') return points.some((point) => shapeIntersectsPoint(object, point, margin));
-    return points.some((point) => point.x >= bounds.x - margin && point.x <= bounds.x + bounds.w + margin && point.y >= bounds.y - margin && point.y <= bounds.y + bounds.h + margin);
+    if (object.type === 'shape') return points.some((point) => shapeIntersectsPoint(object, point, hitRadius));
+    return points.some((point) => point.x >= bounds.x - hitRadius && point.x <= bounds.x + bounds.w + hitRadius && point.y >= bounds.y - hitRadius && point.y <= bounds.y + bounds.h + hitRadius);
   }
 
   function maybeScribbleErase(pageIndex, points, screenPoints = points) {
-    if (!state.settings.scribbleErase || points.length < 6) return false;
+    if (!state.settings.scribbleErase || points.length < 8) return false;
     const gesture = scribbleGestureProfile(screenPoints);
     if (!gesture.dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
     const metrics = strokeMetrics(points);
-    const margin = Math.max(10, screenToPageDistance(pageIndex, gesture.local ? 42 : 18));
+    const hitRadius = Math.max(6, screenToPageDistance(pageIndex, gesture.local ? 14 : 10));
+    const margin = hitRadius + Math.max(4, screenToPageDistance(pageIndex, 8));
     const expanded = { x: metrics.bounds.x - margin, y: metrics.bounds.y - margin, w: metrics.bounds.w + margin * 2, h: metrics.bounds.h + margin * 2 };
-    const ids = page.objects.filter((object) => objectIntersectsScribble(object, points, expanded, margin, gesture.local)).map((object) => object.id);
+    const ids = page.objects.filter((object) => objectIntersectsScribble(object, points, expanded, hitRadius)).map((object) => object.id);
     if (!ids.length) return false;
     checkpoint('scribble-erase');
     page.objects = page.objects.filter((object) => !ids.includes(object.id));
@@ -2949,12 +2986,14 @@
     if (!session || session.kind !== 'stroke') return null;
     if (session.holdTimer) clearTimeout(session.holdTimer);
     checkpoint('erase');
+    const radius = screenToolWidthToPage(session.pageIndex, state.eraserRadius);
     const nextSession = {
       kind: 'eraser',
       pageIndex: session.pageIndex,
       pointerId: session.pointerId,
       point,
-      changed: eraseAt(session.pageIndex, point),
+      radius,
+      changed: eraseAt(session.pageIndex, point, radius),
       fromStylusButton: true
     };
     state.drawSession = nextSession;
@@ -3035,22 +3074,25 @@
       const brush = effectiveTool === 'highlighter' ? 'highlighter' : state.brush;
       const first = state.ruler.visible ? constrainToRuler(point) : point;
       const screen = eventScreenPoint(event);
+      const displayWidth = brush === 'highlighter' ? state.highlighterWidth : state.width;
+      const pageWidth = screenToolWidthToPage(pageIndex, displayWidth);
       state.drawSession = {
         kind: 'stroke', pageIndex, startedAt: performance.now(), lastMovedAt: performance.now(), pointerId: event.pointerId,
         screenPoints: [screen], holdScreenPoint: screen,
-        object: { id: uid('stroke'), type: 'stroke', brush, color: brush === 'highlighter' ? state.highlighterColor : state.color, width: brush === 'highlighter' ? state.highlighterWidth : state.width, opacity: brush === 'highlighter' ? .3 : 1, createdAt: now(), points: [first] }
+        object: { id: uid('stroke'), type: 'stroke', brush, color: brush === 'highlighter' ? state.highlighterColor : state.color, width: pageWidth, screenWidth: displayWidth, opacity: brush === 'highlighter' ? .3 : 1, createdAt: now(), points: [first] }
       };
       scheduleLiveShapeHold(state.drawSession);
     } else if (effectiveTool === 'eraser') {
+      const radius = screenToolWidthToPage(pageIndex, state.eraserRadius);
       checkpoint('erase');
-      state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, point, changed: eraseAt(pageIndex, point) };
+      state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, point, radius, changed: eraseAt(pageIndex, point, radius) };
       renderPageCanvas(pageIndex);
     } else if (effectiveTool === 'lasso') {
       state.selection = null;
       state.drawSession = { kind: 'lasso', pageIndex, pointerId: event.pointerId, points: [point], closed: false };
       renderPageCanvas(pageIndex); updateObjectMenu();
     } else if (effectiveTool === 'shape') {
-      state.drawSession = { kind: 'shape', pageIndex, pointerId: event.pointerId, resizeAnchor: { x: point.x, y: point.y }, object: { id: uid('shape'), type: 'shape', shape: state.shape, color: state.color, width: state.width, x1: point.x, y1: point.y, x2: point.x, y2: point.y } };
+      state.drawSession = { kind: 'shape', pageIndex, pointerId: event.pointerId, resizeAnchor: { x: point.x, y: point.y }, object: { id: uid('shape'), type: 'shape', shape: state.shape, color: state.color, width: screenToolWidthToPage(pageIndex, state.width), screenWidth: state.width, x1: point.x, y1: point.y, x2: point.x, y2: point.y } };
       ensureAspectLock(state.drawSession);
     } else if (effectiveTool === 'tape') {
       state.drawSession = { kind: 'tape', pageIndex, pointerId: event.pointerId, start: point, object: { id: uid('tape'), type: 'tape', color: state.tapeColor, x1: point.x, y1: point.y, x2: point.x, y2: point.y + 54, revealed: false } };
@@ -3115,7 +3157,7 @@
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'eraser') {
       session.point = point;
-      session.changed = eraseAt(pageIndex, point) || session.changed;
+      session.changed = eraseAt(pageIndex, point, session.radius ?? screenToolWidthToPage(pageIndex, state.eraserRadius)) || session.changed;
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'lasso') {
       const last = session.points[session.points.length - 1];
@@ -3935,7 +3977,8 @@
       case 'brush-menu': openBrushMenu(); break;
       case 'select-brush': state.brush = target.dataset.brush; state.width = state.brush === 'pencil' ? 5.2 : state.brush === 'brush' ? 9 : 4.2; closeModal(); setTool('pen'); break;
       case 'set-width': {
-        const width = Number(target.dataset.width); if (state.tool === 'eraser') state.eraserRadius = width; else if (state.tool === 'highlighter') state.highlighterWidth = width; else state.width = width; renderActiveToolMenu(); break;
+        setToolWidth(target.dataset.width);
+        break;
       }
       case 'set-color': if (state.tool === 'highlighter') state.highlighterColor = target.dataset.color; else state.color = target.dataset.color; renderActiveToolMenu(); break;
       case 'custom-color': {
@@ -4045,6 +4088,22 @@
     renderActiveToolMenu();
   }
 
+  function handleActiveToolWidthInput(event) {
+    const input = event.target.closest?.('[data-width-input]');
+    if (!input || !$('#activeToolMenu')?.contains(input)) return;
+    const value = setToolWidth(input.value, input.dataset.widthTool || state.tool, event.type === 'change');
+    const label = input.closest('.width-slider');
+    if (label) {
+      const min = Number(input.min || 0);
+      const max = Number(input.max || 100);
+      const rounded = Math.round(value * 10) / 10;
+      label.style.setProperty('--progress', String(clamp((value - min) / Math.max(.001, max - min), 0, 1)));
+      const output = $('span', label);
+      if (output) output.textContent = `${rounded}px`;
+      if (event.type === 'change') input.value = String(rounded);
+    }
+  }
+
   function handleCanvasTap(event) {
     const canvas = event.target.closest('.page-canvas');
     if (!canvas || state.tool !== 'tape' || state.drawSession) return;
@@ -4116,6 +4175,8 @@
 
   function bindEvents() {
     $('#activeToolMenu')?.addEventListener('click', handleActiveToolMenuClick, true);
+    $('#activeToolMenu')?.addEventListener('input', handleActiveToolWidthInput);
+    $('#activeToolMenu')?.addEventListener('change', handleActiveToolWidthInput);
     document.addEventListener('click', handleClick);
     document.addEventListener('keydown', handleKeydown);
     $('#modalBackdrop').addEventListener('click', closeModal);

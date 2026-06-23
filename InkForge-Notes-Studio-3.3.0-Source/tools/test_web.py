@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.12');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.13');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -219,6 +219,64 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         results["editor_visible"] = await page.locator("#editorView").is_visible()
         results["desktop_toolbar_collision"] = await overlap_metrics(page)
         results["desktop_toolbar_collision"]["passed"] = not results["desktop_toolbar_collision"]["overlaps"]
+        results["screen_pixel_width_slider"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const page = api.currentPage();
+            api.setTool('pen');
+            api.setZoom(1);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const input = document.querySelector('#activeToolMenu [data-width-input][data-width-tool="pen"]');
+            if (!input) return { passed: false, reason: 'missing slider' };
+            input.value = '12';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            const labelText = input.closest('.width-slider')?.textContent || '';
+            const drawStroke = async (pointerId, y) => {
+              const canvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+              const rect = canvas.getBoundingClientRect();
+              const clientFor = (x, pageY) => ({ x: rect.left + x / 1000 * rect.width, y: rect.top + pageY / 1414 * rect.height });
+              const send = (type, point) => canvas.dispatchEvent(new PointerEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                pointerId,
+                pointerType: 'pen',
+                isPrimary: true,
+                button: 0,
+                buttons: type === 'pointerup' ? 0 : 1,
+                pressure: type === 'pointerup' ? 0 : .55,
+                clientX: point.x,
+                clientY: point.y
+              }));
+              send('pointerdown', clientFor(220, y));
+              send('pointermove', clientFor(300, y));
+              send('pointerup', clientFor(300, y));
+              await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const object = page.objects[page.objects.length - 1];
+              const nextRect = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`).getBoundingClientRect();
+              return { width: object.width, screenWidth: object.width * nextRect.width / 1000, storedScreenWidth: object.screenWidth, rectWidth: nextRect.width };
+            };
+            const first = await drawStroke(7711, 230);
+            const anchorCanvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+            const anchorRect = anchorCanvas.getBoundingClientRect();
+            api.setZoom(3, { clientX: anchorRect.left + anchorRect.width / 2, clientY: anchorRect.top + anchorRect.height / 2 });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const second = await drawStroke(7712, 280);
+            return {
+              stateWidth: api.state.width,
+              labelText,
+              first,
+              second,
+              passed: Math.abs(api.state.width - 12) < .01 &&
+                labelText.includes('12') &&
+                Math.abs(first.screenWidth - 12) < 1.4 &&
+                Math.abs(second.screenWidth - 12) < 1.4 &&
+                second.width < first.width * .55 &&
+                first.storedScreenWidth === 12 &&
+                second.storedScreenWidth === 12
+            };
+          }
+        """)
 
         before_pages = await page.evaluate("window.__inkforge.currentDocument().pages.length")
         await page.evaluate("window.__inkforge.addPage()")
@@ -679,7 +737,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             };
           }
         """)
-        results["micro_scribble_erase"] = await page.evaluate("""
+        results["local_scribble_touch_only"] = await page.evaluate("""
           async () => {
             const api = window.__inkforge;
             const pageIndex = api.state.currentPageIndex;
@@ -739,15 +797,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               send('pointerup', path[path.length - 1]);
             };
             const c = clientFor(560, 590);
-            const tinyPath = [
-              { x: c.x - 10, y: c.y },
-              { x: c.x + 4, y: c.y - 4 },
-              { x: c.x - 6, y: c.y + 4 },
-              { x: c.x + 8, y: c.y - 3 },
-              { x: c.x - 3, y: c.y + 3 },
-              { x: c.x + 9, y: c.y }
-            ];
-            sendPath(8812, tinyPath);
+            const localPath = Array.from({ length: 10 }, (_, index) => ({
+              x: c.x - 16 + index * 3.6,
+              y: c.y + (index % 2 ? -7 : 7)
+            }));
+            sendPath(8812, localPath);
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             const erased = !page.objects.some(object => object.id === 'micro_scribble_target');
             const guardCenter = clientFor(560, 650);
@@ -1010,7 +1064,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.12" and results.get("upgrade_version") == "3.3.12" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.13" and results.get("upgrade_version") == "3.3.13" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 
