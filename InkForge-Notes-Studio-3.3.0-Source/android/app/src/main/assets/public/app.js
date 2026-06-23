@@ -4,6 +4,10 @@
   const VERSION = '3.3.4';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const SHAPE_HOLD_MS = 650;
+  const LIVE_SHAPE_HOLD_MS = 1000;
+  const ZOOM_PAGE_SUPPRESS_MS = 320;
+  const ZOOM_RENDER_DEBOUNCE_MS = 90;
+  const MAX_PASSIVE_PAGE_DELTA = 2;
   const DB_NAME = 'inkforge-notes-studio';
   const DB_VERSION = 4;
   const PAGE_WIDTH = 1000;
@@ -366,7 +370,7 @@
     sidebarTab: 'pages',
     searchOpen: false,
     readOnly: false,
-    ruler: { visible: false, angle: 0, y: 500 },
+    ruler: { visible: false, x: PAGE_WIDTH / 2, angle: 0, y: 500 },
     selection: null,
     clipboard: [],
     pendingInsert: null,
@@ -394,6 +398,10 @@
     assetUrlCache: new Map(),
     assetLoadQueue: new Map(),
     renderFrames: new Map(),
+    zoomRenderFrame: 0,
+    zoomRenderTimer: 0,
+    suppressPageUpdateUntil: 0,
+    allowLargePageJumpUntil: 0,
     activePageWrapIndex: -1,
     testReady: false
   };
@@ -1197,7 +1205,7 @@
   function renderRuler(ctx) {
     if (!state.ruler.visible) return;
     ctx.save();
-    ctx.translate(PAGE_WIDTH / 2, state.ruler.y);
+    ctx.translate(state.ruler.x ?? PAGE_WIDTH / 2, state.ruler.y);
     ctx.rotate(state.ruler.angle);
     ctx.fillStyle = 'rgba(224,183,83,.22)';
     ctx.strokeStyle = 'rgba(126,92,12,.65)';
@@ -1213,7 +1221,7 @@
     const session = state.drawSession;
     if (!session || session.pageIndex !== pageIndex) return;
     if (session.kind === 'stroke') renderStroke(ctx, session.object);
-    else if (session.kind === 'shape') renderShape(ctx, session.object);
+    else if (session.kind === 'shape' || session.kind === 'shape-adjust') renderShape(ctx, session.object);
     else if (session.kind === 'lasso') {
       ctx.save(); ctx.strokeStyle = '#1397ed'; ctx.fillStyle = 'rgba(19,151,237,.08)'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
       ctx.beginPath();
@@ -1467,7 +1475,7 @@
     list.innerHTML = docs.map((doc) => `<button class="document-tab ${doc.id === state.currentDocumentId ? 'is-active' : ''}" data-action="switch-tab" data-doc-id="${doc.id}"><span class="document-tab-title">${escapeHtml(doc.title)}</span><span class="document-tab-close" data-action="close-tab" data-doc-id="${doc.id}">${icon('close')}</span></button>`).join('');
   }
 
-  function updatePageSizing() {
+  function updatePageSizing({ render = true } = {}) {
     const viewport = $('#editorViewport');
     if (!viewport) return;
     const mobile = window.matchMedia('(max-width: 840px)').matches;
@@ -1478,7 +1486,20 @@
     stack.style.setProperty('--zoom', String(state.zoom));
     stack.style.setProperty('--page-width', `${width}px`);
     $('#zoomIndicator').textContent = `${Math.round(state.zoom * 100)}%`;
-    $$('.page-canvas').forEach((canvas) => scheduleRenderPage(Number(canvas.dataset.pageIndex)));
+    if (render) $$('.page-canvas').forEach((canvas) => scheduleRenderPage(Number(canvas.dataset.pageIndex)));
+  }
+
+  function scheduleZoomRender() {
+    if (!state.zoomRenderFrame) {
+      state.zoomRenderFrame = requestAnimationFrame(() => {
+        state.zoomRenderFrame = 0;
+        renderPageCanvas(state.currentPageIndex);
+      });
+    }
+    clearTimeout(state.zoomRenderTimer);
+    state.zoomRenderTimer = setTimeout(() => {
+      $$('.page-canvas').forEach((canvas) => scheduleRenderPage(Number(canvas.dataset.pageIndex)));
+    }, ZOOM_RENDER_DEBOUNCE_MS);
   }
 
   function pageLayoutMetrics() {
@@ -1545,7 +1566,7 @@
     if (!doc || !viewport) return;
     if (state.pageMode === 'single') { mountPageCanvas(state.currentPageIndex); return; }
     const center = bestVisiblePageIndex();
-    const radius = doc.pages.length > 120 ? 3 : 4;
+    const radius = doc.pages.length > 120 ? 2 : 4;
     const start = Math.max(0, Math.min(center, state.currentPageIndex) - radius);
     const end = Math.min(doc.pages.length - 1, Math.max(center, state.currentPageIndex) + radius);
     for (let index = start; index <= end; index++) mountPageCanvas(index);
@@ -1562,6 +1583,7 @@
     const stack = $('#pageStack');
     stack.classList.toggle('single-mode', state.pageMode === 'single');
     stack.dataset.tool = state.readOnly ? 'hand' : state.tool;
+    stack.dataset.largeDoc = doc.pages.length > 120 ? '1' : '0';
     stack.innerHTML = doc.pages.map((page, index) => `<section class="page-wrap ${index === state.currentPageIndex ? 'is-active' : ''}" data-page-index="${index}">
       <div class="page-placeholder" aria-label="${index + 1}페이지 로딩"></div>
       <span class="page-number-chip">${index + 1}</span>
@@ -1625,6 +1647,7 @@
     const doc = currentDocument();
     if (!doc) return;
     const previousPageIndex = state.currentPageIndex;
+    state.allowLargePageJumpUntil = performance.now() + 900;
     state.currentPageIndex = clamp(index, 0, doc.pages.length - 1);
     notifyPageChanged(previousPageIndex, 'scroll-to-page');
     mountPageCanvas(state.currentPageIndex);
@@ -1819,15 +1842,17 @@
     const oldZoom = state.zoom;
     const newZoom = clamp(value, .08, 8);
     if (Math.abs(newZoom - oldZoom) < .001) return;
+    state.suppressPageUpdateUntil = performance.now() + ZOOM_PAGE_SUPPRESS_MS;
     const rect = viewport.getBoundingClientRect();
     const anchorX = anchor ? anchor.clientX - rect.left : viewport.clientWidth / 2;
     const anchorY = anchor ? anchor.clientY - rect.top : viewport.clientHeight / 2;
     const contentX = (viewport.scrollLeft + anchorX) / oldZoom;
     const contentY = (viewport.scrollTop + anchorY) / oldZoom;
     state.zoom = newZoom;
-    updatePageSizing();
+    updatePageSizing({ render: false });
     viewport.scrollLeft = Math.max(0, contentX * newZoom - anchorX);
     viewport.scrollTop = Math.max(0, contentY * newZoom - anchorY);
+    scheduleZoomRender();
     renderActiveToolMenu();
     updateObjectMenu();
   }
@@ -1861,11 +1886,21 @@
 
   function constrainToRuler(point) {
     if (!state.ruler.visible) return point;
-    const cx = PAGE_WIDTH / 2, cy = state.ruler.y;
+    const cx = state.ruler.x ?? PAGE_WIDTH / 2, cy = state.ruler.y;
     const dx = point.x - cx, dy = point.y - cy;
     const ux = Math.cos(state.ruler.angle), uy = Math.sin(state.ruler.angle);
     const projection = dx * ux + dy * uy;
     return { ...point, x: cx + projection * ux, y: cy + projection * uy };
+  }
+
+  function rulerHitTest(point) {
+    if (!state.ruler.visible) return false;
+    const cx = state.ruler.x ?? PAGE_WIDTH / 2, cy = state.ruler.y;
+    const dx = point.x - cx, dy = point.y - cy;
+    const cos = Math.cos(-state.ruler.angle), sin = Math.sin(-state.ruler.angle);
+    const localX = dx * cos - dy * sin;
+    const localY = dx * sin + dy * cos;
+    return Math.abs(localX) <= 430 && Math.abs(localY) <= 36;
   }
 
   function isStylusEraser(event) {
@@ -2193,8 +2228,10 @@
     const aspect = metrics.bounds.w / Math.max(1, metrics.bounds.h);
     const loopRatio = metrics.length / diagonal;
     const ellipseLike = radialDeviation < .16 && loopRatio > 2.35 && loopRatio < 5.15;
+    const strongEllipse = radialDeviation < .13 && loopRatio > 2.45 && loopRatio < 4.65;
 
     if (vertices.length >= 8 && vertices.length <= 13 && radialDeviation > .18) return 'starshape';
+    if (strongEllipse && vertices.length >= 5) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
     if (ellipseLike && vertices.length > 5) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
     // Classify clear polygon corners before radial ellipse tests. A wide rectangle can
     // otherwise look deceptively circular after x/y normalization.
@@ -2207,7 +2244,7 @@
       const left = vertices.reduce((best, point) => point.x < best.x ? point : best, vertices[0]);
       const right = vertices.reduce((best, point) => point.x > best.x ? point : best, vertices[0]);
       const axisDiamond = Math.abs(top.x - cx) < metrics.bounds.w * .22 && Math.abs(bottom.x - cx) < metrics.bounds.w * .22 && Math.abs(left.y - cy) < metrics.bounds.h * .22 && Math.abs(right.y - cy) < metrics.bounds.h * .22;
-      if (ellipseLike && rightish < 3) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
+      if ((ellipseLike || radialDeviation < .18) && rightish < 3) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
       if (axisDiamond && rightish < 3) return 'diamond';
       return aspect > .82 && aspect < 1.22 ? 'square' : 'rectangle';
     }
@@ -2245,6 +2282,54 @@
       }
     }
     return null;
+  }
+
+  function resizeLiveShape(session, point) {
+    const object = session.object;
+    if (!object) return;
+    if (['line', 'arrow', 'double-arrow', 'curve'].includes(object.shape)) {
+      object.x2 = point.x;
+      object.y2 = point.y;
+      if (object.shape === 'curve') {
+        object.cx = (object.x1 + object.x2) / 2;
+        object.cy = (object.y1 + object.y2) / 2;
+      }
+      return;
+    }
+    const anchor = session.resizeAnchor || { x: object.x1, y: object.y1 };
+    object.x1 = anchor.x;
+    object.y1 = anchor.y;
+    object.x2 = point.x;
+    object.y2 = point.y;
+  }
+
+  function convertStrokeSessionToLiveShape(session) {
+    if (!session || session.kind !== 'stroke' || session.convertedShape || session.object.brush === 'highlighter') return false;
+    const points = session.object.points;
+    const duration = performance.now() - session.startedAt;
+    const holdDuration = performance.now() - (session.lastMovedAt || session.startedAt);
+    const shape = maybeShapeFromStroke(points, duration, Math.max(holdDuration, LIVE_SHAPE_HOLD_MS));
+    if (!shape) return false;
+    const object = { id: uid('shape'), type: 'shape', ...shape, color: session.object.color, width: session.object.width, createdAt: now() };
+    const bounds = computeBounds(object);
+    const last = points[points.length - 1] || { x: object.x2, y: object.y2 };
+    session.kind = 'shape-adjust';
+    session.object = object;
+    session.convertedShape = true;
+    session.resizeAnchor = {
+      x: last.x >= bounds.x + bounds.w / 2 ? bounds.x : bounds.x + bounds.w,
+      y: last.y >= bounds.y + bounds.h / 2 ? bounds.y : bounds.y + bounds.h
+    };
+    scheduleRenderPage(session.pageIndex);
+    return true;
+  }
+
+  function scheduleLiveShapeHold(session) {
+    if (!session || session.kind !== 'stroke') return;
+    clearTimeout(session.holdTimer);
+    session.holdTimer = setTimeout(() => {
+      if (state.drawSession === session) convertStrokeSessionToLiveShape(session);
+    }, LIVE_SHAPE_HOLD_MS);
   }
 
   function updateStylusTelemetry(event) {
@@ -2293,14 +2378,16 @@
       if (gesture.initialDistance > 0 && Math.abs(currentDistance - gesture.initialDistance) > 3) {
         const nextZoom = clamp(gesture.initialZoom * currentDistance / gesture.initialDistance, .08, 8);
         gesture.pinched = true;
+        state.suppressPageUpdateUntil = performance.now() + ZOOM_PAGE_SUPPRESS_MS;
         const rect = viewport.getBoundingClientRect();
         const anchorX = center.x - rect.left, anchorY = center.y - rect.top;
         const contentX = (gesture.initialScrollLeft + (gesture.startCenter.x - rect.left)) / gesture.initialZoom;
         const contentY = (gesture.initialScrollTop + (gesture.startCenter.y - rect.top)) / gesture.initialZoom;
         state.zoom = nextZoom;
-        updatePageSizing();
+        updatePageSizing({ render: false });
         viewport.scrollLeft = Math.max(0, contentX * nextZoom - anchorX);
         viewport.scrollTop = Math.max(0, contentY * nextZoom - anchorY);
+        scheduleZoomRender();
       } else {
         viewport.scrollLeft = gesture.initialScrollLeft - deltaX;
         viewport.scrollTop = gesture.initialScrollTop - deltaY;
@@ -2321,7 +2408,7 @@
     if (!gesture.moved && duration < 320) {
       if (gesture.maxPointers === 2) undo();
       else if (gesture.maxPointers >= 3) redo();
-    } else if (!gesture.pinched && gesture.maxPointers >= 2 && Math.abs(dx) > 82 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+    } else if (!gesture.pinched && performance.now() > state.suppressPageUpdateUntil && gesture.maxPointers >= 2 && Math.abs(dx) > 82 && Math.abs(dx) > Math.abs(dy) * 1.6) {
       scrollToPage(state.currentPageIndex + (dx < 0 ? 1 : -1));
     }
     state.touchGesture = null;
@@ -2366,6 +2453,17 @@
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return;
 
+    if (state.ruler.visible && rulerHitTest(point) && (effectiveTool === 'hand' || pointerType !== 'pen')) {
+      state.drawSession = {
+        kind: 'move-ruler',
+        pageIndex,
+        pointerId: event.pointerId,
+        startPoint: point,
+        startRuler: { x: state.ruler.x ?? PAGE_WIDTH / 2, y: state.ruler.y }
+      };
+      return;
+    }
+
     if (effectiveTool === 'lasso' && state.selection?.pageIndex === pageIndex) {
       const handle = selectionHandleAt(point);
       if (handle) {
@@ -2392,6 +2490,7 @@
         kind: 'stroke', pageIndex, startedAt: performance.now(), lastMovedAt: performance.now(), pointerId: event.pointerId,
         object: { id: uid('stroke'), type: 'stroke', brush, color: brush === 'highlighter' ? state.highlighterColor : state.color, width: brush === 'highlighter' ? state.highlighterWidth : state.width, opacity: brush === 'highlighter' ? .3 : 1, createdAt: now(), points: [first] }
       };
+      scheduleLiveShapeHold(state.drawSession);
     } else if (effectiveTool === 'eraser') {
       checkpoint('erase');
       state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, point, changed: eraseAt(pageIndex, point) };
@@ -2443,9 +2542,15 @@
         const movedDistance = last ? distance(last, next) : Infinity;
         if (!last || movedDistance > .45) {
           session.object.points.push(next);
-          if (movedDistance > 2.2) session.lastMovedAt = performance.now();
+          if (movedDistance > 2.2) {
+            session.lastMovedAt = performance.now();
+            scheduleLiveShapeHold(session);
+          }
         }
       }
+      scheduleRenderPage(pageIndex);
+    } else if (session.kind === 'shape-adjust') {
+      resizeLiveShape(session, point);
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'eraser') {
       session.point = point;
@@ -2469,6 +2574,10 @@
     } else if (session.kind === 'resize-selection') {
       applySelectionResize(session, point);
       scheduleRenderPage(pageIndex); updateObjectMenu();
+    } else if (session.kind === 'move-ruler') {
+      state.ruler.x = clamp(session.startRuler.x + point.x - session.startPoint.x, 70, PAGE_WIDTH - 70);
+      state.ruler.y = clamp(session.startRuler.y + point.y - session.startPoint.y, 40, PAGE_HEIGHT - 40);
+      scheduleRenderPage(pageIndex);
     } else if (session.kind === 'pan') {
       const viewport = $('#editorViewport');
       viewport.scrollLeft = session.scroll.x - (event.clientX - session.startClient.x);
@@ -2488,6 +2597,7 @@
     if (!session || session.pointerId !== event.pointerId) return;
     const page = currentDocument()?.pages?.[session.pageIndex];
     if (!page) { state.drawSession = null; return; }
+    if (session.holdTimer) clearTimeout(session.holdTimer);
     if (session.kind === 'stroke') {
       const points = session.object.points;
       const duration = performance.now() - session.startedAt;
@@ -2504,6 +2614,13 @@
       persistCurrent();
     } else if (session.kind === 'shape') {
       if (distance({ x: session.object.x1, y: session.object.y1 }, { x: session.object.x2, y: session.object.y2 }) > 5) { checkpoint('shape'); page.objects.push(session.object); persistCurrent(); }
+    } else if (session.kind === 'shape-adjust') {
+      if (distance({ x: session.object.x1, y: session.object.y1 }, { x: session.object.x2, y: session.object.y2 }) > 5) {
+        checkpoint('draw-shape');
+        page.objects.push(session.object);
+        persistCurrent();
+        window.dispatchEvent(new CustomEvent('inkforge:stroke-committed', { detail: { pageIndex: session.pageIndex, documentId: currentDocument()?.id, objectId: session.object.id, object: session.object, wasShape: true, holdDuration: performance.now() - (session.lastMovedAt || session.startedAt), duration: performance.now() - session.startedAt } }));
+      }
     } else if (session.kind === 'tape') {
       const b = computeBounds(session.object);
       if (b.w > 12 && b.h > 12) { checkpoint('tape'); page.objects.push(session.object); persistCurrent(); }
@@ -2518,6 +2635,7 @@
       state.selection = ids.length ? { pageIndex: session.pageIndex, ids, polygon } : null;
     } else if (session.kind === 'eraser' && session.changed) persistCurrent();
     else if ((session.kind === 'move-selection' && session.moved) || (session.kind === 'resize-selection' && session.resized)) persistCurrent();
+    else if (session.kind === 'move-ruler') renderPageCanvas(session.pageIndex);
     state.drawSession = null;
     renderPageCanvas(session.pageIndex);
     renderSidebar();
@@ -2528,6 +2646,7 @@
     state.activePointers.delete(event.pointerId);
     if (state.drawSession?.pointerId === event.pointerId) {
       const pageIndex = state.drawSession.pageIndex;
+      if (state.drawSession.holdTimer) clearTimeout(state.drawSession.holdTimer);
       state.drawSession = null;
       renderPageCanvas(pageIndex);
     }
@@ -3372,7 +3491,16 @@
     if (scrollFrame || state.pageMode === 'single') return;
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = 0;
+      if (performance.now() < state.suppressPageUpdateUntil) {
+        updateVirtualPages();
+        return;
+      }
       const best = bestVisiblePageIndex();
+      const jump = Math.abs(best - state.currentPageIndex);
+      if (jump > MAX_PASSIVE_PAGE_DELTA && performance.now() > state.allowLargePageJumpUntil) {
+        updateVirtualPages();
+        return;
+      }
       if (best !== state.currentPageIndex) {
         const previousPageIndex = state.currentPageIndex;
         state.currentPageIndex = best;

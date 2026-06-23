@@ -360,7 +360,8 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   position: absolute;
   z-index: 22;
   left: 13px;
-  top: calc(var(--safe-top) + 108px);
+  top: auto;
+  bottom: calc(var(--safe-bottom) + 18px);
   width: 146px;
   height: 68px;
   display: flex;
@@ -405,6 +406,9 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   flex: 0 0 auto;
   transform-origin: top center;
   border-radius: 2px;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 880px 1244px;
 }
 .page-wrap.is-active { box-shadow: 0 0 0 2px rgba(19,151,237,.25); }
 .page-canvas {
@@ -698,7 +702,7 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   .active-tool-dock.left .tool-name-button, .active-tool-dock.right .tool-name-button { min-width: 82px; width: auto; padding: 0 10px; }
   .active-tool-dock.left .tool-name-button span, .active-tool-dock.right .tool-name-button span { display: inline; }
   .active-tool-dock.left .active-divider, .active-tool-dock.right .active-divider { width: 1px; height: 34px; }
-  .undo-pill { top: calc(var(--safe-top) + 125px); left: 8px; width: 112px; height: 52px; border-radius: 16px; }
+  .undo-pill { top: auto; bottom: calc(var(--safe-bottom) + 8px); left: 8px; width: 112px; height: 52px; border-radius: 16px; }
   .undo-pill .icon-button { width: 45px; height: 42px; }
   .page-stack { padding: 82px 10px 100px; gap: 28px; }
   .page-wrap { width: var(--page-width, calc(100vw - 20px)); }
@@ -1207,6 +1211,10 @@ input, textarea { user-select: text; -webkit-user-select: text; }
     #fff;
   box-shadow: 0 8px 30px rgba(34,38,46,.13);
   animation: page-placeholder-shimmer 1.7s ease-in-out infinite;
+}
+.page-stack[data-large-doc="1"] .page-placeholder {
+  animation: none;
+  background: #fff;
 }
 @keyframes page-placeholder-shimmer { to { background-position: -160% 0, 0 0; } }
 
