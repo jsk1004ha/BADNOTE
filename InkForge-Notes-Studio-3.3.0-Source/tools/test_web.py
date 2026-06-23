@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.11');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.12');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -679,6 +679,94 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             };
           }
         """)
+        results["micro_scribble_erase"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const pageIndex = api.state.currentPageIndex;
+            const page = api.currentPage();
+            api.setZoom(1);
+            api.setTool('pen');
+            api.state.settings.scribbleErase = true;
+            page.objects = page.objects.filter(object => object.id !== 'micro_scribble_target' && object.id !== 'micro_scribble_line_guard');
+            page.objects.push({
+              id: 'micro_scribble_target',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 510, y: 590, p: .6 },
+                { x: 560, y: 590, p: .6 },
+                { x: 610, y: 590, p: .6 }
+              ]
+            });
+            page.objects.push({
+              id: 'micro_scribble_line_guard',
+              type: 'stroke',
+              brush: 'fountain',
+              color: '#111827',
+              width: 8,
+              opacity: 1,
+              points: [
+                { x: 510, y: 650, p: .6 },
+                { x: 560, y: 650, p: .6 },
+                { x: 610, y: 650, p: .6 }
+              ]
+            });
+            api.renderPageCanvas(pageIndex);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const clientFor = (x, y) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + x / 1000 * rect.width, y: rect.top + y / 1414 * rect.height };
+            };
+            const sendPath = (pointerId, path) => {
+              const send = (type, point) => canvas.dispatchEvent(new PointerEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                pointerId,
+                pointerType: 'pen',
+                isPrimary: true,
+                button: 0,
+                buttons: type === 'pointerup' ? 0 : 1,
+                pressure: type === 'pointerup' ? 0 : .55,
+                clientX: point.x,
+                clientY: point.y
+              }));
+              send('pointerdown', path[0]);
+              path.slice(1).forEach(point => send('pointermove', point));
+              send('pointerup', path[path.length - 1]);
+            };
+            const c = clientFor(560, 590);
+            const tinyPath = [
+              { x: c.x - 10, y: c.y },
+              { x: c.x + 4, y: c.y - 4 },
+              { x: c.x - 6, y: c.y + 4 },
+              { x: c.x + 8, y: c.y - 3 },
+              { x: c.x - 3, y: c.y + 3 },
+              { x: c.x + 9, y: c.y }
+            ];
+            sendPath(8812, tinyPath);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const erased = !page.objects.some(object => object.id === 'micro_scribble_target');
+            const guardCenter = clientFor(560, 650);
+            const linePath = [
+              { x: guardCenter.x - 14, y: guardCenter.y },
+              { x: guardCenter.x - 6, y: guardCenter.y },
+              { x: guardCenter.x + 2, y: guardCenter.y },
+              { x: guardCenter.x + 10, y: guardCenter.y }
+            ];
+            sendPath(8813, linePath);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const guardStillPresent = page.objects.some(object => object.id === 'micro_scribble_line_guard');
+            return {
+              erased,
+              guardStillPresent,
+              passed: erased && guardStillPresent
+            };
+          }
+        """)
 
         # S Pen gesture mapping (bridge path and on-screen barrel gesture share actions).
         spen = await page.evaluate("""
@@ -922,7 +1010,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.11" and results.get("upgrade_version") == "3.3.11" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.12" and results.get("upgrade_version") == "3.3.12" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

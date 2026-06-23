@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.11';
+  const VERSION = '3.3.12';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,11 +11,10 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '도형 도구에 곡선 그리기를 추가하고 드래그만 해도 곡률이 보이도록 제어점을 자동 보정했습니다.',
-    '라이브러리에 새 폴더 생성 버튼과 폴더 칩을 추가하고 생성한 폴더를 기기에 저장합니다.',
-    '작은 범위에서 국소적으로 문지른 낙서도 지우기 제스처로 인식되도록 밀도 판정을 추가했습니다.',
-    'S Pen 버튼을 누른 상태가 입력 도중 감지되면 진행 중인 펜 획을 즉시 지우개 세션으로 전환합니다.',
-    'S Pen 버튼을 화면에 닿기 전이나 닿은 뒤 눌러도 획 지우개가 더 안정적으로 작동하도록 회귀 테스트를 추가했습니다.'
+    '국소적인 작은 낙서 지우기 인식률을 더 높였습니다.',
+    '6포인트 수준의 짧은 왕복 낙서도 축 방향 왕복과 선 밀도가 충분하면 지우기로 처리합니다.',
+    '작은 낙서는 실제 제스처 근처 객체만 지우도록 좁혀 주변 객체 오삭제 위험을 낮췄습니다.',
+    '짧은 직선 입력은 낙서 지우기로 오인하지 않도록 회귀 테스트를 추가했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;

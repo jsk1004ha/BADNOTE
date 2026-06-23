@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.11';
+  const VERSION = '3.3.12';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_PIXEL_LIMIT = 7000000;
@@ -2488,21 +2488,33 @@
   }
 
   function strokeMetrics(points) {
-    if (!points?.length) return { length: 0, bounds: { x: 0, y: 0, w: 0, h: 0 }, reversals: 0, closure: 0 };
+    if (!points?.length) return { length: 0, bounds: { x: 0, y: 0, w: 0, h: 0 }, reversals: 0, axisReversals: 0, closure: 0 };
     const xs = points.map((point) => point.x), ys = points.map((point) => point.y);
     const bounds = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
-    let length = 0, reversals = 0, previousAngle = null;
+    let length = 0, reversals = 0, axisReversals = 0, previousAngle = null, previousXSign = 0, previousYSign = 0;
     for (let i = 1; i < points.length; i++) {
-      length += distance(points[i - 1], points[i]);
-      const angle = segmentDirection(points[i - 1], points[i]);
+      const previous = points[i - 1], current = points[i];
+      const dx = current.x - previous.x, dy = current.y - previous.y;
+      length += Math.hypot(dx, dy);
+      const angle = segmentDirection(previous, current);
       if (previousAngle != null) {
         let diff = Math.abs(angle - previousAngle);
         if (diff > Math.PI) diff = Math.PI * 2 - diff;
         if (diff > Math.PI * .72) reversals++;
       }
+      const xSign = Math.abs(dx) >= 1.4 ? Math.sign(dx) : 0;
+      const ySign = Math.abs(dy) >= 1.4 ? Math.sign(dy) : 0;
+      if (xSign) {
+        if (previousXSign && previousXSign !== xSign) axisReversals++;
+        previousXSign = xSign;
+      }
+      if (ySign) {
+        if (previousYSign && previousYSign !== ySign) axisReversals++;
+        previousYSign = ySign;
+      }
       previousAngle = angle;
     }
-    return { length, bounds, reversals, closure: distance(points[0], points[points.length - 1]) };
+    return { length, bounds, reversals, axisReversals, closure: distance(points[0], points[points.length - 1]) };
   }
 
   function scribbleGestureProfile(points) {
@@ -2511,26 +2523,39 @@
     const maxDimension = Math.max(metrics.bounds.w, metrics.bounds.h);
     const minDimension = Math.min(metrics.bounds.w, metrics.bounds.h);
     const compact = maxDimension < 560 && minDimension > 8 && diagonal > 24;
-    const localCompact = maxDimension <= 180 && minDimension >= 4 && diagonal >= 12;
-    const notClosedShape = metrics.closure > diagonal * .42 || metrics.reversals >= 4;
+    const localCompact = maxDimension <= 140 && minDimension >= 2.5 && diagonal >= 7;
+    const openGesture = metrics.closure > diagonal * .42;
+    const jaggedClosedGesture = metrics.reversals >= 4 && metrics.length > diagonal * 2.7;
+    const notClosedShape = openGesture || jaggedClosedGesture;
     const broadDense = compact && notClosedShape && metrics.reversals >= 3 && metrics.length > Math.max(110, diagonal * 2.35);
-    const localDense = localCompact && metrics.reversals >= 2 && (notClosedShape || metrics.reversals >= 3) && metrics.length > Math.max(46, diagonal * 1.85);
+    const localTurns = Math.max(metrics.reversals, metrics.axisReversals);
+    const localDense = localCompact && localTurns >= 2 && metrics.length > Math.max(26, diagonal * 1.35) && (notClosedShape || localTurns >= 3 || metrics.length > diagonal * 2.15);
     return { metrics, diagonal, dense: broadDense || localDense, local: localDense && !broadDense };
   }
 
+  function objectIntersectsScribble(object, points, expanded, margin, local) {
+    const bounds = computeBounds(object);
+    const overlapsBox = bounds.x < expanded.x + expanded.w && bounds.x + bounds.w > expanded.x && bounds.y < expanded.y + expanded.h && bounds.y + bounds.h > expanded.y;
+    if (!overlapsBox) return false;
+    if (!local) return true;
+    if (object.type === 'stroke') {
+      const tolerance = margin + (object.width || 4) * .75;
+      return object.points?.some((sample) => points.some((point) => distance(sample, point) <= tolerance));
+    }
+    if (object.type === 'shape') return points.some((point) => shapeIntersectsPoint(object, point, margin));
+    return points.some((point) => point.x >= bounds.x - margin && point.x <= bounds.x + bounds.w + margin && point.y >= bounds.y - margin && point.y <= bounds.y + bounds.h + margin);
+  }
+
   function maybeScribbleErase(pageIndex, points, screenPoints = points) {
-    if (!state.settings.scribbleErase || points.length < 8) return false;
+    if (!state.settings.scribbleErase || points.length < 6) return false;
     const gesture = scribbleGestureProfile(screenPoints);
     if (!gesture.dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
     const metrics = strokeMetrics(points);
-    const margin = Math.max(10, screenToPageDistance(pageIndex, gesture.local ? 30 : 18));
+    const margin = Math.max(10, screenToPageDistance(pageIndex, gesture.local ? 42 : 18));
     const expanded = { x: metrics.bounds.x - margin, y: metrics.bounds.y - margin, w: metrics.bounds.w + margin * 2, h: metrics.bounds.h + margin * 2 };
-    const ids = page.objects.filter((object) => {
-      const b = computeBounds(object);
-      return b.x < expanded.x + expanded.w && b.x + b.w > expanded.x && b.y < expanded.y + expanded.h && b.y + b.h > expanded.y;
-    }).map((object) => object.id);
+    const ids = page.objects.filter((object) => objectIntersectsScribble(object, points, expanded, margin, gesture.local)).map((object) => object.id);
     if (!ids.length) return false;
     checkpoint('scribble-erase');
     page.objects = page.objects.filter((object) => !ids.includes(object.id));
