@@ -8,6 +8,8 @@
   const ZOOM_PAGE_SUPPRESS_MS = 320;
   const ZOOM_RENDER_DEBOUNCE_MS = 90;
   const MAX_PASSIVE_PAGE_DELTA = 2;
+  const LARGE_DOC_PAGE_THRESHOLD = 120;
+  const SIDEBAR_WINDOW_RADIUS = 40;
   const DB_NAME = 'inkforge-notes-studio';
   const DB_VERSION = 4;
   const PAGE_WIDTH = 1000;
@@ -1566,7 +1568,7 @@
     if (!doc || !viewport) return;
     if (state.pageMode === 'single') { mountPageCanvas(state.currentPageIndex); return; }
     const center = bestVisiblePageIndex();
-    const radius = doc.pages.length > 120 ? 2 : 4;
+    const radius = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD ? 1 : 4;
     const start = Math.max(0, Math.min(center, state.currentPageIndex) - radius);
     const end = Math.min(doc.pages.length - 1, Math.max(center, state.currentPageIndex) + radius);
     for (let index = start; index <= end; index++) mountPageCanvas(index);
@@ -1576,6 +1578,26 @@
     });
   }
 
+  function createPageWrap(index, pageCount, largeDoc) {
+    const section = document.createElement('section');
+    section.className = `page-wrap ${index === state.currentPageIndex ? 'is-active' : ''}`;
+    section.dataset.pageIndex = String(index);
+    const placeholder = document.createElement('div');
+    placeholder.className = 'page-placeholder';
+    placeholder.setAttribute('aria-label', `${index + 1}페이지 로딩`);
+    const number = document.createElement('span');
+    number.className = 'page-number-chip';
+    number.textContent = String(index + 1);
+    section.append(placeholder, number);
+    if (!largeDoc) {
+      const actions = document.createElement('div');
+      actions.className = 'page-bottom-actions';
+      actions.innerHTML = `<button class="next-page-button" data-action="insert-page-after" data-page-index="${index}">${icon('page-plus')}<span>${index === pageCount - 1 ? '다음 페이지 추가' : '이 페이지 뒤에 추가'}</span></button>`;
+      section.appendChild(actions);
+    }
+    return section;
+  }
+
   function renderEditorPages() {
     const doc = currentDocument();
     if (!doc) return;
@@ -1583,12 +1605,11 @@
     const stack = $('#pageStack');
     stack.classList.toggle('single-mode', state.pageMode === 'single');
     stack.dataset.tool = state.readOnly ? 'hand' : state.tool;
-    stack.dataset.largeDoc = doc.pages.length > 120 ? '1' : '0';
-    stack.innerHTML = doc.pages.map((page, index) => `<section class="page-wrap ${index === state.currentPageIndex ? 'is-active' : ''}" data-page-index="${index}">
-      <div class="page-placeholder" aria-label="${index + 1}페이지 로딩"></div>
-      <span class="page-number-chip">${index + 1}</span>
-      <div class="page-bottom-actions"><button class="next-page-button" data-action="insert-page-after" data-page-index="${index}">${icon('page-plus')}<span>${index === doc.pages.length - 1 ? '다음 페이지 추가' : '이 페이지 뒤에 추가'}</span></button></div>
-    </section>`).join('');
+    const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
+    stack.dataset.largeDoc = largeDoc ? '1' : '0';
+    const fragment = document.createDocumentFragment();
+    doc.pages.forEach((_, index) => fragment.appendChild(createPageWrap(index, doc.pages.length, largeDoc)));
+    stack.replaceChildren(fragment);
     updatePageSizing();
     mountPageCanvas(state.currentPageIndex);
     for (let index = Math.max(0, state.currentPageIndex - 1); index <= Math.min(doc.pages.length - 1, state.currentPageIndex + 1); index++) mountPageCanvas(index);
@@ -1719,7 +1740,17 @@
     if (!doc) { content.innerHTML = ''; return; }
     if (!state.sidebarOpen) return;
     if (state.sidebarTab === 'pages') {
-      content.innerHTML = doc.pages.map((page, index) => `<button class="page-thumb-item ${index === state.currentPageIndex ? 'is-active' : ''}" data-action="go-page" data-page-index="${index}"><canvas class="page-thumb-canvas" width="144" height="204"></canvas><span class="page-thumb-copy"><strong>${page.title ? escapeHtml(page.title) : `${index + 1}페이지`}</strong><small>${page.objects.length}개 항목${page.bookmarked ? ' · 북마크' : ''}</small></span><span class="page-thumb-menu" data-action="page-menu" data-page-index="${index}">${icon('more')}</span></button>`).join('') + `<button class="sidebar-add-page" data-action="add-page">${icon('page-plus')}<span>페이지 추가</span></button>`;
+      const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
+      const start = largeDoc ? Math.max(0, state.currentPageIndex - SIDEBAR_WINDOW_RADIUS) : 0;
+      const end = largeDoc ? Math.min(doc.pages.length - 1, state.currentPageIndex + SIDEBAR_WINDOW_RADIUS) : doc.pages.length - 1;
+      const rows = [];
+      if (largeDoc && start > 0) rows.push(`<div class="sidebar-window-note">1-${start}페이지는 페이지 번호 입력 또는 스크롤 바로 이동</div>`);
+      for (let index = start; index <= end; index++) {
+        const page = doc.pages[index];
+        rows.push(`<button class="page-thumb-item ${index === state.currentPageIndex ? 'is-active' : ''}" data-action="go-page" data-page-index="${index}"><canvas class="page-thumb-canvas" width="144" height="204"></canvas><span class="page-thumb-copy"><strong>${page.title ? escapeHtml(page.title) : `${index + 1}페이지`}</strong><small>${page.objects.length}개 항목${page.bookmarked ? ' · 북마크' : ''}</small></span><span class="page-thumb-menu" data-action="page-menu" data-page-index="${index}">${icon('more')}</span></button>`);
+      }
+      if (largeDoc && end < doc.pages.length - 1) rows.push(`<div class="sidebar-window-note">${end + 2}-${doc.pages.length}페이지는 페이지 번호 입력 또는 스크롤 바로 이동</div>`);
+      content.innerHTML = rows.join('') + `<button class="sidebar-add-page" data-action="add-page">${icon('page-plus')}<span>페이지 추가</span></button>`;
       const thumbRows = $$('.page-thumb-item', content);
       const renderThumb = (row) => { const index = Number(row.dataset.pageIndex); const canvas = $('.page-thumb-canvas', row); if (!canvas || canvas.dataset.rendered) return; renderPageToCanvas(canvas, doc.pages[index], index, 72, 102); canvas.dataset.rendered = '1'; };
       if ('IntersectionObserver' in window) {

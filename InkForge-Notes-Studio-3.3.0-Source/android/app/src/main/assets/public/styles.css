@@ -514,6 +514,7 @@ input, textarea { user-select: text; -webkit-user-select: text; }
 .page-thumb-copy small { color: var(--muted); font-size: 11px; }
 .page-thumb-menu { color: #888; }
 .page-thumb-menu svg { width: 18px; height: 18px; }
+.sidebar-window-note { padding: 9px 10px; color: var(--muted); font-size: 11px; line-height: 1.35; text-align: center; }
 .sidebar-add-page { width: 100%; height: 44px; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed #a9b5c2; border-radius: 11px; color: #41627e; font-weight: 700; font-size: 13px; }
 .sidebar-add-page svg { width: 18px; height: 18px; }
 .outline-row, .audio-row { display: flex; align-items: center; gap: 11px; min-height: 48px; padding: 8px; border-radius: 10px; }
