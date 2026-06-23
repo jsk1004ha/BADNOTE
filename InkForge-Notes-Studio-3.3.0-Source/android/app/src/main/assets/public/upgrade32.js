@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.2';
+  const VERSION = '3.3.4';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const AUTO_MATH_DELAY = 1050;
@@ -23,6 +23,7 @@
   let colorTarget = 'pen';
   let colorState = { h: 214, s: .8, v: .82 };
   let stylusGesture = null;
+  let barrelEraser = null;
   let lastStylusActionAt = 0;
   let collisionFrame = 0;
 
@@ -109,7 +110,16 @@
   }
 
   function normalizeExpression(raw) {
-    return String(raw || '')
+    let value = String(raw || '')
+      .replace(/\\left|\\right/g, '')
+      .replace(/\\times|\\cdot|\\ast/g, '*')
+      .replace(/\\div/g, '/')
+      .replace(/\\pi/g, 'pi')
+      .replace(/\\sqrt\s*\{([^{}]+)\}/g, 'sqrt($1)')
+      .replace(/\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '($1)/($2)')
+      .replace(/\{/g, '(')
+      .replace(/\}/g, ')');
+    value = value
       .replace(/\s+/g, '')
       .replace(/[−–—]/g, '-')
       .replace(/×/g, '*')
@@ -117,6 +127,7 @@
       .replace(/，/g, ',')
       .replace(/。/g, '.')
       .replace(/[?？]+$/g, '');
+    return value;
   }
 
   function mathCandidateExpressions(result) {
@@ -172,8 +183,8 @@
     return null;
   }
 
-  async function processPendingMath(group) {
-    if (!group || autoMathBusy || !api.state.settings.autoMath) return false;
+  async function processPendingMath(group, options = {}) {
+    if (!group || autoMathBusy || (!options.force && !api.state.settings.autoMath)) return false;
     if (pendingMath === group) pendingMath = null;
     clearTimeout(autoMathTimer);
     const doc = currentDocument();
@@ -188,18 +199,19 @@
         return false;
       }
       const bounds = unionBounds(group.strokes);
-      const width = clamp(62 + calculation.result.length * 22, 86, 320);
+      const displayText = `${calculation.expression} = ${calculation.result}`;
+      const width = clamp(76 + displayText.length * 15, 160, 560);
       let x = bounds.x + bounds.w + 18;
-      let y = bounds.y + bounds.h / 2 - 28;
+      let y = bounds.y + bounds.h / 2 - 36;
       if (x + width > PAGE_WIDTH - 24) { x = clamp(bounds.x, 24, PAGE_WIDTH - width - 24); y = bounds.y + bounds.h + 14; }
-      y = clamp(y, 24, PAGE_HEIGHT - 76);
-      api.checkpoint('auto-handwritten-math');
+      y = clamp(y, 24, PAGE_HEIGHT - 92);
+      api.checkpoint(options.force ? 'manual-handwritten-math' : 'auto-handwritten-math');
       const sourceIds = group.strokes.map((stroke) => stroke.id);
       page.objects = page.objects.filter((object) => !(object.type === 'math' && object.auto && object.sourceStrokeIds?.some((id) => sourceIds.includes(id))));
       page.objects.push({
         id: `math_auto_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-        type: 'math', auto: true, x, y, w: width, h: 56,
-        expression: calculation.expression, result: calculation.result, showExpression: false,
+        type: 'math', auto: true, x, y, w: width, h: 72,
+        expression: calculation.expression, result: calculation.result, showExpression: true,
         color: '#174f82', background: '#eaf4ff', fontSize: 26,
         sourceStrokeIds: sourceIds, sourceBounds: bounds,
         confidence: calculation.confidence, createdAt: new Date().toISOString()
@@ -217,6 +229,49 @@
     } finally {
       autoMathBusy = false;
     }
+  }
+
+  function currentPageMathGroup() {
+    const pageIndex = api.state.currentPageIndex;
+    const page = currentDocument()?.pages?.[pageIndex];
+    if (!page) return null;
+    const usedSourceIds = new Set();
+    for (const object of page.objects || []) {
+      if (object.type === 'math' && Array.isArray(object.sourceStrokeIds)) {
+        object.sourceStrokeIds.forEach((id) => usedSourceIds.add(id));
+      }
+    }
+    const strokes = (page.objects || []).filter((object) =>
+      object.type === 'stroke' &&
+      object.brush !== 'highlighter' &&
+      object.points?.length &&
+      !object.autoShapeSource &&
+      !usedSourceIds.has(object.id)
+    );
+    if (!strokes.length) return null;
+    const selected = [];
+    let bounds = null;
+    for (let index = strokes.length - 1; index >= 0; index--) {
+      const stroke = strokes[index];
+      const strokeBox = objectBounds(stroke);
+      if (!bounds || boxesNear(bounds, strokeBox)) {
+        selected.unshift(stroke);
+        bounds = unionBounds(selected);
+      } else if (selected.length >= 2) {
+        break;
+      }
+      if (selected.length >= 8) break;
+    }
+    return selected.length ? { pageIndex, strokes: selected, bounds: unionBounds(selected), startedAt: now(), updatedAt: now() } : null;
+  }
+
+  async function processCurrentPageMath() {
+    const group = currentPageMathGroup();
+    if (!group || group.strokes.length < 2) {
+      setAutoMathStatus('계산할 손글씨 수식을 찾지 못했습니다.', 'idle');
+      return false;
+    }
+    return processPendingMath(group, { force: true });
   }
 
   function pointerPageIndex(event) {
@@ -417,6 +472,30 @@
     showStylusHud('S Pen 버튼 제스처', 0, 0);
   }
 
+  function beginBarrelEraser(event) {
+    if (barrelEraser?.pointerId === event.pointerId) return;
+    barrelEraser = {
+      pointerId: event.pointerId,
+      restoreTool: api.state.tool === 'eraser' ? null : api.state.tool,
+      startedAt: performance.now()
+    };
+    if (api.state.tool !== 'eraser') api.setTool('eraser');
+    showStylusHud('S Pen 버튼: 누르는 동안 지우개', 0, 0);
+  }
+
+  function updateBarrelEraser(event) {
+    if (!barrelEraser || barrelEraser.pointerId !== event.pointerId) return;
+    showStylusHud('S Pen 버튼: 지우개', 0, 0);
+  }
+
+  function finishBarrelEraser(event) {
+    if (!barrelEraser || barrelEraser.pointerId !== event.pointerId) return;
+    const restoreTool = barrelEraser.restoreTool;
+    barrelEraser = null;
+    hideStylusHud();
+    if (restoreTool && api.state.tool === 'eraser') api.setTool(restoreTool);
+  }
+
   function describeStylusDirection(dx, dy) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) < 30) return '놓으면 펜 ↔ 지우개';
     if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? '다음 페이지' : '이전 페이지';
@@ -446,24 +525,29 @@
 
   function handleStylusCaptureDown(event) {
     if (!api.state.settings.sPenGestures || !isBarrelButton(event)) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    beginStylusGesture(event);
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    beginBarrelEraser(event);
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch {}
   }
 
   function handleStylusCaptureMove(event) {
     if (!api.state.settings.sPenGestures) return;
-    if (!stylusGesture && isBarrelButton(event)) beginStylusGesture(event);
+    if (isBarrelButton(event)) {
+      if (!barrelEraser) beginBarrelEraser(event);
+      updateBarrelEraser(event);
+      return;
+    }
+    finishBarrelEraser(event);
     if (!stylusGesture || stylusGesture.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
     stylusGesture.x = event.clientX; stylusGesture.y = event.clientY;
     const dx = stylusGesture.x - stylusGesture.startX, dy = stylusGesture.y - stylusGesture.startY;
     showStylusHud(describeStylusDirection(dx, dy), dx, dy);
   }
 
   function handleStylusCaptureUp(event) {
+    if (barrelEraser?.pointerId === event.pointerId) {
+      finishBarrelEraser(event);
+      return;
+    }
     if (!stylusGesture || stylusGesture.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -522,12 +606,12 @@
     if (!list || $('#autoMathToggle')) return;
     const autoMath = document.createElement('label');
     autoMath.className = 'setting-row';
-    autoMath.innerHTML = `<span><strong>손글씨 수식 자동 계산</strong><small>필기 중 잠시 멈추면 수식을 인식해 결과를 옆에 표시합니다.</small></span><input id="autoMathToggle" type="checkbox" />`;
+    autoMath.innerHTML = `<span><strong>손글씨 수식 자동 계산</strong><small>기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.</small></span><input id="autoMathToggle" type="checkbox" />`;
     const spen = document.createElement('label');
     spen.className = 'setting-row';
-    spen.innerHTML = `<span><strong>S Pen 버튼 제스처</strong><small>버튼 탭은 지우개, 누른 채 좌우는 페이지, 상하는 실행 취소·다시 실행입니다.</small></span><input id="sPenGesturesToggle" type="checkbox" />`;
+    spen.innerHTML = `<span><strong>S Pen 버튼 지우개</strong><small>펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.</small></span><input id="sPenGesturesToggle" type="checkbox" />`;
     list.append(autoMath, spen);
-    $('#autoMathToggle').checked = api.state.settings.autoMath !== false;
+    $('#autoMathToggle').checked = api.state.settings.autoMath === true;
     $('#sPenGesturesToggle').checked = api.state.settings.sPenGestures !== false;
     list.addEventListener('change', async (event) => {
       if (event.target.id === 'autoMathToggle') api.state.settings.autoMath = event.target.checked;
@@ -538,7 +622,7 @@
       const settingsButton = event.target.closest?.('[data-action="open-settings"]');
       if (!settingsButton) return;
       setTimeout(() => {
-        $('#autoMathToggle').checked = api.state.settings.autoMath !== false;
+        $('#autoMathToggle').checked = api.state.settings.autoMath === true;
         $('#sPenGesturesToggle').checked = api.state.settings.sPenGestures !== false;
       }, 0);
     }, true);
@@ -627,7 +711,7 @@
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
     if (!api) return;
-    api.state.settings.autoMath = api.state.settings.autoMath !== false;
+    api.state.settings.autoMath = api.state.settings.autoMath === true;
     api.state.settings.sPenGestures = api.state.settings.sPenGestures !== false;
     seedObservedStrokes();
     injectColorMixer();
@@ -642,7 +726,8 @@
     window.__inkforge32 = {
       VERSION,
       openColorMixer,
-      processMathStrokes: async (strokes, pageIndex = api.state.currentPageIndex) => processPendingMath({ pageIndex, strokes, bounds: unionBounds(strokes), startedAt: now(), updatedAt: now() }),
+      processMathStrokes: async (strokes, pageIndex = api.state.currentPageIndex) => processPendingMath({ pageIndex, strokes, bounds: unionBounds(strokes), startedAt: now(), updatedAt: now() }, { force: true }),
+      processCurrentPageMath,
       recognizeAndEvaluate,
       handleAirAction,
       resolveToolbarCollisions,

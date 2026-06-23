@@ -1,9 +1,14 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.2';
+  const VERSION = '3.3.4';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
+  const HANDWRITING_OCR_DWELL_MS = 2800;
+  const PDF_OCR_CURRENT_DWELL_MS = 3600;
+  const OCR_ACTIVITY_GRACE_MS = 1400;
+  const IDLE_OCR_TIMEOUT_MS = 2400;
+  const SHAPE_HOLD_MS = 520;
   const nativeApi = window.InkForgeNative;
   const pending = new Map();
   const ocrTimers = new Map();
@@ -13,6 +18,8 @@
   let api = null;
   let localTextRecognizer = null;
   let localMathRecognizer = null;
+  let lastUserActivityAt = Date.now();
+  let activePageDwell = { documentId: null, pageId: null, pageIndex: -1, enteredAt: Date.now(), timer: 0 };
   let lastStylusEventAt = 0;
   let lastStylusDetail = null;
   let stylusGesture = null;
@@ -20,10 +27,38 @@
   let pullState = null;
   let pullIndicator = null;
   let modelStatusNode = null;
+  let recognitionReadyChipShown = false;
+  let barrelRestoreTool = null;
 
   const uid = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const hasHangul = (text) => /[\u3131-\u318e\uac00-\ud7a3]/.test(String(text || ''));
+  const hasLatin = (text) => /[A-Za-z]/.test(String(text || ''));
+
+  function markUserActivity() {
+    lastUserActivityAt = Date.now();
+  }
+
+  function requestIdleSlot(timeout = IDLE_OCR_TIMEOUT_MS) {
+    return new Promise((resolve) => {
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(resolve, { timeout });
+      } else {
+        setTimeout(resolve, Math.min(timeout, 900));
+      }
+    });
+  }
+
+  async function waitForQuietWindow(timeout = IDLE_OCR_TIMEOUT_MS) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await requestIdleSlot(timeout);
+      const quietFor = Date.now() - lastUserActivityAt;
+      if (!document.hidden && !api?.state.drawSession && quietFor >= OCR_ACTIVITY_GRACE_MS) return true;
+      await delay(320);
+    }
+    return !document.hidden && !api?.state.drawSession;
+  }
 
   window.__inkforgeNativeCallbacks = window.__inkforgeNativeCallbacks || {
     resolve(requestId, envelope) {
@@ -179,35 +214,83 @@
     return output;
   }
 
+  function textCandidateScore(text, languageTag, mode = 'auto') {
+    const value = String(text || '').normalize('NFKC').trim();
+    if (!value) return -100;
+    const hangul = (value.match(/[\u3131-\u318e\uac00-\ud7a3]/g) || []).length;
+    const latin = (value.match(/[A-Za-z]/g) || []).length;
+    const digits = (value.match(/\d/g) || []).length;
+    const usefulSymbols = (value.match(/[+\-*/=.,:;()[\]{}%₩$#@]/g) || []).length;
+    const bad = (value.match(/[□�]/g) || []).length;
+    let score = value.replace(/\s/g, '').length + hangul * 3 + latin * 2 + digits * 2 + usefulSymbols - bad * 10;
+    if (mode === 'ko' && languageTag === 'ko') score += hangul ? 10 : 0;
+    if (mode === 'en' && languageTag === 'en-US') score += latin || digits ? 10 : 0;
+    if (mode === 'auto') {
+      if (languageTag === 'ko' && hangul) score += 12;
+      if (languageTag === 'en-US' && (latin || digits) && !hangul) score += 12;
+      if (hangul && latin) score += 10;
+    }
+    return score;
+  }
+
+  async function recognizeLineBest(line, mode, preContext, progress, index, total) {
+    const languages = mode === 'en' ? ['en-US'] : mode === 'ko' ? ['ko'] : ['ko', 'en-US'];
+    const results = [];
+    for (const languageTag of languages) {
+      progress(`네이티브 ${languageTag === 'ko' ? '한글' : '영문'} 인식 ${index}/${total}`);
+      try {
+        const result = await recognizeNativeInk(line.strokes, languageTag, {
+          preContext: preContext.slice(-120),
+          maxCandidates: mode === 'auto' ? 10 : 8
+        });
+        const choices = candidateTexts(result);
+        if (choices.length) {
+          results.push({
+            languageTag,
+            result,
+            choices,
+            score: textCandidateScore(choices[0], languageTag, mode)
+          });
+        }
+      } catch (error) {
+        console.warn('Native line recognition failed', languageTag, error);
+      }
+    }
+    results.sort((a, b) => b.score - a.score);
+    const best = results[0];
+    if (!best) throw new Error('인식 결과가 비어 있습니다.');
+    const alternatives = [];
+    for (const item of results) {
+      for (const text of item.choices) {
+        if (text !== best.choices[0] && !alternatives.includes(text)) alternatives.push(text);
+      }
+    }
+    return { text: best.choices[0], alternatives, languageTag: best.languageTag, result: best.result };
+  }
+
   async function nativeTextRecognizer(strokes, mode = 'auto', progress = () => {}) {
     if (!nativeAvailable()) return localTextRecognizer(strokes, mode, progress);
-    const languageTag = mode === 'en' ? 'en-US' : 'ko';
     try {
       const lines = groupStrokeLines(strokes);
       const output = [];
       const alternatives = [];
       let preContext = '';
       for (let index = 0; index < lines.length; index++) {
-        progress(`네이티브 ${languageTag === 'ko' ? '한글' : '영문'} 인식 ${index + 1}/${lines.length}`);
-        const result = await recognizeNativeInk(lines[index].strokes, languageTag, {
-          preContext: preContext.slice(-120),
-          maxCandidates: 8
-        });
-        const choices = candidateTexts(result);
-        output.push(choices[0] || '');
-        alternatives.push(choices.slice(1));
-        preContext += `${choices[0] || ''}\n`;
+        const best = await recognizeLineBest(lines[index], mode, preContext, progress, index + 1, lines.length);
+        output.push(best.text || '');
+        alternatives.push(best.alternatives.slice(0, 8));
+        preContext += `${best.text || ''}\n`;
       }
       const text = output.join('\n').trim();
       if (!text) throw new Error('인식 결과가 비어 있습니다.');
       return {
         text,
-        confidence: clamp(.88 - Math.max(0, lines.length - 6) * .015, .55, .93),
+        confidence: clamp(.9 - Math.max(0, lines.length - 6) * .015, .55, .94),
         alternatives,
         details: [],
         lines: lines.length,
         bounds: unionBounds(strokes),
-        engine: 'mlkit-digital-ink'
+        engine: mode === 'auto' ? 'mlkit-digital-ink-ko+en' : 'mlkit-digital-ink'
       };
     } catch (error) {
       console.warn('Native text recognition fallback', error);
@@ -218,6 +301,14 @@
   function normalizeMathBase(raw) {
     let value = String(raw || '').normalize('NFKC').trim();
     value = value
+      .replace(/\\left|\\right/g, '')
+      .replace(/\\times|\\cdot|\\ast/g, '*')
+      .replace(/\\div/g, '/')
+      .replace(/\\pi/g, 'pi')
+      .replace(/\\sqrt\s*\{([^{}]+)\}/g, 'sqrt($1)')
+      .replace(/\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '($1)/($2)')
+      .replace(/\{/g, '(')
+      .replace(/\}/g, ')')
       .replace(/\s+/g, '')
       .replace(/[−–—﹣]/g, '-')
       .replace(/[×✕✖·∙]/g, '*')
@@ -325,27 +416,86 @@
   }
 
   function pdfQueueKey(detail) {
-    return `${detail?.documentId || api?.state?.currentDocumentId || 'doc'}:${detail?.pageId || detail?.pageIndex || 0}`;
+    const pageKey = detail?.pageId ?? detail?.pageIndex ?? 0;
+    return `${detail?.documentId || api?.state?.currentDocumentId || 'doc'}:${pageKey}`;
   }
 
-  function shouldEagerPdfOcr(detail) {
-    const { doc, index } = pageByDetail(detail);
-    if (!doc) return true;
-    if ((doc.pages?.length || 0) <= 24) return true;
-    return Math.abs(index - api.state.currentPageIndex) <= 2;
+  function updateActivePageDwell(reason = 'page') {
+    const doc = api?.currentDocument?.();
+    const pageIndex = api?.state?.currentPageIndex ?? -1;
+    const page = doc?.pages?.[pageIndex];
+    if (!doc || !page) return;
+    if (activePageDwell.documentId === doc.id && activePageDwell.pageId === page.id && activePageDwell.pageIndex === pageIndex) return;
+    clearTimeout(activePageDwell.timer);
+    activePageDwell = {
+      documentId: doc.id,
+      pageId: page.id,
+      pageIndex,
+      enteredAt: Date.now(),
+      reason,
+      timer: setTimeout(() => scanCurrentPageSoon(true), Math.min(HANDWRITING_OCR_DWELL_MS, PDF_OCR_CURRENT_DWELL_MS))
+    };
+  }
+
+  function isCurrentPageDetail(detail) {
+    const { doc, page, index } = pageByDetail(detail);
+    return !!doc && !!page && doc.id === api.state.currentDocumentId && index === api.state.currentPageIndex;
+  }
+
+  function visiblePageIndexes(doc) {
+    if (!doc) return [];
+    const viewport = document.getElementById('editorViewport');
+    const wraps = Array.from(document.querySelectorAll('.page-wrap[data-page-index]'));
+    if (!viewport || !wraps.length) return [api.state.currentPageIndex];
+    const viewportRect = viewport.getBoundingClientRect();
+    const indexes = [];
+    for (const wrap of wraps) {
+      const index = Number(wrap.dataset.pageIndex);
+      if (!Number.isInteger(index) || !doc.pages[index]) continue;
+      const rect = wrap.getBoundingClientRect();
+      const visibleHeight = Math.min(rect.bottom, viewportRect.bottom) - Math.max(rect.top, viewportRect.top);
+      const visibleWidth = Math.min(rect.right, viewportRect.right) - Math.max(rect.left, viewportRect.left);
+      if (visibleHeight > 48 && visibleWidth > 48) indexes.push(index);
+    }
+    if (!indexes.includes(api.state.currentPageIndex)) indexes.unshift(api.state.currentPageIndex);
+    return [...new Set(indexes)].sort((a, b) => Math.abs(a - api.state.currentPageIndex) - Math.abs(b - api.state.currentPageIndex));
+  }
+
+  function dwellRemaining(detail, requiredMs) {
+    if (!isCurrentPageDetail(detail)) return 0;
+    const { page } = pageByDetail(detail);
+    if (activePageDwell.pageId !== page?.id) updateActivePageDwell('dwell-check');
+    return Math.max(0, requiredMs - (Date.now() - activePageDwell.enteredAt));
+  }
+
+  async function waitForOcrTurn(detail, currentPageMs) {
+    const remaining = dwellRemaining(detail, currentPageMs);
+    if (remaining > 0) await delay(remaining + 80);
+    await waitForQuietWindow();
   }
 
   async function autoIndexPage(detail, force = false) {
     if (!api?.state.settings.autoOcr) return;
     const { doc, page, index } = pageByDetail(detail);
     if (!doc || !page) return;
+    if (!force) {
+      const remaining = dwellRemaining(detail, HANDWRITING_OCR_DWELL_MS);
+      if (remaining > 0) {
+        scheduleAutoOcr(detail, remaining);
+        return;
+      }
+      if (!await waitForQuietWindow(1600)) {
+        scheduleAutoOcr(detail, 900);
+        return;
+      }
+    }
     const objects = (page.objects || []).filter((object) => object.type === 'stroke' && object.brush !== 'highlighter' && object.points?.length && !object.autoShapeSource);
     if (!objects.length) return;
     const hash = sourceHash(objects);
     const existing = page.objects.find((object) => object.type === 'ocrIndex' && object.source === 'auto-native');
     if (!force && existing?.sourceHash === hash) return;
     try {
-      const result = await nativeTextRecognizer(objects.map((object) => object.points), 'ko', () => {});
+      const result = await nativeTextRecognizer(objects.map((object) => object.points), 'auto', () => {});
       const text = String(result?.text || '').trim();
       if (!text) return;
       const bounds = unionBounds(objects.map((object) => object.points));
@@ -378,14 +528,16 @@
     }
   }
 
-  function scheduleAutoOcr(detail, delayMs = 1300) {
+  function scheduleAutoOcr(detail, delayMs = HANDWRITING_OCR_DWELL_MS) {
     if (!api?.state.settings.autoOcr) return;
-    const key = `${detail?.documentId || api.state.currentDocumentId}:${detail?.pageId || detail?.pageIndex || api.state.currentPageIndex}`;
+    const pageKey = detail?.pageId ?? detail?.pageIndex ?? api.state.currentPageIndex;
+    const key = `${detail?.documentId || api.state.currentDocumentId}:${pageKey}`;
     clearTimeout(ocrTimers.get(key));
+    const waitMs = Math.max(700, delayMs, dwellRemaining(detail, HANDWRITING_OCR_DWELL_MS));
     ocrTimers.set(key, setTimeout(() => {
       ocrTimers.delete(key);
       void autoIndexPage(detail);
-    }, delayMs));
+    }, waitMs));
     setRecognitionChip('OCR 자동 색인 대기', 'busy');
   }
 
@@ -399,13 +551,14 @@
   }
 
   function enqueuePdfImageOcr(detail, options = {}) {
-    if (!detail?.needsImageOcr || !nativeApi || typeof nativeApi.recognizeKoreanImage !== 'function') return;
-    if (!options.force && !shouldEagerPdfOcr(detail)) return;
+    const methodAvailable = nativeApi && (typeof nativeApi.recognizeImageText === 'function' || typeof nativeApi.recognizeKoreanImage === 'function');
+    if (!detail?.needsImageOcr || !methodAvailable) return;
     const key = pdfQueueKey(detail);
     if (pdfQueuedKeys.has(key)) return;
     pdfQueuedKeys.add(key);
-    if (options.priority) pdfOcrQueue.unshift(detail);
-    else pdfOcrQueue.push(detail);
+    const item = { detail, options: { ...options } };
+    if (options.priority) pdfOcrQueue.unshift(item);
+    else pdfOcrQueue.push(item);
     void processPdfOcrQueue();
   }
 
@@ -413,22 +566,32 @@
     if (pdfOcrBusy || !pdfOcrQueue.length) return;
     pdfOcrBusy = true;
     while (pdfOcrQueue.length) {
-      const detail = pdfOcrQueue.shift();
+      const item = pdfOcrQueue.shift();
+      const detail = item.detail;
       pdfQueuedKeys.delete(pdfQueueKey(detail));
       const { doc, page } = pageByDetail(detail);
       if (!doc || !page?.backgroundAssetId || page.objects?.some((object) => object.type === 'ocrIndex' && object.source === 'pdf-image')) continue;
       try {
-        setRecognitionChip(`PDF OCR ${page.pdfPageNumber || ''}`, 'busy');
+        await waitForOcrTurn(detail, item.options?.priority ? PDF_OCR_CURRENT_DWELL_MS : 0);
+        setRecognitionChip(`PDF 한/영 OCR ${page.pdfPageNumber || ''}`, 'busy');
         const asset = await api.storage.getAsset(page.backgroundAssetId);
         if (!asset?.blob) continue;
         const dataUrl = await blobToDataUrl(asset.blob);
-        const result = await callNative('recognizeKoreanImage', { dataUrl }, 120000);
+        const method = typeof nativeApi.recognizeImageText === 'function' ? 'recognizeImageText' : 'recognizeKoreanImage';
+        const largeDocument = (doc.pages?.length || 0) > 24;
+        const result = await callNative(method, {
+          dataUrl,
+          languages: ['ko', 'en'],
+          mode: item.options?.priority ? 'quality' : 'balanced',
+          allowTesseract: false,
+          maxEdge: largeDocument ? 1500 : 1900
+        }, item.options?.priority ? 180000 : 150000);
         const text = String(result?.text || '').trim();
         if (text) {
           page.objects.push({
             id: uid('ocr'), type: 'ocrIndex', source: 'pdf-image', hidden: true, locked: true,
             text, x: 0, y: 0, w: PAGE_WIDTH, h: PAGE_HEIGHT,
-            createdAt: new Date().toISOString(), engine: 'mlkit-korean-image-ocr'
+            createdAt: new Date().toISOString(), engine: result?.engine || 'mlkit-korean+latin'
           });
           page.needsImageOcr = false;
           await api.storage.putDocument(doc);
@@ -437,7 +600,7 @@
       } catch (error) {
         console.warn('PDF image OCR failed', error);
       }
-      await delay((api.currentDocument?.()?.pages?.length || 0) > 24 ? 260 : 90);
+      await delay((api.currentDocument?.()?.pages?.length || 0) > 24 ? 900 : 240);
     }
     pdfOcrBusy = false;
     setRecognitionChip('OCR 준비됨', 'ready');
@@ -461,9 +624,7 @@
     const bounds = strokeBounds(object.points);
     const diagonal = Math.hypot(bounds.w, bounds.h);
     const first = object.points[0], last = object.points[object.points.length - 1];
-    const closure = Math.hypot(first.x - last.x, first.y - last.y);
-    const likelyClosed = closure < diagonal * .33 && object.points.length > 10;
-    if ((detail.holdDuration || 0) < 140 && !likelyClosed) return;
+    if ((detail.holdDuration || 0) < SHAPE_HOLD_MS) return;
     try {
       const result = await recognizeNativeInk([object.points], 'zxx-Zsym-x-shapes', { maxCandidates: 6 });
       const kind = shapeLabel(result);
@@ -501,6 +662,11 @@
 
   function setRecognitionChip(text, tone = 'idle') {
     let chip = document.getElementById('nativeRecognitionChip');
+    const readyNotice = tone === 'ready' && /준비/.test(String(text || ''));
+    if (readyNotice && recognitionReadyChipShown && chip) {
+      chip.hidden = true;
+      return;
+    }
     if (!chip) {
       chip = document.createElement('button');
       chip.id = 'nativeRecognitionChip';
@@ -510,8 +676,14 @@
       chip.innerHTML = '<span class="native-status-dot"></span><span class="native-status-text"></span>';
       document.body.appendChild(chip);
     }
+    if (readyNotice) recognitionReadyChipShown = true;
+    chip.hidden = false;
     chip.dataset.tone = tone;
     chip.querySelector('.native-status-text').textContent = text;
+    clearTimeout(chip._hideTimer);
+    if (tone === 'ready' || tone === 'idle') {
+      chip._hideTimer = setTimeout(() => { chip.hidden = true; }, readyNotice ? 1600 : 2200);
+    }
   }
 
   function setStylusChip(detail) {
@@ -574,19 +746,16 @@
     rememberNativeStylus(detail);
     setStylusChip(detail);
     const button = !!(detail.primaryButton || detail.secondaryButton);
-    if (button && !stylusGesture) {
-      stylusGesture = { x: Number(detail.x || 0), y: Number(detail.y || 0), lastX: Number(detail.x || 0), lastY: Number(detail.y || 0) };
-    } else if (button && stylusGesture) {
-      stylusGesture.lastX = Number(detail.x || stylusGesture.lastX);
-      stylusGesture.lastY = Number(detail.y || stylusGesture.lastY);
-    } else if (!button && stylusGesture) {
-      const gesture = stylusGesture;
-      stylusGesture = null;
-      performStylusGesture(gesture.lastX - gesture.x, gesture.lastY - gesture.y);
-    }
-
     const toolType = Number(detail.toolType);
     const action = Number(detail.action);
+    if (button && action !== 1 && action !== 3 && !barrelRestoreTool && api.state.tool !== 'eraser') {
+      barrelRestoreTool = api.state.tool;
+      api.setTool('eraser');
+      api.toast?.('S Pen 버튼: 누르는 동안 지우개');
+    } else if ((!button || action === 1 || action === 3) && barrelRestoreTool) {
+      if (api.state.tool === 'eraser') api.setTool(barrelRestoreTool);
+      barrelRestoreTool = null;
+    }
     if (toolType === 4 && action === 0 && api.state.tool !== 'eraser') {
       eraserRestoreTool = api.state.tool;
       api.setTool('eraser');
@@ -669,14 +838,14 @@
     if (!list || document.getElementById('nativeAutoOcrToggle')) return;
     const autoRow = document.createElement('label');
     autoRow.className = 'setting-row';
-    autoRow.innerHTML = '<span><strong>손글씨 OCR 자동 등록</strong><small>필기를 멈추면 한글 OCR 검색 색인을 자동 갱신합니다.</small></span><input id="nativeAutoOcrToggle" type="checkbox" />';
+    autoRow.innerHTML = '<span><strong>손글씨 OCR 자동 등록</strong><small>화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.</small></span><input id="nativeAutoOcrToggle" type="checkbox" />';
     list.appendChild(autoRow);
     const toggle = autoRow.querySelector('input');
     toggle.checked = api.state.settings.autoOcr !== false;
     toggle.addEventListener('change', () => {
       api.state.settings.autoOcr = toggle.checked;
       api.storage.setSetting('preferences', api.state.settings);
-      if (toggle.checked) scheduleAutoOcr({ documentId: api.state.currentDocumentId, pageIndex: api.state.currentPageIndex }, 200);
+      if (toggle.checked) scheduleAutoOcr({ documentId: api.state.currentDocumentId, pageIndex: api.state.currentPageIndex }, HANDWRITING_OCR_DWELL_MS);
     });
     const status = document.createElement('div');
     status.id = 'nativeModelStatus';
@@ -688,7 +857,7 @@
 
   function handleModelStatus(event) {
     const detail = event.detail || {};
-    const label = detail.languageTag === 'ko' ? '한글 OCR' : detail.languageTag === 'en-US' ? '숫자·기호' : '도형';
+    const label = detail.languageTag === 'ko' ? '한글 OCR' : detail.languageTag === 'en-US' ? '영문·숫자' : '도형';
     const status = detail.status === 'ready' ? '준비됨' : detail.status === 'downloading' ? '다운로드 중' : '오류';
     if (modelStatusNode) modelStatusNode.textContent = `${label}: ${status}`;
     setRecognitionChip(`${label} ${status}`, detail.status === 'ready' ? 'ready' : detail.status === 'downloading' ? 'busy' : 'error');
@@ -709,19 +878,28 @@
     }, true);
   }
 
-  function scanCurrentPageSoon() {
+  function scanCurrentPageSoon(dwellReady = false) {
     const doc = api.currentDocument?.();
     if (!doc) return;
-    const page = doc.pages[api.state.currentPageIndex];
-    if (page?.objects?.some((object) => object.type === 'stroke')) {
-      scheduleAutoOcr({ documentId: doc.id, pageId: page.id, pageIndex: api.state.currentPageIndex }, 700);
+    updateActivePageDwell('scan');
+    const visibleIndexes = visiblePageIndexes(doc);
+    for (const index of visibleIndexes) {
+      const page = doc.pages[index];
+      if (!page?.objects?.some((object) => object.type === 'stroke')) continue;
+      scheduleAutoOcr(
+        { documentId: doc.id, pageId: page.id, pageIndex: index },
+        index === api.state.currentPageIndex && dwellReady ? 700 : HANDWRITING_OCR_DWELL_MS + (index === api.state.currentPageIndex ? 0 : 900)
+      );
     }
-    const radius = doc.pages.length > 24 ? 2 : doc.pages.length;
-    const start = Math.max(0, api.state.currentPageIndex - radius);
-    const end = Math.min(doc.pages.length - 1, api.state.currentPageIndex + radius);
-    for (let index = start; index <= end; index++) {
+    for (const index of visibleIndexes) {
       const item = doc.pages[index];
-      if (item?.needsImageOcr) enqueuePdfImageOcr({ documentId: doc.id, pageId: item.id, pageIndex: index, needsImageOcr: true }, { priority: Math.abs(index - api.state.currentPageIndex) <= 1 });
+      if (item?.needsImageOcr) {
+        const current = index === api.state.currentPageIndex;
+        enqueuePdfImageOcr(
+          { documentId: doc.id, pageId: item.id, pageIndex: index, needsImageOcr: true },
+          { priority: current, nearby: true }
+        );
+      }
     }
   }
 
@@ -750,11 +928,20 @@
     injectSettings();
     bindGlobalActions();
     bindPullToAdd();
+    ['pointerdown', 'pointermove', 'wheel', 'keydown', 'touchstart'].forEach((name) => {
+      window.addEventListener(name, markUserActivity, { passive: true, capture: true });
+    });
     window.addEventListener('inkforge:stroke-committed', (event) => {
+      markUserActivity();
       scheduleAutoOcr(event.detail);
       void maybeConvertNativeShape(event.detail);
     });
     window.addEventListener('inkforge:pdf-page-imported', (event) => enqueuePdfImageOcr(event.detail));
+    window.addEventListener('inkforge:page-changed', () => {
+      markUserActivity();
+      updateActivePageDwell('page-changed');
+      scanCurrentPageSoon(false);
+    });
     window.addEventListener('inkforge:native-stylus', handleNativeStylus);
     window.addEventListener('inkforge:native-stylus-key', handleNativeStylusKey);
     window.addEventListener('inkforge:native-model-status', handleModelStatus);
@@ -765,10 +952,12 @@
     if (viewport) {
       let scanTimer = 0;
       viewport.addEventListener('scroll', () => {
+        markUserActivity();
         clearTimeout(scanTimer);
-        scanTimer = setTimeout(scanCurrentPageSoon, 360);
+        scanTimer = setTimeout(() => scanCurrentPageSoon(false), 540);
       }, { passive: true });
     }
+    updateActivePageDwell('initialize');
     scanCurrentPageSoon();
     window.__inkforgeNativeBridge = {
       version: VERSION,

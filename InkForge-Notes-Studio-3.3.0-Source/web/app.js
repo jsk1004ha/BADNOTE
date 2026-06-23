@@ -1,7 +1,9 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.2';
+  const VERSION = '3.3.4';
+  const PAGE_RENDER_SCALE_LIMIT = 4;
+  const SHAPE_HOLD_MS = 520;
   const DB_NAME = 'inkforge-notes-studio';
   const DB_VERSION = 4;
   const PAGE_WIDTH = 1000;
@@ -403,7 +405,7 @@
       drawHold: true,
       telemetry: false,
       continuous: true,
-      autoMath: true,
+      autoMath: false,
       sPenGestures: true,
       autoOcr: true,
       nativeRecognition: true
@@ -429,6 +431,20 @@
   function currentPage() {
     const doc = currentDocument();
     return doc?.pages?.[state.currentPageIndex] || null;
+  }
+
+  function notifyPageChanged(previousPageIndex, reason = 'page') {
+    const doc = currentDocument();
+    if (!doc || previousPageIndex === state.currentPageIndex) return;
+    window.dispatchEvent(new CustomEvent('inkforge:page-changed', {
+      detail: {
+        documentId: doc.id,
+        pageId: doc.pages[state.currentPageIndex]?.id,
+        pageIndex: state.currentPageIndex,
+        previousPageIndex,
+        reason
+      }
+    }));
   }
 
   async function persistCurrent({ immediate = false } = {}) {
@@ -1313,9 +1329,15 @@
     const page = doc?.pages?.[pageIndex];
     const canvas = $(`canvas.page-canvas[data-page-index="${pageIndex}"]`);
     if (!page || !canvas) return;
-    if (canvas.width !== PAGE_WIDTH) canvas.width = PAGE_WIDTH;
-    if (canvas.height !== PAGE_HEIGHT) canvas.height = PAGE_HEIGHT;
+    const rect = canvas.getBoundingClientRect();
+    const cssScale = rect.width > 0 ? rect.width / PAGE_WIDTH : state.zoom;
+    const renderScale = clamp(cssScale * (window.devicePixelRatio || 1), 1, PAGE_RENDER_SCALE_LIMIT);
+    const targetWidth = Math.max(PAGE_WIDTH, Math.round(PAGE_WIDTH * renderScale));
+    const targetHeight = Math.max(PAGE_HEIGHT, Math.round(PAGE_HEIGHT * renderScale));
+    if (canvas.width !== targetWidth) canvas.width = targetWidth;
+    if (canvas.height !== targetHeight) canvas.height = targetHeight;
     const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
     ctx.clearRect(0, 0, PAGE_WIDTH, PAGE_HEIGHT);
     renderPageScene(ctx, page, pageIndex);
   }
@@ -1464,6 +1486,7 @@
     $$('.page-wrap').forEach((wrap) => { wrap.style.width = `${width}px`; });
     $('#pageStack').style.setProperty('--zoom', String(state.zoom));
     $('#zoomIndicator').textContent = `${Math.round(state.zoom * 100)}%`;
+    $$('.page-canvas').forEach((canvas) => scheduleRenderPage(Number(canvas.dataset.pageIndex)));
   }
 
   function mountPageCanvas(index) {
@@ -1518,17 +1541,55 @@
     updatePageIndicator(); updateObjectMenu();
   }
 
+  function pageIndexFromRailEvent(event) {
+    const doc = currentDocument();
+    const track = $('#pageScrollTrack');
+    if (!doc || !track) return state.currentPageIndex;
+    const rect = track.getBoundingClientRect();
+    const ratio = clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+    return Math.round(ratio * Math.max(0, doc.pages.length - 1));
+  }
+
+  function updatePageScrollRail() {
+    const doc = currentDocument();
+    const rail = $('#pageScrollRail');
+    const thumb = $('#pageScrollThumb');
+    const input = $('#pageJumpInput');
+    if (!rail || !thumb || !input || !doc) return;
+    rail.hidden = state.view !== 'editor' || doc.pages.length <= 1;
+    const maxIndex = Math.max(1, doc.pages.length - 1);
+    const thumbHeight = clamp(100 / Math.max(1, doc.pages.length), 6, 28);
+    const progress = doc.pages.length <= 1 ? 0 : state.currentPageIndex / maxIndex;
+    thumb.style.height = `${thumbHeight}%`;
+    thumb.style.top = `${progress * (100 - thumbHeight)}%`;
+    thumb.textContent = String(state.currentPageIndex + 1);
+    input.max = String(doc.pages.length);
+    if (document.activeElement !== input) input.value = String(state.currentPageIndex + 1);
+  }
+
+  function goToPageNumber() {
+    const doc = currentDocument();
+    const input = $('#pageJumpInput');
+    if (!doc || !input) return;
+    const pageNumber = clamp(Math.round(Number(input.value) || 1), 1, doc.pages.length);
+    input.value = String(pageNumber);
+    scrollToPage(pageNumber - 1);
+  }
+
   function updatePageIndicator() {
     const doc = currentDocument();
     if (!doc) return;
     $('#pageIndicator').textContent = `${state.currentPageIndex + 1} / ${doc.pages.length}`;
     $$('.page-wrap').forEach((wrap, index) => wrap.classList.toggle('is-active', index === state.currentPageIndex));
+    updatePageScrollRail();
   }
 
   function scrollToPage(index, smooth = true) {
     const doc = currentDocument();
     if (!doc) return;
+    const previousPageIndex = state.currentPageIndex;
     state.currentPageIndex = clamp(index, 0, doc.pages.length - 1);
+    notifyPageChanged(previousPageIndex, 'scroll-to-page');
     mountPageCanvas(state.currentPageIndex);
     const wrap = $(`.page-wrap[data-page-index="${state.currentPageIndex}"]`);
     if (wrap && state.pageMode !== 'single') wrap.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center', inline: 'center' });
@@ -1789,6 +1850,63 @@
     return !!bounds && point.x >= bounds.x && point.x <= bounds.x + bounds.w && point.y >= bounds.y && point.y <= bounds.y + bounds.h;
   }
 
+  function distanceToSegment(point, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    if (Math.abs(dx) + Math.abs(dy) < .001) return distance(point, a);
+    const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy), 0, 1);
+    return distance(point, { x: a.x + dx * t, y: a.y + dy * t });
+  }
+
+  function shapeVertices(object) {
+    const x = Math.min(object.x1, object.x2), y = Math.min(object.y1, object.y2);
+    const w = Math.abs(object.x2 - object.x1), h = Math.abs(object.y2 - object.y1);
+    const cx = x + w / 2, cy = y + h / 2;
+    if (object.shape === 'triangle') return [0, 1, 2].map((index) => {
+      const angle = -Math.PI / 2 + index * Math.PI * 2 / 3;
+      return { x: cx + Math.cos(angle) * w / 2, y: cy + Math.sin(angle) * h / 2 };
+    });
+    if (object.shape === 'diamond') return [{ x: cx, y }, { x: x + w, y: cy }, { x: cx, y: y + h }, { x, y: cy }];
+    if (object.shape === 'pentagon' || object.shape === 'hexagon') {
+      const sides = object.shape === 'pentagon' ? 5 : 6;
+      return Array.from({ length: sides }, (_, index) => {
+        const angle = (object.shape === 'hexagon' ? 0 : -Math.PI / 2) + index * Math.PI * 2 / sides;
+        return { x: cx + Math.cos(angle) * w / 2, y: cy + Math.sin(angle) * h / 2 };
+      });
+    }
+    return null;
+  }
+
+  function shapeIntersectsPoint(object, point, radius) {
+    const bounds = computeBounds(object);
+    const tolerance = radius + (object.width || 4) * 1.25;
+    const filled = object.fill && object.fill !== 'transparent';
+    if (filled && point.x >= bounds.x && point.x <= bounds.x + bounds.w && point.y >= bounds.y && point.y <= bounds.y + bounds.h) return true;
+    if (['line', 'arrow', 'double-arrow', 'curve'].includes(object.shape)) {
+      const control = Number.isFinite(object.cx) ? { x: object.cx, y: object.cy } : null;
+      if (!control) return distanceToSegment(point, { x: object.x1, y: object.y1 }, { x: object.x2, y: object.y2 }) <= tolerance;
+      return distanceToSegment(point, { x: object.x1, y: object.y1 }, control) <= tolerance ||
+        distanceToSegment(point, control, { x: object.x2, y: object.y2 }) <= tolerance;
+    }
+    if (['rectangle', 'square', 'rounded-rectangle'].includes(object.shape)) {
+      const left = Math.abs(point.x - bounds.x), right = Math.abs(point.x - (bounds.x + bounds.w));
+      const top = Math.abs(point.y - bounds.y), bottom = Math.abs(point.y - (bounds.y + bounds.h));
+      const inX = point.x >= bounds.x - tolerance && point.x <= bounds.x + bounds.w + tolerance;
+      const inY = point.y >= bounds.y - tolerance && point.y <= bounds.y + bounds.h + tolerance;
+      return (inY && Math.min(left, right) <= tolerance) || (inX && Math.min(top, bottom) <= tolerance);
+    }
+    if (['circle', 'ellipse'].includes(object.shape)) {
+      const rx = Math.max(1, bounds.w / 2), ry = Math.max(1, bounds.h / 2);
+      const cx = bounds.x + rx, cy = bounds.y + ry;
+      const normalized = Math.hypot((point.x - cx) / rx, (point.y - cy) / ry);
+      return Math.abs(normalized - 1) * Math.min(rx, ry) <= tolerance;
+    }
+    const vertices = shapeVertices(object);
+    if (vertices?.length) {
+      return vertices.some((vertex, index) => distanceToSegment(point, vertex, vertices[(index + 1) % vertices.length]) <= tolerance);
+    }
+    return point.x >= bounds.x - tolerance && point.x <= bounds.x + bounds.w + tolerance && point.y >= bounds.y - tolerance && point.y <= bounds.y + bounds.h + tolerance;
+  }
+
   function translateObject(object, dx, dy) {
     if (object.locked) return;
     if (object.type === 'stroke') object.points.forEach((point) => { point.x += dx; point.y += dy; });
@@ -1804,6 +1922,8 @@
       if (point.x + radius < bounds.x || point.x - radius > bounds.x + bounds.w || point.y + radius < bounds.y || point.y - radius > bounds.y + bounds.h) continue;
       if (object.type === 'stroke') {
         if (object.points.some((sample) => distance(sample, point) <= radius + (object.width || 4))) candidates.push(object);
+      } else if (object.type === 'shape') {
+        if (shapeIntersectsPoint(object, point, radius)) candidates.push(object);
       } else candidates.push(object);
     }
     return candidates;
@@ -1868,7 +1988,9 @@
     if (!state.settings.scribbleErase || points.length < 12) return false;
     const metrics = strokeMetrics(points);
     const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
-    const dense = metrics.length > Math.max(180, diagonal * 4.2) && metrics.reversals >= 3 && Math.max(metrics.bounds.w, metrics.bounds.h) < 460;
+    const compact = Math.max(metrics.bounds.w, metrics.bounds.h) < 460 && Math.min(metrics.bounds.w, metrics.bounds.h) > 12;
+    const notClosedShape = metrics.closure > diagonal * .42 || metrics.reversals >= 6;
+    const dense = compact && notClosedShape && metrics.length > Math.max(220, diagonal * 4.8) && metrics.reversals >= 4;
     if (!dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
@@ -1955,8 +2077,11 @@
     const radialDeviation = Math.sqrt(radialVariance) / Math.max(.001, radialMean);
     const vertices = polygonVertices(points, diagonal);
     const aspect = metrics.bounds.w / Math.max(1, metrics.bounds.h);
+    const loopRatio = metrics.length / diagonal;
+    const ellipseLike = radialDeviation < .16 && loopRatio > 2.35 && loopRatio < 5.15;
 
     if (vertices.length >= 8 && vertices.length <= 13 && radialDeviation > .18) return 'starshape';
+    if (ellipseLike && vertices.length > 5) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
     // Classify clear polygon corners before radial ellipse tests. A wide rectangle can
     // otherwise look deceptively circular after x/y normalization.
     if (vertices.length === 3) return 'triangle';
@@ -1968,12 +2093,13 @@
       const left = vertices.reduce((best, point) => point.x < best.x ? point : best, vertices[0]);
       const right = vertices.reduce((best, point) => point.x > best.x ? point : best, vertices[0]);
       const axisDiamond = Math.abs(top.x - cx) < metrics.bounds.w * .22 && Math.abs(bottom.x - cx) < metrics.bounds.w * .22 && Math.abs(left.y - cy) < metrics.bounds.h * .22 && Math.abs(right.y - cy) < metrics.bounds.h * .22;
+      if (ellipseLike && rightish < 3) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
       if (axisDiamond && rightish < 3) return 'diamond';
       return aspect > .82 && aspect < 1.22 ? 'square' : 'rectangle';
     }
     if (vertices.length === 5) return 'pentagon';
     if (vertices.length === 6) return 'hexagon';
-    if (radialDeviation < .19 && metrics.length / diagonal > 2.35 && metrics.length / diagonal < 4.9) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
+    if (radialDeviation < .19 && loopRatio > 2.35 && loopRatio < 4.9) return aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse';
     return radialDeviation < .3 ? (aspect > .82 && aspect < 1.22 ? 'circle' : 'ellipse') : null;
   }
 
@@ -1982,9 +2108,10 @@
     const metrics = strokeMetrics(points);
     const diagonal = Math.max(1, Math.hypot(metrics.bounds.w, metrics.bounds.h));
     if (diagonal < 18) return null;
+    const highConfidence = holdDuration >= SHAPE_HOLD_MS;
+    if (!highConfidence) return null;
     const direct = distance(points[0], points[points.length - 1]);
     const straightness = direct / Math.max(1, metrics.length);
-    const highConfidence = holdDuration >= 150;
     const obviousStroke = duration > 80 || diagonal > 42;
     if (straightness > (highConfidence ? .84 : obviousStroke ? .92 : .965)) return { shape: 'line', x1: points[0].x, y1: points[0].y, x2: points[points.length - 1].x, y2: points[points.length - 1].y, autoConfidence: straightness };
     const arrow = looksLikeArrow(points, diagonal);
@@ -2031,6 +2158,7 @@
       initialZoom: state.zoom,
       initialScrollLeft: viewport.scrollLeft,
       initialScrollTop: viewport.scrollTop,
+      pinched: false,
       moved: false
     };
   }
@@ -2048,6 +2176,7 @@
       const currentDistance = distance(touches[0], touches[1]);
       if (gesture.initialDistance > 0 && Math.abs(currentDistance - gesture.initialDistance) > 3) {
         const nextZoom = clamp(gesture.initialZoom * currentDistance / gesture.initialDistance, .08, 8);
+        gesture.pinched = true;
         const rect = viewport.getBoundingClientRect();
         const anchorX = center.x - rect.left, anchorY = center.y - rect.top;
         const contentX = (gesture.initialScrollLeft + (gesture.startCenter.x - rect.left)) / gesture.initialZoom;
@@ -2076,7 +2205,7 @@
     if (!gesture.moved && duration < 320) {
       if (gesture.maxPointers === 2) undo();
       else if (gesture.maxPointers >= 3) redo();
-    } else if (gesture.maxPointers >= 2 && Math.abs(dx) > 82 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+    } else if (!gesture.pinched && gesture.maxPointers >= 2 && Math.abs(dx) > 82 && Math.abs(dx) > Math.abs(dy) * 1.6) {
       scrollToPage(state.currentPageIndex + (dx < 0 ? 1 : -1));
     }
     state.touchGesture = null;
@@ -2224,9 +2353,10 @@
     if (session.kind === 'stroke') {
       const points = session.object.points;
       const duration = performance.now() - session.startedAt;
-      if (points.length > 1 && !maybeScribbleErase(session.pageIndex, points)) {
-        const holdDuration = performance.now() - (session.lastMovedAt || session.startedAt);
-        const shape = session.object.brush !== 'highlighter' ? maybeShapeFromStroke(points, duration, holdDuration) : null;
+      const holdDuration = performance.now() - (session.lastMovedAt || session.startedAt);
+      const shape = session.object.brush !== 'highlighter' ? maybeShapeFromStroke(points, duration, holdDuration) : null;
+      const allowScribbleErase = !shape && holdDuration < Math.max(260, SHAPE_HOLD_MS * .65);
+      if (points.length > 1 && (!allowScribbleErase || !maybeScribbleErase(session.pageIndex, points))) {
         checkpoint(shape ? 'draw-shape' : 'draw-stroke');
         let committedObject;
         if (shape) { committedObject = { id: uid('shape'), type: 'shape', ...shape, color: session.object.color, width: session.object.width, createdAt: now() }; page.objects.push(committedObject); }
@@ -2600,7 +2730,7 @@
   }
 
   function safeFilename(value) {
-    return String(value || 'InkForge').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 100) || 'InkForge';
+    return String(value || 'bad note').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 100) || 'bad note';
   }
 
   function exportIfnote() {
@@ -2648,7 +2778,7 @@
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const file = new File([blob], `${safeFilename(doc.title)}.ifnote`, { type: 'application/json' });
     if (navigator.share && navigator.canShare?.({ files: [file] })) {
-      try { await navigator.share({ title: doc.title, text: 'InkForge Notes Studio 노트', files: [file] }); }
+      try { await navigator.share({ title: doc.title, text: 'bad note 노트', files: [file] }); }
       catch (error) { if (error.name !== 'AbortError') toast(`공유 오류: ${error.message || error}`); }
     } else exportIfnote();
   }
@@ -2764,6 +2894,8 @@
     if (!doc) return;
     showMenu('문서 옵션', doc.title, [
       { action:'document-search', icon:'search', title:'문서 검색', description:'입력한 텍스트, 수식, 제목을 찾습니다.' },
+      { action:'go-page-number-menu', icon:'arrow', title:'페이지 번호로 이동', description:'오른쪽 페이지 바에서 원하는 페이지 번호를 입력합니다.' },
+      { action:'calculate-page-math', icon:'math', title:'손글씨 수식 계산', description:'현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다.' },
       { action:'toggle-read-mode', icon:state.readOnly ? 'eye-off' : 'read', title:state.readOnly ? '편집 모드로 전환' : '읽기 모드', description:'실수로 필기되지 않도록 편집을 잠급니다.' },
       { action:'toggle-page-mode', icon:'sidebar', title:state.pageMode === 'continuous' ? '한 페이지 보기' : '연속 페이지 보기' },
       { action:'fit-page', icon:'fit', title:'페이지 맞춤' },
@@ -2892,6 +3024,14 @@
       case 'go-page': scrollToPage(Number(target.dataset.pageIndex)); break;
       case 'page-menu': event.stopPropagation(); pageMenu(Number(target.dataset.pageIndex)); break;
       case 'go-page-menu': closeModal(); scrollToPage(Number(target.dataset.pageIndex)); break;
+      case 'go-page-number': goToPageNumber(); break;
+      case 'go-page-number-menu': {
+        closeModal();
+        const input = $('#pageJumpInput');
+        if (input) setTimeout(() => { input.focus(); input.select(); }, 60);
+        break;
+      }
+      case 'calculate-page-math': closeModal(); window.__inkforge32?.processCurrentPageMath?.(); break;
       case 'bookmark-page': {
         const page = currentDocument()?.pages?.[Number(target.dataset.pageIndex)]; if (page) { checkpoint('bookmark'); page.bookmarked = !page.bookmarked; persistCurrent(); closeModal(); renderSidebar(); } break;
       }
@@ -3050,7 +3190,12 @@
         const currentDistance = Math.abs(rect.top + rect.height / 2 - centerY);
         if (currentDistance < bestDistance) { bestDistance = currentDistance; best = Number(wrap.dataset.pageIndex); }
       });
-      if (best !== state.currentPageIndex) { state.currentPageIndex = best; updatePageIndicator(); renderSidebar(); updateObjectMenu(); }
+      if (best !== state.currentPageIndex) {
+        const previousPageIndex = state.currentPageIndex;
+        state.currentPageIndex = best;
+        notifyPageChanged(previousPageIndex, 'continuous-scroll');
+        updatePageIndicator(); renderSidebar(); updateObjectMenu();
+      }
       updateVirtualPages();
     });
   }
@@ -3067,6 +3212,36 @@
     $('#pageStack').addEventListener('dblclick', handleDoubleClick);
     $('#editorViewport').addEventListener('scroll', handleEditorScroll, { passive: true });
     $('#editorViewport').addEventListener('wheel', handleWheel, { passive: false });
+    const railTrack = $('#pageScrollTrack');
+    const railThumb = $('#pageScrollThumb');
+    const railInput = $('#pageJumpInput');
+    if (railTrack && railThumb && railInput) {
+      let draggingRail = false;
+      const railMove = (event) => {
+        if (!draggingRail) return;
+        event.preventDefault();
+        scrollToPage(pageIndexFromRailEvent(event), false);
+      };
+      const railUp = () => {
+        draggingRail = false;
+        document.removeEventListener('pointermove', railMove, true);
+        document.removeEventListener('pointerup', railUp, true);
+        document.removeEventListener('pointercancel', railUp, true);
+      };
+      railTrack.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        draggingRail = true;
+        scrollToPage(pageIndexFromRailEvent(event), false);
+        try { railTrack.setPointerCapture?.(event.pointerId); } catch {}
+        document.addEventListener('pointermove', railMove, true);
+        document.addEventListener('pointerup', railUp, true);
+        document.addEventListener('pointercancel', railUp, true);
+      }, { passive: false });
+      railInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); goToPageNumber(); }
+      });
+      railInput.addEventListener('change', goToPageNumber);
+    }
 
     $('#globalSearchInput').addEventListener('input', (event) => { state.globalQuery = event.target.value; renderLibrary(); });
     $('#documentSearchInput').addEventListener('input', renderDocumentSearch);

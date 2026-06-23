@@ -147,6 +147,39 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         await page.evaluate("window.__inkforge.setZoom(1.5)")
         results["zoom"] = await page.evaluate("window.__inkforge.state.zoom")
         results["math_engine"] = await page.evaluate("window.__inkforge.evaluateMath('(12+8)*3',{}).result")
+        results["auto_math_default_off"] = await page.evaluate("window.__inkforge.state.settings.autoMath === false")
+        results["page_scroll_rail"] = await page.evaluate("""
+          () => {
+            const api = window.__inkforge;
+            while (api.currentDocument().pages.length < 3) api.addPage();
+            const rail = document.getElementById('pageScrollRail');
+            const input = document.getElementById('pageJumpInput');
+            input.value = '2';
+            document.querySelector('[data-action="go-page-number"]').click();
+            return {
+              exists: !!rail,
+              visible: rail && getComputedStyle(rail).display !== 'none',
+              value: input.value,
+              pageIndex: api.state.currentPageIndex
+            };
+          }
+        """)
+        results["page_scroll_rail"]["passed"] = bool(results["page_scroll_rail"].get("exists") and results["page_scroll_rail"].get("visible") and results["page_scroll_rail"].get("value") == "2" and results["page_scroll_rail"].get("pageIndex") == 1)
+        await page.wait_for_timeout(700)
+        results["zoom_render_scale"] = await page.evaluate("""
+          () => {
+            const api = window.__inkforge;
+            api.setZoom(2.25);
+            api.renderPageCanvas(api.state.currentPageIndex);
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
+            return {
+              cssWidth: canvas.clientWidth,
+              backingWidth: canvas.width,
+              zoom: api.state.zoom,
+              passed: canvas.width >= canvas.clientWidth && canvas.width >= 1000
+            };
+          }
+        """)
 
         # Automatic handwritten equation recognition from normal page strokes.
         auto_math_result = await page.evaluate("""
@@ -162,8 +195,22 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             return {recognized:recognized.expression,alternatives:recognized.alternatives,inserted,expression:math?.expression,result:math?.result,showExpression:math?.showExpression,sourceCount:math?.sourceStrokeIds?.length||0};
           }
         """, MATH_STROKES)
-        auto_math_result["passed"] = bool(auto_math_result.get("inserted") and auto_math_result.get("expression") == "1+2" and str(auto_math_result.get("result")) == "3" and auto_math_result.get("showExpression") is False)
+        auto_math_result["passed"] = bool(auto_math_result.get("inserted") and auto_math_result.get("expression") == "1+2" and str(auto_math_result.get("result")) == "3" and auto_math_result.get("showExpression") is True)
         results["automatic_handwritten_math"] = auto_math_result
+        manual_math_result = await page.evaluate("""
+          async (strokes) => {
+            const api=window.__inkforge;
+            const page=api.currentPage();
+            page.objects = page.objects.filter(object => !object.id.startsWith('test_math_') && !object.id.startsWith('manual_math_') && object.type !== 'math');
+            const objs=strokes.map((points,index)=>({id:`manual_math_${index}`,type:'stroke',brush:'fountain',color:'#111827',width:4,opacity:1,points}));
+            page.objects.push(...objs);
+            const inserted=await window.__inkforge32.processCurrentPageMath();
+            const math=[...page.objects].reverse().find(o=>o.type==='math'&&o.auto);
+            return {inserted, expression: math?.expression, result: math?.result, showExpression: math?.showExpression};
+          }
+        """, MATH_STROKES)
+        manual_math_result["passed"] = bool(manual_math_result.get("inserted") and manual_math_result.get("showExpression") is True and str(manual_math_result.get("result")) == "3")
+        results["manual_handwritten_math"] = manual_math_result
 
         # OCR and search indexing remain available.
         start = time.monotonic()
@@ -203,7 +250,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             page.objects.push({id:'opaque_tape',type:'tape',x1:110,y1:110,x2:350,y2:190,color:'#4c91dd',revealed:false});
             api.renderPageCanvas(api.state.currentPageIndex);
             const canvas=document.querySelector(`.page-canvas[data-page-index="${api.state.currentPageIndex}"]`);
-            const d=canvas.getContext('2d').getImageData(128,128,1,1).data;
+            const scale=canvas.width/1000;
+            const d=canvas.getContext('2d').getImageData(Math.round(128*scale),Math.round(128*scale),1,1).data;
             return Array.from(d);
           }
         """)
@@ -220,7 +268,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "hexagon": polygon_points([(120,70),(300,70),(380,200),(300,330),(120,330),(40,200)]),
         }
         recognized_shapes = await page.evaluate("""
-          shapes => Object.fromEntries(Object.entries(shapes).map(([key,points])=>[key,window.__inkforge.maybeShapeFromStroke(points,900,450)?.shape||null]))
+          shapes => Object.fromEntries(Object.entries(shapes).map(([key,points])=>[key,window.__inkforge.maybeShapeFromStroke(points,1100,650)?.shape||null]))
         """, shapes)
         await page.evaluate("window.__inkforge.setTool('shape')")
         shape_button_count = await page.locator('#activeToolMenu [data-shape]').count()
@@ -283,7 +331,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.2" and results.get("upgrade_version") == "3.3.2" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True
+    required_scalars = results.get("version") == "3.3.4" and results.get("upgrade_version") == "3.3.4" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

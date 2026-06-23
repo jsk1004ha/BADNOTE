@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#2f5688" />
   <meta name="color-scheme" content="light dark" />
-  <title>InkForge Notes Studio 3.3.2</title>
+  <title>bad note 3.3.4</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
@@ -156,6 +156,16 @@
         <div id="pageStack" class="page-stack"></div>
       </main>
 
+      <aside id="pageScrollRail" class="page-scroll-rail" aria-label="페이지 이동">
+        <div id="pageScrollTrack" class="page-scroll-track">
+          <button id="pageScrollThumb" class="page-scroll-thumb" type="button" aria-label="페이지 스크롤"></button>
+        </div>
+        <div class="page-jump-box">
+          <input id="pageJumpInput" type="number" inputmode="numeric" min="1" value="1" aria-label="이동할 페이지 번호" />
+          <button class="page-jump-button" data-action="go-page-number" type="button" aria-label="페이지 번호로 이동"><span data-icon-host="chevron-right"></span></button>
+        </div>
+      </aside>
+
       <div id="pageIndicator" class="page-indicator" aria-live="polite">1 / 1</div>
       <div id="zoomIndicator" class="zoom-indicator">100%</div>
       <div id="stylusTelemetry" class="stylus-telemetry" hidden>펜 입력 대기</div>
@@ -245,7 +255,7 @@
 
     <section id="settingsSheet" class="sheet modal settings-sheet" hidden aria-label="설정">
       <header class="sheet-header">
-        <div><span class="eyebrow">InkForge Notes Studio</span><h2>설정</h2></div>
+        <div><span class="eyebrow">bad note</span><h2>설정</h2></div>
         <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
       </header>
       <div class="settings-list">

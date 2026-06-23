@@ -16,8 +16,8 @@ android {
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 332
-        versionName '3.3.2'
+        versionCode 334
+        versionName '3.3.4'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
@@ -82,5 +82,7 @@ android {
 dependencies {
     implementation 'androidx.webkit:webkit:1.14.0'
     implementation 'com.google.mlkit:digital-ink-recognition:19.0.0'
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
     implementation 'com.google.mlkit:text-recognition-korean:16.0.1'
+    implementation 'com.rmtheis:tess-two:9.1.0'
 }

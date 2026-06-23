@@ -199,7 +199,7 @@
       showProgress(
         `${importedPages.length}페이지 가져오기 완료`,
         1,
-        '스캔 페이지의 한글 OCR은 백그라운드에서 검색 색인에 자동 등록됩니다.'
+        '스캔 페이지의 한글·영문 OCR은 현재 페이지 체류 후 또는 유휴 상태에서 검색 색인에 자동 등록됩니다.'
       );
       api.toast?.(`PDF ${importedPages.length}페이지를 ${isNew ? '새 노트로 만들었습니다.' : '추가했습니다.'}`, 3600);
       setTimeout(hideProgress, 1600);

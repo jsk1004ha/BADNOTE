@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -47,15 +48,28 @@ import com.google.mlkit.vision.text.Text;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
+import com.google.android.gms.tasks.Tasks;
+import com.googlecode.tesseract.android.TessBaseAPI;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 4172;
@@ -395,6 +409,12 @@ public final class MainActivity extends Activity {
         private final TextRecognizer koreanImageRecognizer = TextRecognition.getClient(
                 new KoreanTextRecognizerOptions.Builder().build()
         );
+        private final TextRecognizer latinImageRecognizer = TextRecognition.getClient(
+                TextRecognizerOptions.DEFAULT_OPTIONS
+        );
+        private static final String TESSERACT_LANGUAGES = "kor+eng";
+        private final Object tesseractLock = new Object();
+        private TessBaseAPI tesseractApi;
         private volatile boolean warmupStarted;
 
         NativeInkBridge(WebView target) {
@@ -406,9 +426,13 @@ public final class MainActivity extends Activity {
             JSONObject result = new JSONObject();
             try {
                 result.put("native", true);
-                result.put("version", "3.3.2");
+                result.put("version", "3.3.4");
                 result.put("digitalInk", true);
                 result.put("koreanImageOcr", true);
+                result.put("koreanEnglishImageOcr", true);
+                result.put("tesseractImageOcr", true);
+                result.put("imageOcrEngine", "mlkit-korean+latin");
+                result.put("tesseractFallbackDefault", false);
                 result.put("stylusMotionEvent", true);
                 result.put("minSdk", 23);
                 result.put("android", Build.VERSION.RELEASE);
@@ -467,51 +491,273 @@ public final class MainActivity extends Activity {
 
         @JavascriptInterface
         public void recognizeKoreanImage(String requestId, String json) {
+            recognizeImageText(requestId, json);
+        }
+
+        @JavascriptInterface
+        public void recognizeImageText(String requestId, String json) {
             executor.execute(() -> {
+                Bitmap bitmap = null;
                 try {
                     JSONObject payload = new JSONObject(json);
-                    String dataUrl = payload.optString("dataUrl", "");
-                    int comma = dataUrl.indexOf(',');
-                    String encoded = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
-                    byte[] bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT);
-                    Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                    if (bitmap == null) {
-                        throw new IllegalArgumentException("이미지 데이터를 읽지 못했습니다.");
-                    }
+                    bitmap = decodeImageBitmap(
+                            payload.optString("dataUrl", ""),
+                            payload.optInt("maxEdge", 1800)
+                    );
                     InputImage image = InputImage.fromBitmap(bitmap, 0);
-                    koreanImageRecognizer.process(image)
-                            .addOnSuccessListener(text -> {
-                                JSONObject output = new JSONObject();
-                                try {
-                                    output.put("text", text.getText());
-                                    JSONArray blocks = new JSONArray();
-                                    for (Text.TextBlock block : text.getTextBlocks()) {
-                                        JSONObject item = new JSONObject();
-                                        item.put("text", block.getText());
-                                        if (block.getBoundingBox() != null) {
-                                            JSONObject bounds = new JSONObject();
-                                            bounds.put("left", block.getBoundingBox().left);
-                                            bounds.put("top", block.getBoundingBox().top);
-                                            bounds.put("right", block.getBoundingBox().right);
-                                            bounds.put("bottom", block.getBoundingBox().bottom);
-                                            item.put("bounds", bounds);
-                                        }
-                                        blocks.put(item);
-                                    }
-                                    output.put("blocks", blocks);
-                                } catch (JSONException ignored) {
-                                }
-                                bitmap.recycle();
-                                resolve(requestId, output);
-                            })
-                            .addOnFailureListener(error -> {
-                                bitmap.recycle();
-                                reject(requestId, error);
-                            });
+                    JSONObject output = recognizeImageTextPayload(
+                            image,
+                            bitmap,
+                            payload.optString("mode", "balanced"),
+                            payload.optBoolean("allowTesseract", false)
+                    );
+                    resolve(requestId, output);
                 } catch (Exception error) {
                     reject(requestId, error);
+                } finally {
+                    if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
                 }
             });
+        }
+
+        private JSONObject recognizeImageTextPayload(
+                InputImage image,
+                Bitmap bitmap,
+                String mode,
+                boolean allowTesseract
+        ) throws JSONException {
+            JSONArray warnings = new JSONArray();
+            Text koreanText = null;
+            Text latinText = null;
+            try {
+                koreanText = Tasks.await(
+                        koreanImageRecognizer.process(image),
+                        45,
+                        TimeUnit.SECONDS
+                );
+            } catch (Exception error) {
+                warnings.put(jsonObject("engine", "mlkit-korean", "error", errorMessage(error)));
+            }
+            try {
+                latinText = Tasks.await(
+                        latinImageRecognizer.process(image),
+                        45,
+                        TimeUnit.SECONDS
+                );
+            } catch (Exception error) {
+                warnings.put(jsonObject("engine", "mlkit-latin", "error", errorMessage(error)));
+            }
+
+            String mlText = mergeImageOcrText(koreanText, latinText, "");
+            String tesseractText = "";
+            boolean qualityMode = "quality".equalsIgnoreCase(mode);
+            if (allowTesseract && (qualityMode || ocrTextScore(mlText) < 90)) {
+                try {
+                    tesseractText = recognizeWithTesseract(bitmap);
+                } catch (Exception error) {
+                    warnings.put(jsonObject("engine", "tesseract-fast", "error", errorMessage(error)));
+                }
+            }
+
+            JSONObject output = new JSONObject();
+            output.put("text", mergeImageOcrText(koreanText, latinText, tesseractText));
+            output.put("blocks", imageOcrBlocks(koreanText, latinText));
+            output.put("engine", tesseractText.trim().isEmpty()
+                    ? "mlkit-korean+latin"
+                    : "mlkit-korean+latin+tesseract-fast");
+            output.put("languages", "ko+en");
+            output.put("width", bitmap.getWidth());
+            output.put("height", bitmap.getHeight());
+            output.put("warnings", warnings);
+            return output;
+        }
+
+        private Bitmap decodeImageBitmap(String dataUrl, int requestedMaxEdge) {
+            int comma = dataUrl.indexOf(',');
+            String encoded = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
+            byte[] bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+            int maxEdge = Math.max(900, Math.min(2600, requestedMaxEdge));
+            int sample = 1;
+            int sourceMax = Math.max(bounds.outWidth, bounds.outHeight);
+            while (sourceMax / sample > maxEdge * 1.45f) sample *= 2;
+
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            options.inSampleSize = sample;
+            Bitmap decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+            if (decoded == null) throw new IllegalArgumentException("이미지 데이터를 읽지 못했습니다.");
+            int decodedMax = Math.max(decoded.getWidth(), decoded.getHeight());
+            if (decodedMax <= maxEdge) return decoded;
+            float scale = maxEdge / (float) decodedMax;
+            Bitmap scaled = Bitmap.createScaledBitmap(
+                    decoded,
+                    Math.max(1, Math.round(decoded.getWidth() * scale)),
+                    Math.max(1, Math.round(decoded.getHeight() * scale)),
+                    true
+            );
+            if (scaled != decoded) decoded.recycle();
+            return scaled;
+        }
+
+        private String recognizeWithTesseract(Bitmap bitmap) throws IOException {
+            synchronized (tesseractLock) {
+                TessBaseAPI api = ensureTesseract();
+                api.setImage(bitmap);
+                String text = api.getUTF8Text();
+                api.clear();
+                return text == null ? "" : text;
+            }
+        }
+
+        private TessBaseAPI ensureTesseract() throws IOException {
+            if (tesseractApi != null) return tesseractApi;
+            File dataDir = new File(getFilesDir(), "tesseract");
+            File tessDir = new File(dataDir, "tessdata");
+            if (!tessDir.exists() && !tessDir.mkdirs()) {
+                throw new IOException("Tesseract 데이터 폴더를 만들지 못했습니다.");
+            }
+            copyAssetIfNeeded("tessdata/kor.traineddata", new File(tessDir, "kor.traineddata"));
+            copyAssetIfNeeded("tessdata/eng.traineddata", new File(tessDir, "eng.traineddata"));
+            TessBaseAPI api = new TessBaseAPI();
+            if (!api.init(dataDir.getAbsolutePath(), TESSERACT_LANGUAGES)) {
+                api.end();
+                throw new IOException("Tesseract 한/영 모델을 초기화하지 못했습니다.");
+            }
+            api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+            tesseractApi = api;
+            return api;
+        }
+
+        private void copyAssetIfNeeded(String assetName, File output) throws IOException {
+            if (output.exists() && output.length() > 0) return;
+            File parent = output.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                throw new IOException("OCR 자산 폴더를 만들지 못했습니다.");
+            }
+            try (InputStream input = getAssets().open(assetName);
+                 FileOutputStream stream = new FileOutputStream(output)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    stream.write(buffer, 0, read);
+                }
+            }
+        }
+
+        private JSONArray imageOcrBlocks(Text koreanText, Text latinText) throws JSONException {
+            List<OcrBlock> blocks = new ArrayList<>();
+            collectImageOcrBlocks(blocks, koreanText, "mlkit-korean");
+            collectImageOcrBlocks(blocks, latinText, "mlkit-latin");
+            blocks.sort((a, b) -> {
+                int top = Integer.compare(a.top, b.top);
+                return top != 0 ? top : Integer.compare(a.left, b.left);
+            });
+            JSONArray array = new JSONArray();
+            Set<String> seen = new HashSet<>();
+            for (OcrBlock block : blocks) {
+                String key = normalizeOcrKey(block.text);
+                if (key.isEmpty() || !seen.add(key)) continue;
+                JSONObject item = jsonObject(
+                        "text", block.text,
+                        "engine", block.engine
+                );
+                JSONObject bounds = jsonObject(
+                        "left", block.left,
+                        "top", block.top,
+                        "right", block.right,
+                        "bottom", block.bottom
+                );
+                item.put("bounds", bounds);
+                array.put(item);
+            }
+            return array;
+        }
+
+        private String mergeImageOcrText(Text koreanText, Text latinText, String tesseractText) {
+            List<OcrBlock> blocks = new ArrayList<>();
+            collectImageOcrBlocks(blocks, koreanText, "mlkit-korean");
+            collectImageOcrBlocks(blocks, latinText, "mlkit-latin");
+            blocks.sort((a, b) -> {
+                int top = Integer.compare(a.top, b.top);
+                return top != 0 ? top : Integer.compare(a.left, b.left);
+            });
+            List<String> lines = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (OcrBlock block : blocks) addUniqueOcrLine(lines, seen, block.text);
+            for (String line : tesseractText.split("\\R")) addUniqueOcrLine(lines, seen, line);
+            return String.join("\n", lines).trim();
+        }
+
+        private void collectImageOcrBlocks(List<OcrBlock> output, @Nullable Text text, String engine) {
+            if (text == null) return;
+            for (Text.TextBlock block : text.getTextBlocks()) {
+                for (Text.Line line : block.getLines()) {
+                    String value = line.getText() == null ? "" : line.getText().trim();
+                    if (value.isEmpty()) continue;
+                    Rect rect = line.getBoundingBox() != null
+                            ? line.getBoundingBox()
+                            : block.getBoundingBox();
+                    output.add(new OcrBlock(value, engine, rect));
+                }
+            }
+        }
+
+        private void addUniqueOcrLine(List<String> lines, Set<String> seen, String raw) {
+            String line = raw == null ? "" : raw.trim();
+            if (line.isEmpty()) return;
+            String key = normalizeOcrKey(line);
+            if (key.isEmpty()) return;
+            for (String existing : seen) {
+                if (key.length() > 5 && existing.length() > 5 &&
+                        (key.contains(existing) || existing.contains(key))) {
+                    return;
+                }
+            }
+            if (seen.add(key)) lines.add(line);
+        }
+
+        private String normalizeOcrKey(String text) {
+            return Normalizer.normalize(text == null ? "" : text, Normalizer.Form.NFKC)
+                    .toLowerCase()
+                    .replaceAll("[\\s\\p{Punct}]+", "");
+        }
+
+        private int ocrTextScore(String text) {
+            int score = 0;
+            for (int index = 0; index < text.length(); index++) {
+                char ch = text.charAt(index);
+                if (ch >= 0xAC00 && ch <= 0xD7A3) score += 3;
+                else if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) score += 2;
+                else if (Character.isDigit(ch)) score += 2;
+                else if (ch == '□' || ch == '�') score -= 8;
+            }
+            return score;
+        }
+
+        private String errorMessage(Exception error) {
+            String message = error.getMessage();
+            return message == null ? error.getClass().getSimpleName() : message;
+        }
+
+        private final class OcrBlock {
+            final String text;
+            final String engine;
+            final int left;
+            final int top;
+            final int right;
+            final int bottom;
+
+            OcrBlock(String text, String engine, @Nullable Rect rect) {
+                this.text = text;
+                this.engine = engine;
+                this.left = rect == null ? 0 : rect.left;
+                this.top = rect == null ? 0 : rect.top;
+                this.right = rect == null ? 0 : rect.right;
+                this.bottom = rect == null ? 0 : rect.bottom;
+            }
         }
 
         void warmUpCoreModels() {
@@ -717,6 +963,13 @@ public final class MainActivity extends Activity {
                 recognizer.close();
             }
             koreanImageRecognizer.close();
+            latinImageRecognizer.close();
+            synchronized (tesseractLock) {
+                if (tesseractApi != null) {
+                    tesseractApi.end();
+                    tesseractApi = null;
+                }
+            }
             executor.shutdownNow();
         }
     }
