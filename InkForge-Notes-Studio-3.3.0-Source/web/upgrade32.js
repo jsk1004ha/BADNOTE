@@ -322,6 +322,10 @@
     if (colorTarget === 'highlighter') return api.state.highlighterColor;
     if (colorTarget === 'sticky') return api.state.stickyColor;
     if (colorTarget === 'tape') return api.state.tapeColor;
+    if (colorTarget === 'selection') {
+      const objects = selectedObjects();
+      return objects.find((object) => /^#[0-9a-f]{6}$/i.test(object.color || ''))?.color || api.state.color;
+    }
     return api.state.color;
   }
 
@@ -402,11 +406,35 @@
     if (colorTarget === 'highlighter') api.state.highlighterColor = color;
     else if (colorTarget === 'sticky') api.state.stickyColor = color;
     else if (colorTarget === 'tape') api.state.tapeColor = color;
+    else if (colorTarget === 'selection') applySelectionColor(color);
     else api.state.color = color;
     rememberColor(color);
     closeColorMixer();
     api.renderActiveToolMenu?.();
     toast('새 색상을 적용했습니다.');
+  }
+
+  function selectedObjects() {
+    const doc = currentDocument();
+    const selection = api?.state?.selection;
+    const page = doc?.pages?.[selection?.pageIndex];
+    if (!page || !selection?.ids?.length) return [];
+    return page.objects.filter((object) => selection.ids.includes(object.id));
+  }
+
+  async function applySelectionColor(color) {
+    const doc = currentDocument();
+    const selection = api?.state?.selection;
+    const objects = selectedObjects();
+    if (!doc || !selection || !objects.length) return;
+    api.checkpoint?.('selection-color');
+    objects.forEach((object) => {
+      if (!object.locked) object.color = color;
+    });
+    api.renderPageCanvas?.(selection.pageIndex);
+    api.updateObjectMenu?.();
+    try { await api.persistCurrent?.(); }
+    catch { try { await api.storage?.putDocument?.(doc); } catch {} }
   }
 
   function injectColorMixer() {
@@ -450,8 +478,33 @@
     menu.insertBefore(button, label || null);
   }
 
+  function recentNativeStylus(event, maxAge = 260) {
+    const detail = window.__inkforgeNativeBridge?.lastStylus || window.__inkforgeLastNativeStylus;
+    if (!detail || performance.now() - Number(detail.receivedAt || 0) > maxAge) return null;
+    if (event && Number.isFinite(detail.x) && Number.isFinite(detail.y)) {
+      const dx = Math.abs(Number(detail.x) - event.clientX);
+      const dy = Math.abs(Number(detail.y) - event.clientY);
+      if (dx > 90 || dy > 90) return null;
+    }
+    return detail;
+  }
+
   function isBarrelButton(event) {
-    return event.pointerType === 'pen' && (event.button === 2 || (event.buttons & 2) !== 0);
+    const nativeStylus = recentNativeStylus(event);
+    const buttonState = Number(nativeStylus?.buttonState || 0);
+    return event.pointerType === 'pen' && (
+      event.button === 2 ||
+      event.button === 5 ||
+      (event.buttons & 2) !== 0 ||
+      (event.buttons & 32) !== 0 ||
+      (event.buttons & 64) !== 0 ||
+      (buttonState & 32) !== 0 ||
+      (buttonState & 64) !== 0 ||
+      !!nativeStylus?.primaryButton ||
+      !!nativeStylus?.secondaryButton ||
+      !!nativeStylus?.barrelButton ||
+      !!nativeStylus?.eraser
+    );
   }
 
   function showStylusHud(message, dx = 0, dy = 0) {

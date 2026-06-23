@@ -8,7 +8,7 @@
   const PDF_OCR_CURRENT_DWELL_MS = 3600;
   const OCR_ACTIVITY_GRACE_MS = 1400;
   const IDLE_OCR_TIMEOUT_MS = 2400;
-  const SHAPE_HOLD_MS = 520;
+  const SHAPE_HOLD_MS = 650;
   const nativeApi = window.InkForgeNative;
   const pending = new Map();
   const ocrTimers = new Map();
@@ -22,6 +22,7 @@
   let activePageDwell = { documentId: null, pageId: null, pageIndex: -1, enteredAt: Date.now(), timer: 0 };
   let lastStylusEventAt = 0;
   let lastStylusDetail = null;
+  let lastStylusChipShownAt = 0;
   let stylusGesture = null;
   let eraserRestoreTool = null;
   let pullState = null;
@@ -152,7 +153,7 @@
   }
 
   function groupStrokeLines(strokes) {
-    const items = (strokes || []).map((stroke) => ({ stroke, bounds: strokeBounds(stroke) }))
+    const items = (strokes || []).map((stroke, order) => ({ stroke, order, bounds: strokeBounds(stroke) }))
       .sort((a, b) => (a.bounds.y + a.bounds.h / 2) - (b.bounds.y + b.bounds.h / 2));
     const lines = [];
     for (const item of items) {
@@ -182,7 +183,7 @@
     }
     return lines.sort((a, b) => a.bounds.y - b.bounds.y).map((line) => ({
       bounds: line.bounds,
-      strokes: line.items.sort((a, b) => a.bounds.x - b.bounds.x).map((item) => item.stroke)
+      strokes: line.items.sort((a, b) => a.order - b.order).map((item) => item.stroke)
     }));
   }
 
@@ -240,16 +241,19 @@
       progress(`네이티브 ${languageTag === 'ko' ? '한글' : '영문'} 인식 ${index}/${total}`);
       try {
         const result = await recognizeNativeInk(line.strokes, languageTag, {
-          preContext: preContext.slice(-120),
+          preContext: preContext.slice(-20),
           maxCandidates: mode === 'auto' ? 10 : 8
         });
         const choices = candidateTexts(result);
-        if (choices.length) {
+        const ranked = choices
+          .map((text) => ({ text, score: textCandidateScore(text, languageTag, mode) }))
+          .sort((a, b) => b.score - a.score);
+        if (ranked.length) {
           results.push({
             languageTag,
             result,
-            choices,
-            score: textCandidateScore(choices[0], languageTag, mode)
+            choices: ranked.map((item) => item.text),
+            score: ranked[0].score
           });
         }
       } catch (error) {
@@ -662,6 +666,13 @@
 
   function setRecognitionChip(text, tone = 'idle') {
     let chip = document.getElementById('nativeRecognitionChip');
+    const message = String(text || '');
+    const suppressAutoStatus = /OCR 자동 색인|OCR 대기|OCR 준비|네이티브 OCR 준비|PDF 한\/영 OCR|기본 OCR 사용/.test(message) || (tone === 'ready' && /OCR|인식|준비/.test(message));
+    if (suppressAutoStatus) {
+      recognitionReadyChipShown = recognitionReadyChipShown || /준비/.test(message);
+      if (chip) chip.hidden = true;
+      return;
+    }
     const readyNotice = tone === 'ready' && /준비/.test(String(text || ''));
     if (readyNotice && recognitionReadyChipShown && chip) {
       chip.hidden = true;
@@ -688,6 +699,9 @@
 
   function setStylusChip(detail) {
     lastStylusEventAt = Date.now();
+    const buttonsActive = !!(detail?.primaryButton || detail?.secondaryButton || detail?.barrelButton || detail?.eraser);
+    if (!buttonsActive && lastStylusEventAt - lastStylusChipShownAt < 10000) return;
+    lastStylusChipShownAt = lastStylusEventAt;
     let chip = document.getElementById('nativeStylusChip');
     if (!chip) {
       chip = document.createElement('div');
@@ -700,16 +714,21 @@
     chip.querySelector('.stylus-label').textContent = /samsung|s pen/i.test(device) ? 'S Pen 연결됨' : '스타일러스 연결됨';
     chip.classList.add('is-visible');
     clearTimeout(chip._hideTimer);
-    chip._hideTimer = setTimeout(() => chip.classList.remove('is-visible'), 2600);
+    chip._hideTimer = setTimeout(() => chip.classList.remove('is-visible'), buttonsActive ? 900 : 1200);
   }
 
   function rememberNativeStylus(detail) {
+    const buttonState = Number(detail?.buttonState || 0);
     lastStylusDetail = {
       ...detail,
       x: Number(detail?.x),
       y: Number(detail?.y),
       pressure: Number(detail?.pressure),
       toolType: Number(detail?.toolType),
+      buttonState,
+      primaryButton: !!detail?.primaryButton || (buttonState & 32) !== 0,
+      secondaryButton: !!detail?.secondaryButton || (buttonState & 64) !== 0,
+      barrelButton: !!detail?.barrelButton || !!detail?.primaryButton || !!detail?.secondaryButton || (buttonState & 96) !== 0,
       eraser: Number(detail?.toolType) === 4,
       receivedAt: performance.now()
     };

@@ -3,7 +3,7 @@
 
   const VERSION = '3.3.4';
   const PAGE_RENDER_SCALE_LIMIT = 4;
-  const SHAPE_HOLD_MS = 520;
+  const SHAPE_HOLD_MS = 650;
   const DB_NAME = 'inkforge-notes-studio';
   const DB_VERSION = 4;
   const PAGE_WIDTH = 1000;
@@ -37,6 +37,7 @@
     eraser: '<path d="m4 15 8.8-10a2 2 0 0 1 2.8-.2l3.6 3.1a2 2 0 0 1 .2 2.8L11 20H6l-2-2z"/><path d="m8 11 6 5M11 20h10"/>',
     text: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9V7h8v2M12 7v10M9 17h6"/>',
     sticky: '<path d="M4 4h16v12l-4 4H4z"/><path d="M16 20v-4h4M8 9h8M8 13h5"/>',
+    sticker: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/>',
     image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 18 5-5 3 3 3-4 5 6"/>',
     ruler: '<path d="m4 17 13-13 3 3L7 20z"/><path d="m13 8 3 3M10 11l2 2M7 14l3 3"/>',
     mic: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/>',
@@ -357,6 +358,7 @@
     shape: 'line',
     stickyColor: '#ffe58d',
     tapeColor: '#4c91dd',
+    sticker: '★',
     zoom: 1,
     pageMode: 'continuous',
     dock: 'top',
@@ -1140,6 +1142,13 @@
       lines.slice(0, 8).forEach((line, index) => ctx.fillText(line, x + 21, y + 22 + index * (object.fontSize || 25) * 1.38));
       ctx.fillStyle = 'rgba(255,255,255,.28)';
       ctx.beginPath(); ctx.moveTo(x + w - 36, y + h); ctx.lineTo(x + w, y + h - 36); ctx.lineTo(x + w, y + h); ctx.closePath(); ctx.fill();
+    } else if (object.type === 'sticker') {
+      const x = object.x || 100, y = object.y || 100, w = object.w || 120, h = object.h || 120;
+      ctx.globalAlpha = object.opacity ?? 1;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `${object.fontSize || Math.min(w, h) * .72}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
+      ctx.fillText(object.text || '★', x + w / 2, y + h / 2, w);
     } else if (object.type === 'math') {
       const x = object.x || 100, y = object.y || 100, w = object.w || 520, h = object.h || 92;
       ctx.fillStyle = object.background || '#edf5fc';
@@ -1215,6 +1224,17 @@
       const points = session.points || [];
       ctx.save(); ctx.shadowColor = '#f44336'; ctx.shadowBlur = 12;
       strokePathSegments(ctx, points, { width: 5, color: '#f44336', opacity: .85, brush: 'fineliner' });
+      ctx.restore();
+    } else if (session.kind === 'eraser' && session.point) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(20,123,209,.72)';
+      ctx.fillStyle = 'rgba(20,123,209,.1)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      ctx.arc(session.point.x, session.point.y, state.eraserRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
       ctx.restore();
     }
   }
@@ -1850,9 +1870,18 @@
 
   function isStylusEraser(event) {
     const nativeStylus = recentNativeStylus(event);
+    const nativeButtons = Number(nativeStylus?.buttonState || 0);
     return effectivePointerType(event) === 'pen' && (
+      event.button === 2 ||
       event.button === 5 ||
+      (event.buttons & 2) !== 0 ||
       (event.buttons & 32) !== 0 ||
+      (event.buttons & 64) !== 0 ||
+      (nativeButtons & 32) !== 0 ||
+      (nativeButtons & 64) !== 0 ||
+      !!nativeStylus?.primaryButton ||
+      !!nativeStylus?.secondaryButton ||
+      !!nativeStylus?.barrelButton ||
       Number(nativeStylus?.toolType) === 4 ||
       !!nativeStylus?.eraser
     );
@@ -1867,6 +1896,72 @@
   function selectionContains(point) {
     const bounds = selectionBounds(selectedObjects());
     return !!bounds && point.x >= bounds.x && point.x <= bounds.x + bounds.w && point.y >= bounds.y && point.y <= bounds.y + bounds.h;
+  }
+
+  function selectionHandleAt(point) {
+    const bounds = selectionBounds(selectedObjects());
+    if (!bounds) return null;
+    const handles = [
+      ['nw', bounds.x, bounds.y],
+      ['ne', bounds.x + bounds.w, bounds.y],
+      ['sw', bounds.x, bounds.y + bounds.h],
+      ['se', bounds.x + bounds.w, bounds.y + bounds.h]
+    ];
+    const radius = Math.max(16, 11 / Math.max(.55, state.zoom || 1));
+    const match = handles.find(([, x, y]) => Math.hypot(point.x - x, point.y - y) <= radius);
+    return match ? match[0] : null;
+  }
+
+  function normalizeResizeBounds(anchor, point) {
+    const x = clamp(Math.min(anchor.x, point.x), -PAGE_WIDTH * .25, PAGE_WIDTH * 1.25);
+    const y = clamp(Math.min(anchor.y, point.y), -PAGE_HEIGHT * .25, PAGE_HEIGHT * 1.25);
+    const right = clamp(Math.max(anchor.x, point.x), -PAGE_WIDTH * .25, PAGE_WIDTH * 1.25);
+    const bottom = clamp(Math.max(anchor.y, point.y), -PAGE_HEIGHT * .25, PAGE_HEIGHT * 1.25);
+    return { x, y, w: Math.max(18, right - x), h: Math.max(18, bottom - y) };
+  }
+
+  function transformCoordinate(point, from, to) {
+    const sx = to.w / Math.max(1, from.w);
+    const sy = to.h / Math.max(1, from.h);
+    return { ...point, x: to.x + (point.x - from.x) * sx, y: to.y + (point.y - from.y) * sy };
+  }
+
+  function transformObjectFromBounds(object, from, to) {
+    if (object.locked) return;
+    if (object.type === 'stroke') {
+      object.points = object.points.map((point) => transformCoordinate(point, from, to));
+      return;
+    }
+    if (object.type === 'shape' || object.type === 'tape') {
+      const p1 = transformCoordinate({ x: object.x1, y: object.y1 }, from, to);
+      const p2 = transformCoordinate({ x: object.x2, y: object.y2 }, from, to);
+      object.x1 = p1.x; object.y1 = p1.y; object.x2 = p2.x; object.y2 = p2.y;
+      if (Number.isFinite(object.cx) && Number.isFinite(object.cy)) {
+        const control = transformCoordinate({ x: object.cx, y: object.cy }, from, to);
+        object.cx = control.x; object.cy = control.y;
+      }
+      return;
+    }
+    const b = computeBounds(object);
+    const next = transformCoordinate({ x: b.x, y: b.y }, from, to);
+    const sx = to.w / Math.max(1, from.w);
+    const sy = to.h / Math.max(1, from.h);
+    object.x = next.x;
+    object.y = next.y;
+    object.w = Math.max(18, b.w * sx);
+    object.h = Math.max(18, b.h * sy);
+    if (object.type === 'sticker') object.fontSize = Math.max(18, (object.fontSize || 84) * Math.min(sx, sy));
+  }
+
+  function applySelectionResize(session, point) {
+    const nextBounds = normalizeResizeBounds(session.anchor, point);
+    session.objects.forEach((object) => {
+      const live = currentDocument()?.pages?.[session.pageIndex]?.objects?.find((item) => item.id === object.id);
+      if (!live) return;
+      Object.assign(live, deepClone(object));
+      transformObjectFromBounds(live, session.startBounds, nextBounds);
+    });
+    session.resized = true;
   }
 
   function distanceToSegment(point, a, b) {
@@ -2009,7 +2104,7 @@
     const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
     const compact = Math.max(metrics.bounds.w, metrics.bounds.h) < 460 && Math.min(metrics.bounds.w, metrics.bounds.h) > 12;
     const notClosedShape = metrics.closure > diagonal * .42 || metrics.reversals >= 6;
-    const dense = compact && notClosedShape && metrics.length > Math.max(220, diagonal * 4.8) && metrics.reversals >= 4;
+    const dense = compact && notClosedShape && metrics.length > Math.max(240, diagonal * 5.3) && metrics.reversals >= 5;
     if (!dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
@@ -2127,7 +2222,9 @@
     const metrics = strokeMetrics(points);
     const diagonal = Math.max(1, Math.hypot(metrics.bounds.w, metrics.bounds.h));
     if (diagonal < 18) return null;
-    const highConfidence = holdDuration >= SHAPE_HOLD_MS;
+    const maxPressure = points.reduce((best, point) => Math.max(best, Number(point.p || 0)), 0);
+    const requiredHold = maxPressure >= .72 ? Math.max(540, SHAPE_HOLD_MS * .66) : SHAPE_HOLD_MS;
+    const highConfidence = holdDuration >= requiredHold;
     if (!highConfidence) return null;
     const direct = distance(points[0], points[points.length - 1]);
     const straightness = direct / Math.max(1, metrics.length);
@@ -2269,10 +2366,24 @@
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return;
 
-    if (effectiveTool === 'lasso' && state.selection?.pageIndex === pageIndex && selectionContains(point)) {
-      checkpoint('move-selection');
-      state.drawSession = { kind: 'move-selection', pageIndex, lastPoint: point, moved: false };
-      return;
+    if (effectiveTool === 'lasso' && state.selection?.pageIndex === pageIndex) {
+      const handle = selectionHandleAt(point);
+      if (handle) {
+        const startBounds = selectionBounds(selectedObjects());
+        if (!startBounds) return;
+        const anchor = {
+          x: handle.includes('e') ? startBounds.x : startBounds.x + startBounds.w,
+          y: handle.includes('s') ? startBounds.y : startBounds.y + startBounds.h
+        };
+        checkpoint('resize-selection');
+        state.drawSession = { kind: 'resize-selection', pageIndex, pointerId: event.pointerId, startBounds, anchor, objects: deepClone(selectedObjects()), resized: false };
+        return;
+      }
+      if (selectionContains(point)) {
+        checkpoint('move-selection');
+        state.drawSession = { kind: 'move-selection', pageIndex, pointerId: event.pointerId, lastPoint: point, moved: false };
+        return;
+      }
     }
     if (effectiveTool === 'pen' || effectiveTool === 'highlighter') {
       const brush = effectiveTool === 'highlighter' ? 'highlighter' : state.brush;
@@ -2283,7 +2394,7 @@
       };
     } else if (effectiveTool === 'eraser') {
       checkpoint('erase');
-      state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, changed: eraseAt(pageIndex, point) };
+      state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, point, changed: eraseAt(pageIndex, point) };
       renderPageCanvas(pageIndex);
     } else if (effectiveTool === 'lasso') {
       state.selection = null;
@@ -2329,10 +2440,15 @@
         let next = eventPoint(sample, canvas);
         if (state.ruler.visible) next = constrainToRuler(next);
         const last = session.object.points[session.object.points.length - 1];
-        if (!last || distance(last, next) > .45) { session.object.points.push(next); session.lastMovedAt = performance.now(); }
+        const movedDistance = last ? distance(last, next) : Infinity;
+        if (!last || movedDistance > .45) {
+          session.object.points.push(next);
+          if (movedDistance > 2.2) session.lastMovedAt = performance.now();
+        }
       }
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'eraser') {
+      session.point = point;
       session.changed = eraseAt(pageIndex, point) || session.changed;
       scheduleRenderPage(pageIndex);
     } else if (session.kind === 'lasso') {
@@ -2349,6 +2465,9 @@
       const dx = point.x - session.lastPoint.x, dy = point.y - session.lastPoint.y;
       selectedObjects().forEach((object) => translateObject(object, dx, dy));
       session.lastPoint = point; session.moved = true;
+      scheduleRenderPage(pageIndex); updateObjectMenu();
+    } else if (session.kind === 'resize-selection') {
+      applySelectionResize(session, point);
       scheduleRenderPage(pageIndex); updateObjectMenu();
     } else if (session.kind === 'pan') {
       const viewport = $('#editorViewport');
@@ -2398,7 +2517,7 @@
       }).map((object) => object.id);
       state.selection = ids.length ? { pageIndex: session.pageIndex, ids, polygon } : null;
     } else if (session.kind === 'eraser' && session.changed) persistCurrent();
-    else if (session.kind === 'move-selection' && session.moved) persistCurrent();
+    else if ((session.kind === 'move-selection' && session.moved) || (session.kind === 'resize-selection' && session.resized)) persistCurrent();
     state.drawSession = null;
     renderPageCanvas(session.pageIndex);
     renderSidebar();
@@ -2579,6 +2698,31 @@
     state.currentPageIndex = pending.pageIndex;
     state.pendingInsert = null;
     persistCurrent(); closeModal(); renderEditorPages(); renderSidebar();
+  }
+
+  function insertSticker(text = state.sticker || '★') {
+    const pageIndex = state.currentPageIndex;
+    const page = currentDocument()?.pages?.[pageIndex];
+    if (!page) return;
+    checkpoint('sticker');
+    const sticker = {
+      id: uid('sticker'),
+      type: 'sticker',
+      x: PAGE_WIDTH / 2 - 70,
+      y: Math.max(90, PAGE_HEIGHT * .28),
+      w: 140,
+      h: 140,
+      text,
+      fontSize: 92,
+      color: state.color,
+      createdAt: now()
+    };
+    page.objects.push(sticker);
+    state.selection = { pageIndex, ids: [sticker.id] };
+    persistCurrent();
+    renderPageCanvas(pageIndex);
+    renderSidebar();
+    updateObjectMenu();
   }
 
   function openMathSheet() {
@@ -2903,9 +3047,21 @@
       { action:'select-tool-menu', attrs:'data-tool="highlighter"', icon:'highlighter', title:'형광펜', description:'반투명 마커로 중요한 부분을 표시합니다.' },
       { action:'select-tool-menu', attrs:'data-tool="shape"', icon:'shape', title:'도형', description:'선, 화살표, 다각형, 별, 말풍선 등 다양한 도형을 만듭니다.' },
       { action:'select-tool-menu', attrs:'data-tool="tape"', icon:'tape', title:'암기 테이프', description:'내용을 가렸다가 탭해 정답을 확인합니다.' },
+      { action:'sticker-menu', icon:'sticker', title:'스티커', description:'페이지 가운데에 선택한 스티커를 추가합니다.' },
       { action:'select-tool-menu', attrs:'data-tool="laser"', icon:'laser', title:'레이저 포인터', description:'저장되지 않는 발표용 포인터입니다.' },
       { action:'select-tool-menu', attrs:'data-tool="hand"', icon:'hand', title:'손 도구', description:'확대·이동과 읽기에 사용합니다.' }
     ]);
+  }
+
+  function openStickerMenu() {
+    const stickers = ['★','✓','!','?','❤','⚑','→','○','□','△'];
+    showMenu('스티커', 'Sticker', stickers.map((sticker) => ({
+      action: 'select-sticker',
+      attrs: `data-sticker="${escapeHtml(sticker)}"`,
+      icon: 'sticker',
+      title: sticker,
+      description: '선택한 스티커를 현재 페이지에 추가합니다.'
+    })));
   }
 
   function openEditorMore() {
@@ -3033,6 +3189,8 @@
       case 'insert-page-after': addPage(Number(target.dataset.pageIndex)); break;
       case 'share': openShareMenu(); break;
       case 'editor-more': openEditorMore(); break;
+      case 'sticker-menu': openStickerMenu(); break;
+      case 'select-sticker': state.sticker = target.dataset.sticker || state.sticker; closeModal(); insertSticker(state.sticker); break;
       case 'undo': undo(); break;
       case 'redo': redo(); break;
       case 'cycle-dock': {
@@ -3128,7 +3286,10 @@
       case 'selection-cut': copySelection(true); break;
       case 'selection-copy': copySelection(false); break;
       case 'selection-duplicate': duplicateSelection(); break;
-      case 'selection-color': cycleSelectionColor(); break;
+      case 'selection-color':
+        if (window.__inkforge32?.openColorMixer) window.__inkforge32.openColorMixer('selection');
+        else cycleSelectionColor();
+        break;
       case 'selection-lock': toggleSelectionLock(); break;
       case 'selection-front': bringSelectionFront(); break;
       case 'selection-delete': deleteSelection(); break;
@@ -3160,6 +3321,16 @@
     }
     const actionTarget = event.target.closest('[data-action]');
     if (actionTarget) handleAction(actionTarget.dataset.action, actionTarget, event).catch((error) => toast(error.message || String(error)));
+  }
+
+  function handleActiveToolMenuClick(event) {
+    const actionTarget = event.target.closest?.('[data-action]');
+    if (!actionTarget || !$('#activeToolMenu')?.contains(actionTarget)) return;
+    if (actionTarget.dataset.action !== 'set-eraser-mode') return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.eraserMode = actionTarget.dataset.mode || state.eraserMode;
+    renderActiveToolMenu();
   }
 
   function handleCanvasTap(event) {
@@ -3213,6 +3384,7 @@
   }
 
   function bindEvents() {
+    $('#activeToolMenu')?.addEventListener('click', handleActiveToolMenuClick, true);
     document.addEventListener('click', handleClick);
     document.addEventListener('keydown', handleKeydown);
     $('#modalBackdrop').addEventListener('click', closeModal);
@@ -3319,6 +3491,7 @@
       scheduleRenderPage,
       renderSidebar,
       renderDocumentSearch,
+      updateObjectMenu,
       checkpoint,
       persistCurrent,
       currentDocument,

@@ -865,12 +865,16 @@ public final class MainActivity extends Activity {
                 int maxCandidates
         ) {
             DigitalInkRecognizer recognizer = recognizerFor(languageTag);
+            String contextText = preContext == null ? "" : preContext;
+            if (contextText.length() > 20) {
+                contextText = contextText.substring(contextText.length() - 20);
+            }
             RecognitionContext context = RecognitionContext.builder()
                     .setWritingArea(new WritingArea(
                             Math.max(1, width),
                             Math.max(1, height)
                     ))
-                    .setPreContext(preContext == null ? "" : preContext)
+                    .setPreContext(contextText)
                     .build();
             recognizer.recognize(ink, context)
                     .addOnSuccessListener(result -> {
