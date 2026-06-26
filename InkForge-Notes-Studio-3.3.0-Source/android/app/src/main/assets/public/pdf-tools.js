@@ -98,6 +98,7 @@
     }
 
     const doc = api.createDocument(baseName(file), 'blank');
+    doc.folderId = typeof api.activeLibraryFolderId === 'function' ? api.activeLibraryFolderId() : 'root';
     doc.pages = [];
     doc.coverColor = '#2f7fb7';
     doc.pdfSourceName = file.name;

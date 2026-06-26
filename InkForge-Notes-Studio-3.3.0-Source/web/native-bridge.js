@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.16';
+  const VERSION = '3.3.17';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,9 +11,9 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '문질러 지우기 삭제 반경을 실제 문지른 경로에 더 가깝게 줄여, 닿지 않은 옆 객체가 같이 삭제되는 문제를 줄였습니다.',
-    '손 잠금 상태에서 터치가 최근 S펜 이벤트 때문에 펜 입력으로 오인되어 써지는 경로를 차단했습니다.',
-    '연필 브러시는 렌더 전용 점 정리와 제한된 질감 레이어를 사용해 확대 상태의 긴 획 렉을 줄였습니다.'
+    '활성 폴더 화면에서 폴더 삭제 버튼을 사용할 수 있습니다.',
+    '폴더 삭제 시 폴더 안의 노트는 삭제하지 않고 문서 루트로 자동 이동합니다.',
+    '폴더 안에서 만든 일반 새 노트, PDF 새 노트, 가져온 IFNOTE가 해당 폴더에 저장되도록 수정했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;

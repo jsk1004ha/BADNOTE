@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.16';
+  const VERSION = '3.3.17';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -473,6 +473,11 @@
     positionSaveTimer: 0,
     testReady: false
   };
+
+  function activeLibraryFolderId() {
+    if (state.libraryFilter !== 'all' || state.folderId === 'root') return 'root';
+    return state.folders.some((folder) => folder.id === state.folderId && folder.id !== 'root') ? state.folderId : 'root';
+  }
 
   function currentDocument() {
     return state.documents.find((doc) => doc.id === state.currentDocumentId) || null;
@@ -1610,6 +1615,13 @@
     $('#globalSearchInput').value = state.globalQuery;
     $('#globalSearchPanel').hidden = !state.globalQuery && $('#globalSearchPanel').dataset.open !== '1';
     $$('.rail-button[data-library-filter], .mobile-nav-button[data-library-filter]').forEach((button) => button.classList.toggle('is-active', button.dataset.libraryFilter === state.libraryFilter));
+    const deleteFolderButton = $('#deleteFolderButton');
+    const folderActionsVisible = state.libraryFilter === 'all' && state.folderId !== 'root' && activeFolder.id !== 'root';
+    if (deleteFolderButton) {
+      deleteFolderButton.hidden = !folderActionsVisible;
+      if (folderActionsVisible) deleteFolderButton.dataset.folderId = activeFolder.id;
+      else delete deleteFolderButton.dataset.folderId;
+    }
     const breadcrumb = $('#folderBreadcrumb');
     if (breadcrumb) {
       breadcrumb.innerHTML = state.libraryFilter === 'all' && state.folderId !== 'root'
@@ -3846,6 +3858,7 @@
       data.id = uid('doc');
       data.title = `${data.title || '가져온 노트'}`;
       data.appVersion = VERSION;
+      data.folderId = activeLibraryFolderId();
       data.updatedAt = now();
       data.createdAt = data.createdAt || now();
       data.trashed = false;
@@ -3879,7 +3892,7 @@
     const template = $('#newNoteSheet').dataset.template || $('.template-option.is-active')?.dataset.templateId || 'grid';
     const title = $('#newNoteTitle').value.trim() || '새 노트';
     const doc = createDocument(title, template);
-    doc.folderId = state.folderId === 'root' ? 'root' : state.folderId;
+    doc.folderId = activeLibraryFolderId();
     state.documents.push(doc);
     await storage.putDocument(deepClone(doc));
     closeModal();
@@ -3912,6 +3925,34 @@
     renderLibrary();
     toast(`${folder.title} 폴더를 만들었습니다.`);
     return folder;
+  }
+
+  async function deleteFolder(folderId = state.folderId, options = {}) {
+    const folder = state.folders.find((item) => item.id === folderId && item.id !== 'root');
+    if (!folder) return false;
+    const containedDocs = state.documents.filter((doc) => doc.folderId === folder.id);
+    const shouldConfirm = options.confirm !== false;
+    if (shouldConfirm) {
+      const message = containedDocs.length
+        ? `${folder.title} 폴더를 삭제하고 ${containedDocs.length}개 노트를 문서로 이동할까요?`
+        : `${folder.title} 폴더를 삭제할까요?`;
+      if (!confirm(message)) return false;
+    }
+    state.folders = normalizeFolders(state.folders.filter((item) => item.id !== folder.id));
+    const changedDocs = [];
+    for (const doc of containedDocs) {
+      doc.folderId = 'root';
+      doc.updatedAt = now();
+      changedDocs.push(storage.putDocument(deepClone(doc)));
+    }
+    await Promise.all(changedDocs);
+    await persistFolders();
+    if (state.folderId === folder.id) state.folderId = 'root';
+    state.libraryFilter = 'all';
+    state.globalQuery = '';
+    renderLibrary();
+    toast(containedDocs.length ? `${folder.title} 폴더를 삭제하고 ${containedDocs.length}개 노트를 문서로 이동했습니다.` : `${folder.title} 폴더를 삭제했습니다.`);
+    return true;
   }
 
   function duplicateDocument(id) {
@@ -4120,6 +4161,7 @@
       case 'new-note': openNewNoteSheet(); break;
       case 'new-note-pdf': closeModal(); window.__inkforgePdf?.openPicker({ createNew: true }); break;
       case 'create-folder': await createFolder(); break;
+      case 'delete-folder': await deleteFolder(target.dataset.folderId || state.folderId); break;
       case 'create-note': await createNewNote(); break;
       case 'close-modal': closeModal(); break;
       case 'sort-menu': openSortMenu(); break;
@@ -4258,6 +4300,9 @@
       $('#newNoteSheet').dataset.template = templateOption.dataset.templateId;
       return;
     }
+    const actionTarget = event.target.closest('[data-action]');
+    if (actionTarget) handleAction(actionTarget.dataset.action, actionTarget, event).catch((error) => toast(error.message || String(error)));
+    if (actionTarget) return;
     const folderButton = event.target.closest('[data-folder-id]');
     if (folderButton) {
       state.folderId = folderButton.dataset.folderId || 'root'; state.libraryFilter = 'all'; renderLibrary(); return;
@@ -4271,8 +4316,6 @@
       else setTool(tool);
       return;
     }
-    const actionTarget = event.target.closest('[data-action]');
-    if (actionTarget) handleAction(actionTarget.dataset.action, actionTarget, event).catch((error) => toast(error.message || String(error)));
   }
 
   function handleActiveToolMenuClick(event) {
@@ -4503,7 +4546,10 @@
       computeBounds,
       toast,
       createDocument,
+      createNewNote,
       createFolder,
+      deleteFolder,
+      activeLibraryFolderId,
       persistFolders,
       blankPage,
       maybeShapeFromStroke,

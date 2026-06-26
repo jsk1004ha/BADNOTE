@@ -53,6 +53,8 @@ input, textarea { user-select: text; -webkit-user-select: text; }
 .icon-button:active { transform: scale(.94); }
 .icon-button.compact { width: 36px; height: 36px; border-radius: 10px; }
 .icon-button.plain:hover { background: rgba(255,255,255,.07); }
+.icon-button.danger-button { color: #ff8c8c; }
+.icon-button.danger-button:hover { background: rgba(210,70,70,.13); color: #ffc2c2; }
 
 .primary-button, .secondary-button, .sort-button {
   display: inline-flex;

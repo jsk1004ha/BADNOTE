@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.16');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.17');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -178,25 +178,42 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const before = api.state.folders.length;
             const folder = await api.createFolder('수학 풀이');
             const stored = await api.storage.getSetting('folders', []);
-            const doc = api.createDocument('폴더 테스트 노트', 'grid');
-            doc.folderId = folder.id;
-            api.state.documents.push(doc);
-            await api.storage.putDocument(doc);
+            const afterCreate = api.state.folders.length;
+            document.getElementById('newNoteSheet').dataset.template = 'grid';
+            document.getElementById('newNoteTitle').value = '폴더 테스트 노트';
+            await api.createNewNote();
+            const doc = api.state.documents.find(item => item.title === '폴더 테스트 노트');
+            const persistedBeforeDelete = (await api.storage.allDocuments()).find(item => item.id === doc.id);
+            api.state.libraryFilter = 'all';
+            api.state.folderId = folder.id;
             api.renderLibrary();
             const breadcrumb = document.getElementById('folderBreadcrumb')?.textContent || '';
             const folderVisible = Array.from(document.querySelectorAll('[data-doc-id]')).some(node => node.dataset.docId === doc.id);
+            const docCreatedInFolder = doc?.folderId === folder.id && persistedBeforeDelete?.folderId === folder.id;
             const createButtons = document.querySelectorAll('[data-action="create-folder"]').length;
+            const deleteButtonVisible = document.getElementById('deleteFolderButton')?.hidden === false;
+            const deleted = await api.deleteFolder(folder.id, { confirm: false });
+            const storedAfterDelete = await api.storage.getSetting('folders', []);
+            const persistedDoc = (await api.storage.allDocuments()).find(item => item.id === doc.id);
+            const folderRemoved = !api.state.folders.some(item => item.id === folder.id) && !storedAfterDelete.some(item => item.id === folder.id);
+            const docMovedToRoot = doc.folderId === 'root' && persistedDoc?.folderId === 'root';
             api.state.folderId = 'root';
             api.renderLibrary();
             return {
               before,
-              after: api.state.folders.length,
+              afterCreate,
+              afterDelete: api.state.folders.length,
               storedCount: Array.isArray(stored) ? stored.length : 0,
               folderId: folder.id,
               breadcrumb,
               folderVisible,
+              docCreatedInFolder,
               createButtons,
-              passed: api.state.folders.length === before + 1 && stored.some(item => item.id === folder.id) && breadcrumb.includes('수학 풀이') && folderVisible && createButtons >= 1
+              deleteButtonVisible,
+              deleted,
+              folderRemoved,
+              docMovedToRoot,
+              passed: afterCreate === before + 1 && stored.some(item => item.id === folder.id) && breadcrumb.includes('수학 풀이') && folderVisible && docCreatedInFolder && createButtons >= 1 && deleteButtonVisible && deleted && folderRemoved && docMovedToRoot && api.state.folders.length === before
             };
           }
         """)
@@ -1303,7 +1320,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.16" and results.get("upgrade_version") == "3.3.16" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.17" and results.get("upgrade_version") == "3.3.17" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

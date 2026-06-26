@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#2f5688" />
   <meta name="color-scheme" content="light dark" />
-  <title>bad note 3.3.16</title>
+  <title>bad note 3.3.17</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
@@ -50,6 +50,7 @@
             <button class="primary-button new-note-button" data-action="new-note"><span data-icon-host="plus"></span><span>신규</span><span class="split-lock" data-icon-host="chevron-down"></span></button>
             <span class="command-divider"></span>
             <button class="icon-button plain" data-action="create-folder" data-icon="folderPlus" aria-label="폴더 생성"></button>
+            <button id="deleteFolderButton" class="icon-button plain danger-button" data-action="delete-folder" data-icon="trash" aria-label="폴더 삭제" hidden></button>
             <button class="sort-button" data-action="sort-menu"><span id="sortLabel">날짜</span><span data-icon-host="chevron-down"></span></button>
             <button class="icon-button plain" data-action="toggle-view" data-icon="grid" aria-label="보기 방식 전환"></button>
             <button class="icon-button plain" data-action="selection-mode" data-icon="check-circle" aria-label="문서 선택"></button>
