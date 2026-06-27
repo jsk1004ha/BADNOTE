@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.17';
+  const VERSION = '3.3.18';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -209,18 +209,38 @@
 
   function normalizeFolders(folders) {
     const source = Array.isArray(folders) ? folders : DEFAULT_FOLDERS;
-    const normalized = [deepClone(DEFAULT_FOLDERS[0])];
+    const normalized = [{ ...deepClone(DEFAULT_FOLDERS[0]), parentId: null }];
     const seen = new Set(['root']);
     for (const folder of source) {
-      if (!folder || folder.id === 'root' || seen.has(folder.id)) continue;
+      const id = String(folder?.id || '').trim();
+      if (!folder || id === 'root' || seen.has(id)) continue;
       const title = String(folder.title || '').trim().slice(0, 40);
       if (!title) continue;
       normalized.push({
-        id: String(folder.id),
+        id,
         title,
-        color: /^#[0-9a-f]{6}$/i.test(folder.color || '') ? folder.color : FOLDER_COLORS[normalized.length % FOLDER_COLORS.length]
+        color: /^#[0-9a-f]{6}$/i.test(folder.color || '') ? folder.color : FOLDER_COLORS[normalized.length % FOLDER_COLORS.length],
+        parentId: String(folder.parentId || 'root')
       });
-      seen.add(String(folder.id));
+      seen.add(id);
+    }
+    const byId = new Map(normalized.map((folder) => [folder.id, folder]));
+    for (const folder of normalized) {
+      if (folder.id === 'root') {
+        folder.parentId = null;
+        continue;
+      }
+      if (!byId.has(folder.parentId) || folder.parentId === folder.id) folder.parentId = 'root';
+      const ancestry = new Set([folder.id]);
+      let cursor = folder.parentId;
+      while (cursor && cursor !== 'root') {
+        if (ancestry.has(cursor)) {
+          folder.parentId = 'root';
+          break;
+        }
+        ancestry.add(cursor);
+        cursor = byId.get(cursor)?.parentId || 'root';
+      }
     }
     return normalized;
   }
@@ -477,6 +497,25 @@
   function activeLibraryFolderId() {
     if (state.libraryFilter !== 'all' || state.folderId === 'root') return 'root';
     return state.folders.some((folder) => folder.id === state.folderId && folder.id !== 'root') ? state.folderId : 'root';
+  }
+
+  function childFolders(parentId = state.folderId) {
+    const resolvedParentId = state.folders.some((folder) => folder.id === parentId) ? parentId : 'root';
+    return state.folders.filter((folder) => folder.id !== 'root' && (folder.parentId || 'root') === resolvedParentId);
+  }
+
+  function folderPath(folderId = state.folderId) {
+    const byId = new Map(state.folders.map((folder) => [folder.id, folder]));
+    const path = [];
+    let cursor = byId.get(folderId) || byId.get('root');
+    const seen = new Set();
+    while (cursor && !seen.has(cursor.id)) {
+      path.unshift(cursor);
+      seen.add(cursor.id);
+      if (cursor.id === 'root') break;
+      cursor = byId.get(cursor.parentId || 'root') || byId.get('root');
+    }
+    return path[0]?.id === 'root' ? path : [byId.get('root'), ...path].filter(Boolean);
   }
 
   function currentDocument() {
@@ -1624,20 +1663,32 @@
     }
     const breadcrumb = $('#folderBreadcrumb');
     if (breadcrumb) {
-      breadcrumb.innerHTML = state.libraryFilter === 'all' && state.folderId !== 'root'
-        ? `<button class="breadcrumb" data-folder-id="root">문서</button><span class="breadcrumb-separator">/</span><button class="breadcrumb is-current" data-folder-id="${activeFolder.id}">${escapeHtml(activeFolder.title)}</button>`
-        : '<button class="breadcrumb is-current" data-folder-id="root">문서</button>';
+      if (state.libraryFilter === 'all' && state.folderId !== 'root') {
+        const crumbs = folderPath(activeFolder.id);
+        breadcrumb.innerHTML = crumbs.map((folder, index) => {
+          const isCurrent = index === crumbs.length - 1;
+          const label = folder.id === 'root' ? '문서' : folder.title;
+          const button = `<button class="breadcrumb ${isCurrent ? 'is-current' : ''}" data-folder-id="${folder.id}">${escapeHtml(label)}</button>`;
+          return index === 0 ? button : `<span class="breadcrumb-separator">/</span>${button}`;
+        }).join('');
+      } else {
+        breadcrumb.innerHTML = '<button class="breadcrumb is-current" data-folder-id="root">문서</button>';
+      }
     }
 
     const folderStrip = $('#folderStrip');
-    const showFolders = state.libraryFilter === 'all' && state.folderId === 'root' && !state.globalQuery;
+    const visibleChildFolders = state.libraryFilter === 'all' && !state.globalQuery ? childFolders(activeFolder.id) : [];
+    const showFolders = state.libraryFilter === 'all' && !state.globalQuery;
     folderStrip.hidden = !showFolders;
     if (showFolders) {
-      const folderCards = state.folders.filter((folder) => folder.id !== 'root').map((folder) => {
+      const folderCards = visibleChildFolders.map((folder) => {
         const count = state.documents.filter((doc) => !doc.trashed && doc.folderId === folder.id).length;
-        return `<button class="folder-chip" data-folder-id="${folder.id}"><span class="folder-glyph" style="background:${hexToRgba(folder.color,.28)};color:${folder.color}">${icon('folder')}</span><span class="folder-copy"><strong>${escapeHtml(folder.title)}</strong><small>${count}개 항목</small></span><span class="folder-menu">${icon('chevron-right')}</span></button>`;
+        const nestedCount = childFolders(folder.id).length;
+        const countText = nestedCount ? `${count}개 노트 · ${nestedCount}개 폴더` : `${count}개 노트`;
+        return `<button class="folder-chip" data-folder-id="${folder.id}"><span class="folder-glyph" style="background:${hexToRgba(folder.color,.28)};color:${folder.color}">${icon('folder')}</span><span class="folder-copy"><strong>${escapeHtml(folder.title)}</strong><small>${countText}</small></span><span class="folder-menu">${icon('chevron-right')}</span></button>`;
       }).join('');
-      folderStrip.innerHTML = `${folderCards}<button class="folder-chip folder-create-chip" data-action="create-folder"><span class="folder-glyph">${icon('folderPlus')}</span><span class="folder-copy"><strong>새 폴더</strong><small>노트 묶음 만들기</small></span><span class="folder-menu">${icon('plus')}</span></button>`;
+      const createHint = activeFolder.id === 'root' ? '노트 묶음 만들기' : '이 폴더 안에 만들기';
+      folderStrip.innerHTML = `${folderCards}<button class="folder-chip folder-create-chip" data-action="create-folder"><span class="folder-glyph">${icon('folderPlus')}</span><span class="folder-copy"><strong>새 폴더</strong><small>${createHint}</small></span><span class="folder-menu">${icon('plus')}</span></button>`;
     }
 
     const grid = $('#documentGrid');
@@ -1654,7 +1705,7 @@
 
     const docs = visibleDocuments();
     $('#libraryCount').textContent = `${docs.length}개`;
-    $('#libraryEmpty').hidden = docs.length !== 0;
+    $('#libraryEmpty').hidden = docs.length !== 0 || visibleChildFolders.length !== 0;
     grid.hidden = docs.length === 0;
     grid.innerHTML = docs.map((doc) => `<article class="document-card" data-doc-id="${doc.id}" tabindex="0" aria-label="${escapeHtml(doc.title)} 열기">
       <div class="document-cover"><canvas class="document-thumbnail" data-doc-thumb="${doc.id}" aria-hidden="true"></canvas><span class="cover-accent" style="--cover:${doc.coverColor || '#2f7fb7'}"></span>
@@ -3903,7 +3954,8 @@
     const requested = title == null ? prompt('새 폴더 이름', '새 폴더') : title;
     const name = String(requested || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     if (!name) return null;
-    const duplicate = state.folders.find((folder) => normalizeText(folder.title) === normalizeText(name));
+    const parentId = activeLibraryFolderId();
+    const duplicate = state.folders.find((folder) => (folder.parentId || 'root') === parentId && normalizeText(folder.title) === normalizeText(name));
     if (duplicate) {
       state.libraryFilter = 'all';
       state.folderId = duplicate.id;
@@ -3915,7 +3967,8 @@
     const folder = {
       id: uid('folder'),
       title: name,
-      color: FOLDER_COLORS[(state.folders.length - 1) % FOLDER_COLORS.length]
+      color: FOLDER_COLORS[(state.folders.length - 1) % FOLDER_COLORS.length],
+      parentId
     };
     state.folders.push(folder);
     state.libraryFilter = 'all';
@@ -3930,28 +3983,30 @@
   async function deleteFolder(folderId = state.folderId, options = {}) {
     const folder = state.folders.find((item) => item.id === folderId && item.id !== 'root');
     if (!folder) return false;
+    const destinationId = state.folders.some((item) => item.id === folder.parentId) ? folder.parentId : 'root';
     const containedDocs = state.documents.filter((doc) => doc.folderId === folder.id);
+    const containedFolders = childFolders(folder.id);
     const shouldConfirm = options.confirm !== false;
     if (shouldConfirm) {
-      const message = containedDocs.length
-        ? `${folder.title} 폴더를 삭제하고 ${containedDocs.length}개 노트를 문서로 이동할까요?`
+      const childCopy = containedFolders.length ? `, 하위 폴더 ${containedFolders.length}개` : '';
+      const message = containedDocs.length || containedFolders.length
+        ? `${folder.title} 폴더를 삭제하고 ${containedDocs.length}개 노트${childCopy}를 상위 폴더로 이동할까요?`
         : `${folder.title} 폴더를 삭제할까요?`;
       if (!confirm(message)) return false;
     }
+    for (const child of containedFolders) child.parentId = destinationId;
     state.folders = normalizeFolders(state.folders.filter((item) => item.id !== folder.id));
-    const changedDocs = [];
     for (const doc of containedDocs) {
-      doc.folderId = 'root';
+      doc.folderId = destinationId;
       doc.updatedAt = now();
-      changedDocs.push(storage.putDocument(deepClone(doc)));
+      await storage.putDocument(deepClone(doc));
     }
-    await Promise.all(changedDocs);
     await persistFolders();
-    if (state.folderId === folder.id) state.folderId = 'root';
+    if (state.folderId === folder.id) state.folderId = destinationId;
     state.libraryFilter = 'all';
     state.globalQuery = '';
     renderLibrary();
-    toast(containedDocs.length ? `${folder.title} 폴더를 삭제하고 ${containedDocs.length}개 노트를 문서로 이동했습니다.` : `${folder.title} 폴더를 삭제했습니다.`);
+    toast(containedDocs.length || containedFolders.length ? `${folder.title} 폴더를 삭제하고 하위 항목을 상위 폴더로 이동했습니다.` : `${folder.title} 폴더를 삭제했습니다.`);
     return true;
   }
 
@@ -4550,6 +4605,8 @@
       createFolder,
       deleteFolder,
       activeLibraryFolderId,
+      childFolders,
+      folderPath,
       persistFolders,
       blankPage,
       maybeShapeFromStroke,

@@ -16,8 +16,8 @@ android {
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 347
-        versionName '3.3.17'
+        versionCode 348
+        versionName '3.3.18'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }

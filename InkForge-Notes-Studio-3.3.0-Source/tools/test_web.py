@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.17');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.18');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -192,28 +192,61 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const docCreatedInFolder = doc?.folderId === folder.id && persistedBeforeDelete?.folderId === folder.id;
             const createButtons = document.querySelectorAll('[data-action="create-folder"]').length;
             const deleteButtonVisible = document.getElementById('deleteFolderButton')?.hidden === false;
+            const child = await api.createFolder('단원 1');
+            const afterChildCreate = api.state.folders.length;
+            const childParented = child?.parentId === folder.id;
+            api.state.folderId = folder.id;
+            api.state.libraryFilter = 'all';
+            api.renderLibrary();
+            const childVisibleInParent = Array.from(document.querySelectorAll('[data-folder-id]')).some(node => node.dataset.folderId === child.id);
+            api.state.folderId = child.id;
+            api.state.libraryFilter = 'all';
+            api.renderLibrary();
+            const childBreadcrumb = document.getElementById('folderBreadcrumb')?.textContent || '';
+            document.getElementById('newNoteSheet').dataset.template = 'grid';
+            document.getElementById('newNoteTitle').value = '하위 폴더 테스트 노트';
+            await api.createNewNote();
+            const childDoc = api.state.documents.find(item => item.title === '하위 폴더 테스트 노트');
+            const persistedChildBeforeDelete = (await api.storage.allDocuments()).find(item => item.id === childDoc.id);
+            const childDocCreatedInChild = childDoc?.folderId === child.id && persistedChildBeforeDelete?.folderId === child.id;
+            const childDeleted = await api.deleteFolder(child.id, { confirm: false });
+            const persistedChildAfterDelete = (await api.storage.allDocuments()).find(item => item.id === childDoc.id);
+            const childRemoved = !api.state.folders.some(item => item.id === child.id);
+            const childDocMovedToParent = childDoc.folderId === folder.id && persistedChildAfterDelete?.folderId === folder.id;
             const deleted = await api.deleteFolder(folder.id, { confirm: false });
             const storedAfterDelete = await api.storage.getSetting('folders', []);
             const persistedDoc = (await api.storage.allDocuments()).find(item => item.id === doc.id);
+            const persistedChildDoc = (await api.storage.allDocuments()).find(item => item.id === childDoc.id);
             const folderRemoved = !api.state.folders.some(item => item.id === folder.id) && !storedAfterDelete.some(item => item.id === folder.id);
             const docMovedToRoot = doc.folderId === 'root' && persistedDoc?.folderId === 'root';
+            const childDocMovedToRoot = childDoc.folderId === 'root' && persistedChildDoc?.folderId === 'root';
             api.state.folderId = 'root';
             api.renderLibrary();
             return {
               before,
               afterCreate,
+              afterChildCreate,
               afterDelete: api.state.folders.length,
               storedCount: Array.isArray(stored) ? stored.length : 0,
               folderId: folder.id,
+              childFolderId: child.id,
               breadcrumb,
+              childBreadcrumb,
               folderVisible,
               docCreatedInFolder,
+              childParented,
+              childVisibleInParent,
+              childDocCreatedInChild,
+              childDeleted,
+              childRemoved,
+              childDocMovedToParent,
               createButtons,
               deleteButtonVisible,
               deleted,
               folderRemoved,
               docMovedToRoot,
-              passed: afterCreate === before + 1 && stored.some(item => item.id === folder.id) && breadcrumb.includes('수학 풀이') && folderVisible && docCreatedInFolder && createButtons >= 1 && deleteButtonVisible && deleted && folderRemoved && docMovedToRoot && api.state.folders.length === before
+              childDocMovedToRoot,
+              passed: afterCreate === before + 1 && afterChildCreate === before + 2 && stored.some(item => item.id === folder.id) && breadcrumb.includes('수학 풀이') && childBreadcrumb.includes('수학 풀이') && childBreadcrumb.includes('단원 1') && folderVisible && docCreatedInFolder && childParented && childVisibleInParent && childDocCreatedInChild && childDeleted && childRemoved && childDocMovedToParent && createButtons >= 1 && deleteButtonVisible && deleted && folderRemoved && docMovedToRoot && childDocMovedToRoot && api.state.folders.length === before
             };
           }
         """)
@@ -1320,7 +1353,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.17" and results.get("upgrade_version") == "3.3.17" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.18" and results.get("upgrade_version") == "3.3.18" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

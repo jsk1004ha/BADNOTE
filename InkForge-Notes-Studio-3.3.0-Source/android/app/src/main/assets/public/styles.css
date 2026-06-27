@@ -146,9 +146,10 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   justify-content: space-between;
   gap: 16px;
 }
-.breadcrumb-row { display: flex; align-items: center; min-width: 0; overflow: hidden; }
-.breadcrumb { color: #f0f0f0; font-size: 15px; font-weight: 700; padding: 8px 2px; }
-.breadcrumb-separator { color: #757b86; font-weight: 800; padding: 0 9px; }
+.breadcrumb-row { display: flex; align-items: center; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.breadcrumb-row::-webkit-scrollbar { display: none; }
+.breadcrumb { flex: 0 0 auto; color: #f0f0f0; font-size: 15px; font-weight: 700; padding: 8px 2px; }
+.breadcrumb-separator { color: #757b86; font-weight: 800; padding: 0 9px; flex: 0 0 auto; }
 .command-actions { display: flex; align-items: center; gap: 8px; }
 .new-note-button { height: 40px; border-radius: 19px; padding: 0 12px; }
 .new-note-button .split-lock { display: flex; align-items: center; padding-left: 3px; border-left: 1px solid rgba(255,255,255,.22); }
