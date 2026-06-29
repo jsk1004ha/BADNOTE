@@ -80,7 +80,7 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 4172;
     private static final int AUDIO_PERMISSION_REQUEST = 4173;
-    private static final String APP_VERSION = "3.3.19";
+    private static final String APP_VERSION = "3.3.20";
     private static final String RELEASES_API_URL = "https://api.github.com/repos/jsk1004ha/BADNOTE/releases/latest";
     private static final String RELEASES_PAGE_URL = "https://github.com/jsk1004ha/BADNOTE/releases";
 

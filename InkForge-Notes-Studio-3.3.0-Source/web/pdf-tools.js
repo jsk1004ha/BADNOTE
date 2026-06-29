@@ -194,7 +194,9 @@
           importedFromPdf: true,
           backgroundQualityScale: qualityPlan.scale,
           backgroundPixelWidth: qualityPlan.width,
-          backgroundPixelHeight: qualityPlan.height
+          backgroundPixelHeight: qualityPlan.height,
+          pdfPointWidth: base.width,
+          pdfPointHeight: base.height
         };
         importedPages.push(page);
         doc.pages.splice(insertAt + importedPages.length - 1, 0, page);

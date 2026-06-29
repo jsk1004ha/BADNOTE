@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.19';
+  const VERSION = '3.3.20';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -848,6 +848,7 @@
     });
     const [field, direction] = state.sort.split('-');
     docs.sort((a, b) => {
+      if (state.libraryFilter !== 'trash' && !!a.favorite !== !!b.favorite) return a.favorite ? -1 : 1;
       let av = field === 'title' ? normalizeText(a.title) : new Date(a.updatedAt).getTime();
       let bv = field === 'title' ? normalizeText(b.title) : new Date(b.updatedAt).getTime();
       if (av < bv) return direction === 'asc' ? -1 : 1;
@@ -1712,9 +1713,9 @@
     $('#libraryCount').textContent = `${docs.length}개`;
     $('#libraryEmpty').hidden = docs.length !== 0 || visibleChildFolders.length !== 0;
     grid.hidden = docs.length === 0;
-    grid.innerHTML = docs.map((doc) => `<article class="document-card" data-doc-id="${doc.id}" tabindex="0" aria-label="${escapeHtml(doc.title)} 열기">
+    grid.innerHTML = docs.map((doc) => `<article class="document-card ${doc.favorite ? 'is-favorite' : ''}" data-doc-id="${doc.id}" tabindex="0" aria-label="${escapeHtml(doc.title)} 열기">
       <div class="document-cover"><canvas class="document-thumbnail" data-doc-thumb="${doc.id}" aria-hidden="true"></canvas><span class="cover-accent" style="--cover:${doc.coverColor || '#2f7fb7'}"></span>
-        <button class="favorite-toggle ${doc.favorite ? 'is-active' : ''}" data-action="toggle-favorite" data-doc-id="${doc.id}" aria-label="즐겨찾기">${icon('star')}</button>
+        <button class="favorite-toggle ${doc.favorite ? 'is-active' : ''}" data-action="toggle-favorite" data-doc-id="${doc.id}" aria-label="${doc.favorite ? '즐겨찾기 해제' : '즐겨찾기'}" aria-pressed="${doc.favorite ? 'true' : 'false'}">${icon('star')}</button>
       </div>
       <div class="document-meta"><div class="document-title-row"><span class="document-title">${escapeHtml(doc.title)}</span><button class="document-menu" data-action="document-menu" data-doc-id="${doc.id}" aria-label="문서 메뉴">${icon('chevron-down')}</button></div>
       <div class="document-subtitle"><span>${formatDate(doc.updatedAt)}</span><span>${doc.pages?.length || 0}쪽</span></div></div>
@@ -1993,7 +1994,7 @@
     const style = getComputedStyle(stack);
     const widthValue = parseFloat(style.getPropertyValue('--page-width')) || parseFloat(style.width) || 880;
     const pageHeight = Math.max(1, widthValue * PAGE_HEIGHT / PAGE_WIDTH);
-    const gap = parseFloat(style.rowGap || style.gap || '34') || 34;
+    const gap = parseFloat(style.getPropertyValue('--page-gap')) || parseFloat(style.rowGap || style.gap || '34') || 34;
     return { pageHeight, gap, step: pageHeight + gap };
   }
 
@@ -2002,9 +2003,14 @@
     const { step, gap } = pageStackMetrics();
     const spacer = document.createElement('div');
     spacer.className = `page-window-spacer ${className}`;
-    spacer.style.height = `${Math.max(0, missingPages * step - gap)}px`;
+    spacer.style.height = `${Math.max(0, missingPages * step)}px`;
     spacer.setAttribute('aria-hidden', 'true');
     fragment.appendChild(spacer);
+  }
+
+  function appendPageWrapWithGap(fragment, index, pageCount, largeDoc) {
+    fragment.appendChild(createPageWrap(index));
+    fragment.appendChild(createPageInsertGap(index, pageCount, largeDoc));
   }
 
   function renderLargePageWindow(centerIndex = state.currentPageIndex, force = false) {
@@ -2019,7 +2025,7 @@
     if (!force && state.virtualPageWindow.start === start && state.virtualPageWindow.end === end) return false;
     const fragment = document.createDocumentFragment();
     appendPageSpacer(fragment, 'top', start);
-    for (let index = start; index <= end; index++) fragment.appendChild(createPageWrap(index, doc.pages.length, true));
+    for (let index = start; index <= end; index++) appendPageWrapWithGap(fragment, index, doc.pages.length, true);
     appendPageSpacer(fragment, 'bottom', doc.pages.length - end - 1);
     stack.replaceChildren(fragment);
     state.virtualPageWindow = { start, end };
@@ -2027,7 +2033,7 @@
     return true;
   }
 
-  function createPageWrap(index, pageCount, largeDoc) {
+  function createPageWrap(index) {
     const section = document.createElement('section');
     section.className = `page-wrap ${index === state.currentPageIndex ? 'is-active' : ''}`;
     section.dataset.pageIndex = String(index);
@@ -2038,13 +2044,16 @@
     number.className = 'page-number-chip';
     number.textContent = String(index + 1);
     section.append(placeholder, number);
-    if (!largeDoc) {
-      const actions = document.createElement('div');
-      actions.className = 'page-bottom-actions';
-      actions.innerHTML = `<button class="next-page-button" data-action="insert-page-after" data-page-index="${index}">${icon('page-plus')}<span>${index === pageCount - 1 ? '다음 페이지 추가' : '이 페이지 뒤에 추가'}</span></button>`;
-      section.appendChild(actions);
-    }
     return section;
+  }
+
+  function createPageInsertGap(index, pageCount, largeDoc) {
+    const gap = document.createElement('div');
+    const isLast = index === pageCount - 1;
+    gap.className = `page-insert-gap ${isLast ? 'is-last' : ''} ${index === state.currentPageIndex ? 'is-active-gap' : ''} ${largeDoc ? 'is-large-doc' : ''}`;
+    gap.dataset.afterPageIndex = String(index);
+    gap.innerHTML = `<button class="next-page-button" data-action="insert-page-after" data-page-index="${index}">${icon('page-plus')}<span>${isLast ? '다음 페이지 추가' : '이 페이지 뒤에 추가'}</span></button>`;
+    return gap;
   }
 
   function renderEditorPages() {
@@ -2065,7 +2074,7 @@
       renderLargePageWindow(state.currentPageIndex, true);
     } else {
       const fragment = document.createDocumentFragment();
-      doc.pages.forEach((_, index) => fragment.appendChild(createPageWrap(index, doc.pages.length, largeDoc)));
+      doc.pages.forEach((_, index) => appendPageWrapWithGap(fragment, index, doc.pages.length, largeDoc));
       stack.replaceChildren(fragment);
     }
     mountPageCanvas(state.currentPageIndex);
@@ -3959,6 +3968,117 @@
     canvas.toBlob((blob) => blob && downloadBlob(blob, `${safeFilename(doc.title)}-${state.currentPageIndex + 1}.png`), 'image/png');
   }
 
+  function xmlEscape(value) {
+    return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  }
+
+  function xfdfDate(value = now()) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return xfdfDate(now());
+    const pad = (number) => String(number).padStart(2, '0');
+    return `D:${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
+  }
+
+  function isPdfAnnotationObject(object) {
+    return !!object && !object.hidden && object.type !== 'ocrIndex' && object.type !== 'laser';
+  }
+
+  function pdfAnnotationPageSize(page) {
+    const width = Number(page?.pdfPointWidth || page?.pdfViewportWidth || page?.pdfWidth || PAGE_WIDTH);
+    const height = Number(page?.pdfPointHeight || page?.pdfViewportHeight || page?.pdfHeight || PAGE_HEIGHT);
+    return { width: Math.max(1, width), height: Math.max(1, height) };
+  }
+
+  function pdfPoint(point, pageSize) {
+    return {
+      x: point.x / PAGE_WIDTH * pageSize.width,
+      y: pageSize.height - point.y / PAGE_HEIGHT * pageSize.height
+    };
+  }
+
+  function numberAttr(value) {
+    const rounded = Math.round(Number(value || 0) * 100) / 100;
+    return Number.isFinite(rounded) ? String(rounded) : '0';
+  }
+
+  function pdfRect(bounds, pageSize) {
+    const leftTop = pdfPoint({ x: bounds.x, y: bounds.y }, pageSize);
+    const rightBottom = pdfPoint({ x: bounds.x + bounds.w, y: bounds.y + bounds.h }, pageSize);
+    const left = Math.min(leftTop.x, rightBottom.x);
+    const right = Math.max(leftTop.x, rightBottom.x);
+    const bottom = Math.min(leftTop.y, rightBottom.y);
+    const top = Math.max(leftTop.y, rightBottom.y);
+    return [left, bottom, right, top].map(numberAttr).join(',');
+  }
+
+  function colorAttr(color, fallback = '#111827') {
+    const value = String(color || fallback).trim();
+    if (/^#[0-9a-f]{6}$/i.test(value)) return value.toUpperCase();
+    if (/^#[0-9a-f]{3}$/i.test(value)) return `#${value.slice(1).split('').map((ch) => ch + ch).join('')}`.toUpperCase();
+    return fallback;
+  }
+
+  function annotationContents(object) {
+    if (object.type === 'text' || object.type === 'sticky') return object.text || '';
+    if (object.type === 'math') return `${object.expression || ''}${object.result != null ? ` = ${object.result}` : ''}`.trim();
+    if (object.type === 'tape') return '암기 테이프';
+    if (object.type === 'image') return '이미지 주석';
+    if (object.type === 'shape') return object.shape || '도형';
+    return object.brush === 'highlighter' ? '형광펜 주석' : '필기 주석';
+  }
+
+  function buildXfdfAnnotation(object, pageIndex, pageSize) {
+    const bounds = computeBounds(object);
+    const common = `page="${pageIndex}" rect="${pdfRect(bounds, pageSize)}" name="${xmlEscape(object.id || uid('annot'))}" flags="print" creationdate="${xfdfDate(object.createdAt)}" date="${xfdfDate(object.updatedAt || object.createdAt)}"`;
+    const color = colorAttr(object.color || object.fill || object.strokeColor);
+    const opacity = clamp(Number(object.opacity ?? (object.brush === 'highlighter' ? .35 : 1)), .05, 1);
+    const width = Math.max(.5, Number(object.width || object.strokeWidth || 1));
+    if (object.type === 'stroke' && Array.isArray(object.points) && object.points.length) {
+      const gesture = object.points.map((point) => {
+        const mapped = pdfPoint(point, pageSize);
+        return `${numberAttr(mapped.x)},${numberAttr(mapped.y)}`;
+      }).join(' ');
+      return `<ink ${common} color="${color}" width="${numberAttr(width)}" opacity="${numberAttr(opacity)}"><contents>${xmlEscape(annotationContents(object))}</contents><inklist><gesture>${gesture}</gesture></inklist></ink>`;
+    }
+    if (object.type === 'shape') {
+      const p1 = pdfPoint({ x: object.x1, y: object.y1 }, pageSize);
+      const p2 = pdfPoint({ x: object.x2, y: object.y2 }, pageSize);
+      if (['line', 'arrow', 'double-arrow', 'curve', 'arc'].includes(object.shape)) {
+        return `<line ${common} color="${color}" width="${numberAttr(width)}" opacity="${numberAttr(opacity)}" start="${numberAttr(p1.x)},${numberAttr(p1.y)}" end="${numberAttr(p2.x)},${numberAttr(p2.y)}"><contents>${xmlEscape(annotationContents(object))}</contents></line>`;
+      }
+      const tag = ['ellipse', 'circle'].includes(object.shape) ? 'circle' : 'square';
+      return `<${tag} ${common} color="${color}" width="${numberAttr(width)}" opacity="${numberAttr(opacity)}"><contents>${xmlEscape(annotationContents(object))}</contents></${tag}>`;
+    }
+    const text = annotationContents(object);
+    return `<freetext ${common} color="${color}" width="0" opacity="${numberAttr(opacity)}"><contents>${xmlEscape(text)}</contents><defaultappearance>0 0 0 rg /Helv ${numberAttr(object.fontSize || 14)} Tf</defaultappearance></freetext>`;
+  }
+
+  function buildPdfAnnotationsXfdf(doc = currentDocument()) {
+    if (!doc) return { xfdf: '', annotationCount: 0, pageCount: 0 };
+    const annotations = [];
+    (doc.pages || []).forEach((page, pageIndex) => {
+      const pageSize = pdfAnnotationPageSize(page);
+      (page.objects || []).filter(isPdfAnnotationObject).forEach((object) => {
+        annotations.push(buildXfdfAnnotation(object, pageIndex, pageSize));
+      });
+    });
+    const sourceName = doc.pdfSourceName || doc.pages?.find((page) => page.pdfSourceName)?.pdfSourceName || '';
+    const xfdf = `<?xml version="1.0" encoding="UTF-8"?>\n<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">\n  <f href="${xmlEscape(sourceName)}"/>\n  <ids original="${xmlEscape(doc.id || '')}" modified="${xmlEscape(now())}"/>\n  <annots>\n    ${annotations.join('\n    ')}\n  </annots>\n</xfdf>\n`;
+    return { xfdf, annotationCount: annotations.length, pageCount: doc.pages?.length || 0, sourceName };
+  }
+
+  function exportPdfAnnotations() {
+    const doc = currentDocument();
+    if (!doc) return;
+    const result = buildPdfAnnotationsXfdf(doc);
+    if (!result.annotationCount) {
+      toast('내보낼 주석이 없습니다.');
+      return;
+    }
+    downloadBlob(new Blob([result.xfdf], { type: 'application/vnd.adobe.xfdf' }), `${safeFilename(doc.title)}-pdf-annotations.xfdf`);
+    toast(`PDF 주석 ${result.annotationCount}개를 내보냈습니다.`);
+  }
+
   async function importIfnote(file) {
     try {
       const raw = await file.text();
@@ -4078,6 +4198,17 @@
     storage.putDocument(deepClone(copy)); renderLibrary(); toast('문서를 복제했습니다.');
   }
 
+  async function toggleDocumentFavorite(doc) {
+    if (!doc) return false;
+    doc.favorite = !doc.favorite;
+    doc.updatedAt = now();
+    await storage.putDocument(deepClone(doc));
+    if (state.view === 'library') renderLibrary();
+    else renderTabs();
+    toast(doc.favorite ? '파일을 즐겨찾기에 추가했습니다.' : '파일 즐겨찾기를 해제했습니다.');
+    return doc.favorite;
+  }
+
   function renameDocument(id) {
     const doc = state.documents.find((item) => item.id === id);
     if (!doc) return;
@@ -4173,6 +4304,7 @@
     if (!doc) return;
     showMenu('문서 옵션', doc.title, [
       { action:'document-search', icon:'search', title:'문서 검색', description:'입력한 텍스트, 수식, 제목을 찾습니다.' },
+      { action:'toggle-current-favorite', icon:'star', title:doc.favorite ? '파일 즐겨찾기 해제' : '파일 즐겨찾기', description:'라이브러리 즐겨찾기와 목록 상단에 고정합니다.' },
       { action:'go-page-number-menu', icon:'arrow', title:'페이지 번호로 이동', description:'오른쪽 페이지 바에서 원하는 페이지 번호를 입력합니다.' },
       { action:'calculate-page-math', icon:'math', title:'손글씨 수식 계산', description:'현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다.' },
       { action:'toggle-read-mode', icon:state.readOnly ? 'eye-off' : 'read', title:state.readOnly ? '편집 모드로 전환' : '읽기 모드', description:'실수로 필기되지 않도록 편집을 잠급니다.' },
@@ -4188,6 +4320,7 @@
     showMenu('공유 및 내보내기', 'Export', [
       { action:'share-native', icon:'share', title:'기기 공유', description:'지원되는 앱으로 편집 가능한 노트를 공유합니다.' },
       { action:'export-ifnote', icon:'export', title:'편집 가능한 .ifnote', description:'모든 획과 페이지를 보존합니다.' },
+      { action:'export-pdf-annotations', icon:'bookmark', title:'PDF 주석 내보내기', description:'필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다.' },
       { action:'export-png', icon:'image', title:'현재 페이지 PNG' },
       { action:'print-pdf', icon:'page-plus', title:'PDF로 인쇄', description:'시스템 인쇄 화면에서 PDF로 저장합니다.' }
     ]);
@@ -4315,6 +4448,7 @@
         break;
       }
       case 'calculate-page-math': closeModal(); window.__inkforge32?.processCurrentPageMath?.(); break;
+      case 'toggle-current-favorite': closeModal(); await toggleDocumentFavorite(currentDocument()); break;
       case 'bookmark-page': {
         const page = currentDocument()?.pages?.[Number(target.dataset.pageIndex)]; if (page) { checkpoint('bookmark'); page.bookmarked = !page.bookmarked; persistCurrent(); closeModal(); renderSidebar(); } break;
       }
@@ -4367,6 +4501,7 @@
       case 'import-pdf': closeModal(); window.__inkforgePdf?.openPicker(); break;
       case 'share-native': closeModal(); await shareDocument(); break;
       case 'export-ifnote': closeModal(); exportIfnote(); break;
+      case 'export-pdf-annotations': closeModal(); exportPdfAnnotations(); break;
       case 'export-png': closeModal(); exportPng(); break;
       case 'print-pdf': closeModal(); window.print(); break;
       case 'insert-text-object': insertTextObject(); break;
@@ -4378,13 +4513,13 @@
         state.math.expression = input.value; if (key !== 'C' && key !== '⌫') { try { calculateMath(); } catch {} } else renderMathResult(); input.focus(); break;
       }
       case 'toggle-favorite': {
-        event.stopPropagation(); const doc = state.documents.find((item) => item.id === target.dataset.docId); if (doc) { doc.favorite = !doc.favorite; doc.updatedAt = now(); storage.putDocument(deepClone(doc)); renderLibrary(); } break;
+        event.stopPropagation(); const doc = state.documents.find((item) => item.id === target.dataset.docId); if (doc) await toggleDocumentFavorite(doc); break;
       }
       case 'document-menu': event.stopPropagation(); documentMenu(target.dataset.docId); break;
       case 'open-document-menu': closeModal(); openDocument(target.dataset.docId); break;
       case 'rename-document': closeModal(); renameDocument(target.dataset.docId); break;
       case 'toggle-favorite-menu': {
-        const doc = state.documents.find((item) => item.id === target.dataset.docId); if (doc) { doc.favorite = !doc.favorite; storage.putDocument(deepClone(doc)); closeModal(); renderLibrary(); } break;
+        const doc = state.documents.find((item) => item.id === target.dataset.docId); if (doc) { closeModal(); await toggleDocumentFavorite(doc); } break;
       }
       case 'duplicate-document': closeModal(); duplicateDocument(target.dataset.docId); break;
       case 'move-document': closeModal(); moveDocumentToFolder(target.dataset.docId); break;
@@ -4658,6 +4793,8 @@
       setTool,
       setZoom,
       exportIfnote,
+      exportPdfAnnotations,
+      buildPdfAnnotationsXfdf,
       renderPageCanvas,
       renderEditorPages,
       renderLibrary,

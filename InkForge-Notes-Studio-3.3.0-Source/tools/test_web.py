@@ -152,7 +152,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.19');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.20');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
@@ -332,6 +332,65 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         await page.evaluate("window.__inkforge.addPage()")
         after_pages = await page.evaluate("window.__inkforge.currentDocument().pages.length")
         results["page_add"] = {"before": before_pages, "after": after_pages, "passed": after_pages == before_pages + 1}
+        results["between_page_add_button"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            api.setZoom(1);
+            while (api.currentDocument().pages.length < 2) api.addPage();
+            api.renderEditorPages();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const firstWrap = document.querySelector('.page-wrap[data-page-index="0"]');
+            const firstGap = document.querySelector('.page-insert-gap[data-after-page-index="0"]');
+            const secondWrap = document.querySelector('.page-wrap[data-page-index="1"]');
+            const button = firstGap?.querySelector('[data-action="insert-page-after"]');
+            const oldInsideButtons = document.querySelectorAll('.page-bottom-actions').length;
+            const firstRect = firstWrap?.getBoundingClientRect();
+            const gapRect = firstGap?.getBoundingClientRect();
+            const secondRect = secondWrap?.getBoundingClientRect();
+            const visuallyBetween = !!(firstRect && gapRect && secondRect) && gapRect.top >= firstRect.bottom - 1 && gapRect.bottom <= secondRect.top + 1;
+            const before = api.currentDocument().pages.length;
+            button?.click();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            return {
+              oldInsideButtons,
+              hasGap: !!firstGap,
+              hasButton: !!button,
+              visuallyBetween,
+              before,
+              after: api.currentDocument().pages.length,
+              currentPageIndex: api.state.currentPageIndex,
+              passed: oldInsideButtons === 0 && !!firstGap && !!button && visuallyBetween && api.currentDocument().pages.length === before + 1 && api.state.currentPageIndex === 1
+            };
+          }
+        """)
+        results["file_favorite"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const doc = api.currentDocument();
+            const other = api.createDocument('즐겨찾기 정렬 비교', 'grid');
+            other.updatedAt = new Date(Date.now() + 120000).toISOString();
+            other.favorite = false;
+            doc.favorite = false;
+            api.state.documents.push(other);
+            await api.storage.putDocument(doc);
+            await api.storage.putDocument(other);
+            api.renderLibrary();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            document.querySelector(`[data-action="toggle-favorite"][data-doc-id="${doc.id}"]`)?.click();
+            await new Promise(resolve => setTimeout(resolve, 140));
+            const favorite = api.state.documents.find(item => item.id === doc.id)?.favorite === true;
+            const firstId = document.querySelector('.document-card[data-doc-id]')?.dataset.docId || '';
+            const pressed = document.querySelector(`[data-action="toggle-favorite"][data-doc-id="${doc.id}"]`)?.getAttribute('aria-pressed');
+            api.openDocument(doc.id);
+            return {
+              favorite,
+              firstId,
+              docId: doc.id,
+              pressed,
+              passed: favorite && firstId === doc.id && pressed === 'true'
+            };
+          }
+        """)
         await page.evaluate("window.__inkforge.setZoom(1.5)")
         results["zoom"] = await page.evaluate("window.__inkforge.state.zoom")
         results["math_engine"] = await page.evaluate("window.__inkforge.evaluateMath('(12+8)*3',{}).result")
@@ -638,6 +697,35 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               imageCacheSize: api.state.imageCache.size,
               assetUrlCacheSize: api.state.assetUrlCache.size,
               passed: pixels > 0 && pixels <= 9500000 && (canvas?.width || 0) >= 2350 && mounted <= 2 && api.state.imageCache.size <= 3 && api.state.assetUrlCache.size <= 3
+            };
+          }
+        """)
+        results["pdf_annotation_export"] = await page.evaluate("""
+          () => {
+            const api = window.__inkforge;
+            const doc = api.currentDocument();
+            const page = api.currentPage();
+            page.pdfSourceName = 'sample.pdf';
+            page.pdfPointWidth = 612;
+            page.pdfPointHeight = 792;
+            page.objects = page.objects.filter(object => !String(object.id).startsWith('xfdf_test_'));
+            page.objects.push(
+              { id:'xfdf_test_ink', type:'stroke', brush:'fountain', color:'#111827', width:4, opacity:1, points:[{x:100,y:120},{x:180,y:160},{x:240,y:150}] },
+              { id:'xfdf_test_text', type:'text', text:'주석 텍스트', color:'#d93939', x:260, y:220, w:180, h:70, fontSize:24 },
+              { id:'xfdf_test_rect', type:'shape', shape:'rectangle', color:'#147bd1', width:3, x1:120, y1:320, x2:360, y2:430 },
+              { id:'xfdf_test_hidden', type:'ocrIndex', hidden:true, text:'hidden' }
+            );
+            const result = api.buildPdfAnnotationsXfdf(doc);
+            const xfdf = result.xfdf || '';
+            page.objects = page.objects.filter(object => !String(object.id).startsWith('xfdf_test_'));
+            return {
+              annotationCount: result.annotationCount,
+              hasInk: xfdf.includes('<ink '),
+              hasText: xfdf.includes('<freetext ') && xfdf.includes('주석 텍스트'),
+              hasShape: xfdf.includes('<square '),
+              skippedHidden: !xfdf.includes('hidden'),
+              sourceName: result.sourceName,
+              passed: result.annotationCount >= 3 && xfdf.includes('<xfdf ') && xfdf.includes('<ink ') && xfdf.includes('<freetext ') && xfdf.includes('<square ') && !xfdf.includes('hidden')
             };
           }
         """)
@@ -1388,7 +1476,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.19" and results.get("upgrade_version") == "3.3.19" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.20" and results.get("upgrade_version") == "3.3.20" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.19';
+  const VERSION = '3.3.20';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,9 +11,9 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '오른쪽 페이지 스크롤 바는 문서를 조금 스크롤한 뒤 잠시만 표시됩니다.',
-    '필기 중에는 페이지 스크롤 바가 숨겨지고 포인터 입력을 받지 않습니다.',
-    'S Pen이나 손바닥 터치가 스크롤 바에 닿아 페이지가 이동하는 문제를 줄였습니다.'
+    'PDF 필기, 텍스트, 도형 주석을 XFDF 파일로 내보낼 수 있습니다.',
+    '파일 즐겨찾기를 문서 옵션에서도 켜고 끌 수 있으며 즐겨찾기 문서는 목록 상단에 고정됩니다.',
+    '페이지 추가 버튼을 페이지 내부가 아니라 페이지와 페이지 사이에 배치했습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;
