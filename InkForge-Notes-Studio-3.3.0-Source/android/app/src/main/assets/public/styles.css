@@ -1348,9 +1348,21 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   flex-direction: column;
   align-items: center;
   gap: 9px;
-  pointer-events: auto;
+  opacity: 0;
+  transform: translateX(8px);
+  pointer-events: none;
+  transition: opacity .16s ease, transform .16s ease;
 }
 .page-scroll-rail[hidden] { display: none !important; }
+.page-scroll-rail.is-visible {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.page-scroll-rail.is-writing-disabled {
+  opacity: 0;
+  pointer-events: none;
+}
 .page-scroll-track {
   position: relative;
   flex: 1 1 auto;

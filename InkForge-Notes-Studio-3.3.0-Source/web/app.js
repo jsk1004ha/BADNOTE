@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.18';
+  const VERSION = '3.3.19';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -22,6 +22,8 @@
   const MAX_PASSIVE_PAGE_DELTA = 2;
   const LARGE_DOC_PAGE_THRESHOLD = 120;
   const SIDEBAR_WINDOW_RADIUS = 40;
+  const PAGE_SCROLL_RAIL_REVEAL_DELTA = 24;
+  const PAGE_SCROLL_RAIL_VISIBLE_MS = 1700;
   const DB_NAME = 'inkforge-notes-studio';
   const DB_VERSION = 4;
   const PAGE_WIDTH = 1000;
@@ -490,6 +492,9 @@
     allowLargePageJumpUntil: 0,
     activePageWrapIndex: -1,
     virtualPageWindow: { start: -1, end: -1 },
+    pageScrollRailVisibleUntil: 0,
+    pageScrollRailHideTimer: 0,
+    pageScrollRailLastScroll: { top: 0, left: 0 },
     positionSaveTimer: 0,
     testReady: false
   };
@@ -2052,6 +2057,9 @@
     const largeDoc = doc.pages.length > LARGE_DOC_PAGE_THRESHOLD;
     stack.dataset.largeDoc = largeDoc ? '1' : '0';
     updatePageSizing({ render: false });
+    const viewport = $('#editorViewport');
+    state.pageScrollRailLastScroll = { top: viewport?.scrollTop || 0, left: viewport?.scrollLeft || 0 };
+    hidePageScrollRail();
     state.virtualPageWindow = { start: -1, end: -1 };
     if (largeDoc && state.pageMode !== 'single') {
       renderLargePageWindow(state.currentPageIndex, true);
@@ -2075,6 +2083,49 @@
     return Math.round(ratio * Math.max(0, doc.pages.length - 1));
   }
 
+  function isPageScrollRailWritingBlocked() {
+    const kind = state.drawSession?.kind;
+    return !!kind && kind !== 'pan';
+  }
+
+  function setPageScrollRailVisible(visible) {
+    const rail = $('#pageScrollRail');
+    if (!rail) return;
+    rail.classList.toggle('is-visible', visible && !isPageScrollRailWritingBlocked());
+  }
+
+  function hidePageScrollRail() {
+    state.pageScrollRailVisibleUntil = 0;
+    clearTimeout(state.pageScrollRailHideTimer);
+    state.pageScrollRailHideTimer = 0;
+    setPageScrollRailVisible(false);
+  }
+
+  function revealPageScrollRail() {
+    const doc = currentDocument();
+    if (state.view !== 'editor' || !doc || doc.pages.length <= 1 || isPageScrollRailWritingBlocked()) return;
+    state.pageScrollRailVisibleUntil = performance.now() + PAGE_SCROLL_RAIL_VISIBLE_MS;
+    setPageScrollRailVisible(true);
+    clearTimeout(state.pageScrollRailHideTimer);
+    state.pageScrollRailHideTimer = setTimeout(() => {
+      if (performance.now() >= state.pageScrollRailVisibleUntil) hidePageScrollRail();
+    }, PAGE_SCROLL_RAIL_VISIBLE_MS + 40);
+  }
+
+  function canUsePageScrollRail(event) {
+    const rail = $('#pageScrollRail');
+    if (!rail || rail.hidden || !rail.classList.contains('is-visible') || shouldBlockPageScrollRailPointer(event)) return false;
+    return true;
+  }
+
+  function shouldBlockPageScrollRailPointer(event) {
+    const pointerType = effectivePointerType(event);
+    if (isStylusPointer(pointerType)) return true;
+    if (isPageScrollRailWritingBlocked()) return true;
+    if (pointerType === 'touch' && state.settings.stylusOnly && isWritingTool(state.tool)) return true;
+    return false;
+  }
+
   function updatePageScrollRail() {
     const doc = currentDocument();
     const rail = $('#pageScrollRail');
@@ -2082,6 +2133,10 @@
     const input = $('#pageJumpInput');
     if (!rail || !thumb || !input || !doc) return;
     rail.hidden = state.view !== 'editor' || doc.pages.length <= 1;
+    rail.classList.toggle('is-writing-disabled', isPageScrollRailWritingBlocked());
+    if (rail.hidden || isPageScrollRailWritingBlocked() || performance.now() >= state.pageScrollRailVisibleUntil) {
+      setPageScrollRailVisible(false);
+    }
     const maxIndex = Math.max(1, doc.pages.length - 1);
     const thumbHeight = clamp(100 / Math.max(1, doc.pages.length), 6, 28);
     const progress = doc.pages.length <= 1 ? 0 : state.currentPageIndex / maxIndex;
@@ -3290,6 +3345,7 @@
 
     const point = eventPoint(event, canvas);
     const effectiveTool = isStylusEraser(event) ? 'eraser' : (state.readOnly ? 'hand' : state.tool);
+    if (isStylusPointer(pointerType) || (effectiveTool !== 'hand' && effectiveTool !== 'text' && effectiveTool !== 'sticky' && effectiveTool !== 'math' && effectiveTool !== 'image')) hidePageScrollRail();
     if (shouldBlockNonStylusCanvasInput(pointerType, effectiveTool)) return;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return;
@@ -3503,6 +3559,7 @@
     else if ((session.kind === 'move-selection' && session.moved) || (session.kind === 'resize-selection' && session.resized)) persistCurrent();
     else if (session.kind === 'move-ruler') renderPageCanvas(session.pageIndex);
     state.drawSession = null;
+    updatePageScrollRail();
     renderPageCanvas(session.pageIndex);
     renderSidebar();
     updateObjectMenu();
@@ -3514,6 +3571,7 @@
       const pageIndex = state.drawSession.pageIndex;
       if (state.drawSession.holdTimer) clearTimeout(state.drawSession.holdTimer);
       state.drawSession = null;
+      updatePageScrollRail();
       renderPageCanvas(pageIndex);
     }
     finishTouchGesture();
@@ -4445,6 +4503,13 @@
 
   let scrollFrame = 0;
   function handleEditorScroll() {
+    const viewport = $('#editorViewport');
+    if (viewport && state.view === 'editor') {
+      const previous = state.pageScrollRailLastScroll || { top: viewport.scrollTop, left: viewport.scrollLeft };
+      const moved = Math.abs(viewport.scrollTop - previous.top) + Math.abs(viewport.scrollLeft - previous.left);
+      state.pageScrollRailLastScroll = { top: viewport.scrollTop, left: viewport.scrollLeft };
+      if (moved >= PAGE_SCROLL_RAIL_REVEAL_DELTA) revealPageScrollRail();
+    }
     if (scrollFrame || state.pageMode === 'single') return;
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = 0;
@@ -4487,7 +4552,8 @@
     const railTrack = $('#pageScrollTrack');
     const railThumb = $('#pageScrollThumb');
     const railInput = $('#pageJumpInput');
-    if (railTrack && railThumb && railInput) {
+    const rail = $('#pageScrollRail');
+    if (rail && railTrack && railThumb && railInput) {
       let draggingRail = false;
       const railMove = (event) => {
         if (!draggingRail) return;
@@ -4500,9 +4566,17 @@
         document.removeEventListener('pointerup', railUp, true);
         document.removeEventListener('pointercancel', railUp, true);
       };
+      rail.addEventListener('pointerdown', (event) => {
+        if (!shouldBlockPageScrollRailPointer(event)) return;
+        hidePageScrollRail();
+        event.preventDefault();
+        event.stopPropagation();
+      }, { capture: true, passive: false });
       railTrack.addEventListener('pointerdown', (event) => {
+        if (!canUsePageScrollRail(event)) return;
         event.preventDefault();
         draggingRail = true;
+        revealPageScrollRail();
         scrollToPage(pageIndexFromRailEvent(event), false);
         try { railTrack.setPointerCapture?.(event.pointerId); } catch {}
         document.addEventListener('pointermove', railMove, true);
@@ -4594,6 +4668,9 @@
       renderSidebar,
       renderDocumentSearch,
       updateObjectMenu,
+      updatePageScrollRail,
+      revealPageScrollRail,
+      hidePageScrollRail,
       checkpoint,
       persistCurrent,
       currentDocument,

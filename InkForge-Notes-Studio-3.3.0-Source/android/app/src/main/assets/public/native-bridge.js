@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.18';
+  const VERSION = '3.3.19';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -11,9 +11,9 @@
   const SHAPE_HOLD_MS = 650;
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = [
-    '폴더 안에서 다시 하위 폴더를 만들 수 있습니다.',
-    '폴더 breadcrumb가 여러 단계의 상위 폴더 이동을 지원합니다.',
-    '폴더 삭제 시 노트와 하위 폴더는 삭제하지 않고 상위 폴더로 이동합니다.'
+    '오른쪽 페이지 스크롤 바는 문서를 조금 스크롤한 뒤 잠시만 표시됩니다.',
+    '필기 중에는 페이지 스크롤 바가 숨겨지고 포인터 입력을 받지 않습니다.',
+    'S Pen이나 손바닥 터치가 스크롤 바에 닿아 페이지가 이동하는 문제를 줄였습니다.'
   ];
   const RELEASE_NOTES_LAST_VERSION_KEY = 'badnote.releaseNotes.lastVersion';
   const nativeApi = window.InkForgeNative;
