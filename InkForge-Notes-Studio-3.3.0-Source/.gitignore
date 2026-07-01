@@ -1,8 +1,0 @@
-.build-tools/
-.omx/
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
-android/local-signing.properties
-android/*.jks
