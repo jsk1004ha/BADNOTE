@@ -1,3 +1,4 @@
+// Translation and UI optimizations for PT-BR by @dyduq12
 window.I18N_PT = {
   "${Number(count) || 0}개": "${Number(count) || 0} itens",
   "${Number(count) || 0}개 항목${bookmarked ? ' · 북마크' : ''}": "${Number(count) || 0} itens${bookmarked ? ' · Marcador' : ''}",

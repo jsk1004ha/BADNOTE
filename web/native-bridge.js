@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.25';
+  const VERSION = '3.3.26';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -12,59 +12,39 @@
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = {
     ko: [
-      '펜과 도형 획 두께를 현재 확대율이 아니라 페이지 기준 두께로 고정해, 확대하면 필기도 페이지와 함께 자연스럽게 커지도록 수정했습니다.',
-      'S Pen 버튼이 KeyEvent로 들어오는 기기에서도 버튼을 누르는 동안만 지우개가 작동하고, 화면에 닿은 상태에서 눌러도 즉시 지워지도록 수정했습니다.',
-      '배드노트 앱 아이콘을 새 불꽃 노트 아이콘으로 변경했습니다.',
-      'S Pen 버튼 지우개 알림을 화면 왼쪽 위로 옮기고, 버튼 해제 후 알림이 남는 문제를 수정했습니다.',
-      '문서 검색 창을 닫은 직후 S Pen 버튼 지우개를 쓰면 검색 창이 다시 살짝 나타나 화면이 밀리는 문제를 막았습니다.',
-      'S Pen을 화면에 댄 상태에서 버튼을 눌러도 즉시 지우개로 전환되도록 처리하고, 같은 펜 두께 값이 확대율에 따라 달라 보이는 문제를 보정했습니다.',
-      '설정에서 HUD 텍스트 투명도를 조절할 수 있게 했습니다.',
-      '재배포 APK에서는 S Pen 버튼 해제 감지와 Android/Web pointerId 불일치 문제를 추가로 수정하고 검정 지우개 HUD를 제거했습니다.',
-      '고배율 확대에서 필기와 도형이 깨져 보이지 않도록 벡터 오버레이 렌더링을 추가했습니다.'
+      '포르투갈어(브라질) UI 번역을 분리된 locale 파일 기준으로 보강했습니다.',
+      '언어 전환 후 색상표, 수식 계산, S Pen 패널 같은 핵심 UI가 번역 키 손상 없이 동작하도록 회귀 검사를 보강했습니다.',
+      '번역 업데이트 도구가 저장소 기준 상대 경로로 web 폴더를 찾도록 정리했습니다.',
+      '웹 원본을 Android WebView asset으로 동기화하는 스크립트를 추가해 APK 빌드 누락 위험을 줄였습니다.',
+      'Android 릴리즈 버전을 3.3.26, versionCode 358로 올렸습니다.'
     ],
     en: [
-      'Pen and shape stroke widths are now fixed in page units instead of the current zoom level, so ink scales naturally with the page while zooming.',
-      'S Pen button KeyEvent input now acts as a hold-to-erase state, including when the pen is already touching the screen.',
-      'Updated the bad note app icon to the new fire note icon.',
-      'Moved the S Pen button eraser notice to the top-left of the screen and fixed cases where it stayed visible after release.',
-      'Prevented the document search drawer from peeking back in and shifting the page after it was closed and the S Pen eraser was used.',
-      'The S Pen button now switches an already-touching pen stroke into erasing immediately, and pen thickness is rendered consistently across zoom levels.',
-      'Added a setting for HUD text opacity.',
-      'The republished APK further fixes S Pen button release detection, Android/Web pointer-id mismatches, and removes the duplicate dark eraser HUD.',
-      'Added vector overlay rendering so handwriting and shapes stay sharp at high zoom.'
+      'Portuguese (Brazil) interface translations now load from separated locale files.',
+      'Regression coverage now checks that language switching keeps the color palette, math calculation, and S Pen panel usable.',
+      'The translation update helper now resolves the web folder from the repository instead of a personal local path.',
+      'Added a sync script for copying web sources into Android WebView assets before APK builds.',
+      'Updated the Android release metadata to 3.3.26 with versionCode 358.'
     ],
     ja: [
-      'ペンと図形の線幅を現在のズーム率ではなくページ基準に固定し、拡大時に筆跡もページと一緒に自然に大きくなるよう修正しました。',
-      'S PenボタンがKeyEventとして届く端末でも、押している間だけ消しゴムとして動作し、接触中に押しても即座に消せるよう修正しました。',
-      'bad noteのアプリアイコンを新しいファイヤーノートアイコンに変更しました。',
-      'S Penボタン消しゴムの通知を画面左上へ移動し、ボタンを離した後に残る場合を修正しました。',
-      '文書検索を閉じた直後にS Pen消しゴムを使うと検索パネルが少し戻って画面がずれる問題を防ぎました。',
-      'ペンを画面に接触したままS Penボタンを押しても即座に消しゴムへ切り替わり、ズーム率でペン幅の見た目が変わる問題を補正しました。',
-      '設定でHUDテキストの透明度を調整できるようにしました。',
-      '再配布APKではS Penボタンの解除検知、Android/Web pointerId不一致、重複する黒い消しゴムHUDを追加修正しました。',
-      '高倍率ズームでも手書きと図形が粗く見えないよう、ベクターオーバーレイ描画を追加しました。'
+      'ポルトガル語(ブラジル)のUI翻訳を分離されたlocaleファイルで補強しました。',
+      '言語切り替え後もカラーパレット、数式計算、S Penパネルが使えることを回帰テストで確認します。',
+      '翻訳更新ツールが個人PCの絶対パスではなくリポジトリ基準のwebフォルダを参照するようにしました。',
+      'APKビルド前にWebソースをAndroid WebView assetsへ同期するスクリプトを追加しました。',
+      'Androidリリース情報を3.3.26、versionCode 358へ更新しました。'
     ],
     zh: [
-      '笔和图形描边宽度现在按页面单位固定，而不是按当前缩放级别计算，因此缩放时笔迹会随页面自然变大。',
-      '当 S Pen 按钮以 KeyEvent 输入时，现在也会作为按住即橡皮的状态处理，笔尖已接触屏幕时按下也能立即擦除。',
-      '已将 bad note 应用图标更新为新的火焰笔记图标。',
-      '将 S Pen 按钮橡皮提示移到屏幕左上，并修复松开按钮后提示不消失的情况。',
-      '修复关闭文档搜索后使用 S Pen 橡皮时搜索抽屉轻微弹出并推动页面的问题。',
-      'S Pen 已接触屏幕时按下按钮也会立即切换为橡皮，并修正缩放后相同笔宽显示不一致的问题。',
-      '新增 HUD 文字透明度设置。',
-      '重新发布的 APK 进一步修复 S Pen 按钮释放检测、Android/Web pointerId 不一致，并移除重复的黑色橡皮 HUD。',
-      '新增矢量叠加渲染，让手写和图形在高倍缩放时保持清晰。'
+      '补强了基于独立 locale 文件加载的葡萄牙语（巴西）界面翻译。',
+      '回归测试现在会确认切换语言后调色板、数学计算和 S Pen 面板仍可使用。',
+      '翻译更新工具现在按仓库相对路径查找 web 文件夹，不再依赖个人电脑的绝对路径。',
+      '新增同步脚本，用于在构建 APK 前把 Web 源文件复制到 Android WebView assets。',
+      'Android 发布信息已更新为 3.3.26，versionCode 358。'
     ],
     pt: [
-      'As larguras da caneta e das formas agora ficam fixas em unidades da pagina, nao no zoom atual, para que a escrita aumente naturalmente junto com a pagina.',
-      'A entrada KeyEvent do botao da S Pen agora funciona como borracha apenas enquanto estiver pressionada, inclusive com a caneta ja tocando a tela.',
-      'Atualizado o icone do app bad note para o novo icone fire note.',
-      'O aviso da borracha pelo botão da S Pen foi movido para o canto superior esquerdo, e casos em que ele ficava preso na tela foram corrigidos.',
-      'A gaveta de busca do documento nao reaparece nem empurra a pagina depois de fechada ao usar a borracha da S Pen.',
-      'Pressionar o botao da S Pen durante um traco em contato agora muda imediatamente para borracha, e a espessura da caneta fica consistente entre niveis de zoom.',
-      'Adicionada uma configuracao para a opacidade do texto HUD.',
-      'O APK republicado corrige a deteccao de soltar o botao da S Pen, diferencas de pointerId Android/Web e remove o HUD escuro duplicado.',
-      'Adicionada renderizacao vetorial em sobreposicao para manter escrita e formas nitidas em zoom alto.'
+      'As traducoes da interface em Portugues (Brasil) agora carregam dos arquivos locale separados.',
+      'A cobertura de regressao verifica que a troca de idioma mantem a paleta de cores, o calculo matematico e o painel da S Pen funcionando.',
+      'A ferramenta de atualizacao de traducoes agora encontra a pasta web pelo caminho relativo do repositorio.',
+      'Adicionado um script de sincronizacao para copiar os arquivos web para os assets Android WebView antes do build do APK.',
+      'Os metadados Android foram atualizados para 3.3.26 com versionCode 358.'
     ]
   };
   const UPDATE_I18N = {

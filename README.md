@@ -1,4 +1,4 @@
-# bad note 3.3.25
+# bad note 3.3.26
 
 S Pen과 대용량 PDF를 전제로 만든 Android 필기 노트 앱입니다. 필기, PDF 주석, 손글씨 OCR, 손글씨 수식 계산, 도형 변환, 폴더 관리, 파일 즐겨찾기, 자동 업데이트를 한 앱 안에서 처리합니다.
 
@@ -6,8 +6,8 @@ S Pen과 대용량 PDF를 전제로 만든 Android 필기 노트 앱입니다. �
 
 GitHub Releases에서 기기에 맞는 APK를 받습니다.
 
-- `bad-note-Android-3.3.25-Update.apk`: 기존 `com.inkforge.note4` 설치판을 업데이트할 때 사용
-- `bad-note-Android-3.3.25-SideBySide.apk`: 기존 앱과 별도로 설치할 때 사용
+- `bad-note-Android-3.3.26-Update.apk`: 기존 `com.inkforge.note4` 설치판을 업데이트할 때 사용
+- `bad-note-Android-3.3.26-SideBySide.apk`: 기존 앱과 별도로 설치할 때 사용
 
 배포 서명키가 다른 기존 설치판 위에는 Android가 업데이트 설치를 거부할 수 있습니다. 그 경우 기존 앱에서 `.ifnote`로 백업한 뒤 병행 설치판을 사용하십시오. 자세한 절차는 `docs/INSTALL-KO.txt`에 있습니다.
 
@@ -78,9 +78,10 @@ python3 tools/test_web.py --web web
 
 - 기능 안내: `docs/README-KO.md`
 - 설치 안내: `docs/INSTALL-KO.txt`
-- 최신 변경 내역: `docs/CHANGELOG-3.3.25-KO.md`
+- 최신 변경 내역: `docs/CHANGELOG-3.3.26-KO.md`
 
 ## 기여자
 
 - 프로젝트 관리 및 개발: [jsk1004ha](https://github.com/jsk1004ha)
+- 포르투갈어(브라질) 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
 - Special thanks: [Photon616](https://github.com/Photon616) - 앱 아이콘 제작
