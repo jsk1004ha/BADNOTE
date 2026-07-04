@@ -175,7 +175,7 @@
         <button class="icon-button" data-action="close-modal" data-icon="close" aria-label="닫기"></button>
       </header>
       <label class="field-label" for="newNoteTitle">노트 제목</label>
-      <input id="newNoteTitle" class="text-field" type="text" value="새 노트" maxlength="80" />
+      <input id="newNoteTitle" class="text-field" type="text" placeholder="새 노트" maxlength="80" />
       <div id="templatePicker" class="template-picker"></div>
       <div class="new-note-import-row">
         <button class="pdf-new-note-button" data-action="new-note-pdf"><span data-icon-host="page-plus"></span><span><strong>PDF로 새 노트</strong><small>페이지와 검색 텍스트를 가져옵니다</small></span></button>
@@ -268,6 +268,11 @@
     <div id="toastHost" class="toast-host" aria-live="assertive"></div>
   </div>
 
+  <script src="locales/ko.js"></script>
+  <script src="locales/pt.js"></script>
+  <script src="locales/en.js"></script>
+  <script src="locales/ja.js"></script>
+  <script src="locales/zh.js"></script>
   <script src="app.js"></script>
   <script src="recognition.js"></script>
   <script src="pdf-tools.js"></script>

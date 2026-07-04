@@ -153,7 +153,7 @@
     const s = Math.max(0, Math.round(seconds || 0));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   };
-  const escapeHtml = (text) => String(text ?? '').replace(/[&<>'"]/g, (ch) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[ch]));
+  const escapeHtml = (text) => String(text ?? '').replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
   const normalizeText = (value) => String(value || '').normalize('NFKC').toLocaleLowerCase(currentLocale());
 
   const LANGUAGE_META = {
@@ -165,435 +165,87 @@
   };
 
   const I18N_PHRASES = {
-    en: {
-      '노트 라이브러리': 'Notebook library',
-      '라이브러리 탐색': 'Library navigation',
-      '모든 문서': 'All documents',
-      '문서': 'Documents',
-      '즐겨찾기': 'Favorites',
-      '공유됨': 'Shared',
-      '템플릿': 'Templates',
-      '휴지통': 'Trash',
-      '노트 검색': 'Search notes',
-      '설정': 'Settings',
-      '제목, 손글씨 OCR, 텍스트, 수식 검색': 'Search titles, handwriting OCR, text, and formulas',
-      '전체 노트 검색': 'Search all notes',
-      '검색어 지우기': 'Clear search',
-      '신규': 'New',
-      '폴더 생성': 'Create folder',
-      '폴더 삭제': 'Delete folder',
-      '날짜': 'Date',
-      '이름': 'Name',
-      '보기 방식 전환': 'Toggle view',
-      '문서 선택': 'Select documents',
-      '기기 안에서 빠르고 안전하게': 'Fast and private on this device',
-      '필기, 손글씨 OCR, 수식 계산, 페이지 검색을 오프라인으로 사용할 수 있습니다.': 'Use handwriting, OCR, math calculation, and page search offline.',
-      '사용법': 'Guide',
-      '폴더': 'Folders',
-      '노트 목록': 'Note list',
-      '노트를 만들어 보세요': 'Create your first note',
-      '+ 신규 버튼으로 템플릿을 고르고 바로 필기를 시작할 수 있습니다.': 'Choose a template with the New button and start writing right away.',
-      '새 노트': 'New note',
-      '노트 편집기': 'Note editor',
-      '열린 문서 탭': 'Open document tabs',
-      '라이브러리': 'Library',
-      '새 문서': 'New document',
-      '페이지 사이드바': 'Page sidebar',
-      '학습 도우미': 'Study assistant',
-      '편집 도구': 'Editing tools',
-      '올가미': 'Lasso',
-      '펜': 'Pen',
-      '지우개': 'Eraser',
-      '텍스트': 'Text',
-      '스티키 노트': 'Sticky note',
-      '이미지': 'Image',
-      '도구 더보기': 'More tools',
-      '자': 'Ruler',
-      '오디오 녹음': 'Audio recording',
-      '새 페이지': 'New page',
-      '공유와 내보내기': 'Share and export',
-      '더 보기': 'More',
-      '활성 도구 설정': 'Active tool settings',
-      '활성 도구 메뉴 위치 변경': 'Move active tool menu',
-      '실행 취소': 'Undo',
-      '다시 실행': 'Redo',
-      '페이지': 'Pages',
-      '목차': 'Outline',
-      '오디오': 'Audio',
-      '닫기': 'Close',
-      '문서 검색': 'Document search',
-      '손글씨 OCR·텍스트·수식 검색': 'Search handwriting OCR, text, and formulas',
-      '페이지 이동': 'Page navigation',
-      '이동할 페이지 번호': 'Page number to jump to',
-      '페이지 번호로 이동': 'Go to page number',
-      '펜 입력 대기': 'Waiting for pen input',
-      '새 노트 만들기': 'Create new note',
-      '노트 템플릿 선택': 'Choose a note template',
-      '노트 제목': 'Note title',
-      'PDF로 새 노트': 'New note from PDF',
-      '페이지와 검색 텍스트를 가져옵니다': 'Import pages and searchable text',
-      '취소': 'Cancel',
-      '만들기': 'Create',
-      '텍스트 입력': 'Text input',
-      '내용 입력': 'Enter content',
-      '페이지에 넣을 내용을 입력하세요.': 'Enter content to place on the page.',
-      '삽입': 'Insert',
-      '펜 설정': 'Pen settings',
-      '펜 세부 설정': 'Detailed pen settings',
-      '기본값': 'Defaults',
-      '완료': 'Done',
-      '메뉴': 'Menu',
-      '언어': 'Language',
-      '앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.': 'Change the app display language. Note content and filenames are not changed.',
-      '스타일러스 전용 필기': 'Stylus-only writing',
-      '손바닥과 손가락 입력을 필기에서 제외합니다.': 'Exclude palm and finger input from writing.',
-      '낙서해서 지우기': 'Scribble to erase',
-      '빠른 지그재그 획으로 겹친 필기를 지웁니다.': 'Erase intersecting handwriting with quick zigzag strokes.',
-      '그려서 도형 만들기': 'Draw and hold for shapes',
-      '직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.': 'Hold after drawing to convert rough strokes into clean shapes.',
-      '스타일러스 정보 표시': 'Show stylus info',
-      '필압, 기울기, 입력 장치를 화면에 표시합니다.': 'Show pressure, tilt, and input device on screen.',
-      'HUD 텍스트 투명도': 'HUD text opacity',
-      'S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.': 'Adjust the text opacity for S Pen eraser and status HUD labels.',
-      '연속 페이지 보기': 'Continuous pages',
-      '모든 페이지를 세로로 이어서 표시합니다.': 'Show all pages in one vertical flow.',
-      '새 폴더': 'New folder',
-      '노트 묶음 만들기': 'Create a note group',
-      '이 폴더 안에 만들기': 'Create inside this folder',
-      '열기': 'Open',
-      '문서 메뉴': 'Document menu',
-      '문서 목록으로 되돌립니다.': 'Return it to the document list.',
-      '복원': 'Restore',
-      '영구 삭제': 'Delete permanently',
-      '이 작업은 되돌릴 수 없습니다.': 'This action cannot be undone.',
-      '이름 변경': 'Rename',
-      '즐겨찾기 해제': 'Remove favorite',
-      '즐겨찾기에 추가': 'Add to favorites',
-      '복제': 'Duplicate',
-      '폴더 이동': 'Move to folder',
-      '휴지통으로 이동': 'Move to trash',
-      '페이지 레이아웃': 'Page layout',
-      '이 페이지로 이동': 'Go to this page',
-      '북마크': 'Bookmark',
-      '북마크 해제': 'Remove bookmark',
-      '페이지 복제': 'Duplicate page',
-      '앞으로 이동': 'Move up',
-      '뒤로 이동': 'Move down',
-      '페이지 삭제': 'Delete page',
-      '추가 도구': 'More tools',
-      '도구막대': 'Toolbar',
-      '형광펜': 'Highlighter',
-      '반투명 마커로 중요한 부분을 표시합니다.': 'Mark important parts with a translucent marker.',
-      '도형': 'Shapes',
-      '선, 화살표, 다각형, 별, 말풍선 등 다양한 도형을 만듭니다.': 'Create lines, polygons, stars, speech bubbles, and more.',
-      '암기 테이프': 'Study tape',
-      '내용을 가렸다가 탭해 정답을 확인합니다.': 'Cover content and tap to reveal the answer.',
-      '스티커': 'Sticker',
-      '페이지 가운데에 선택한 스티커를 추가합니다.': 'Add the selected sticker to the center of the page.',
-      '레이저 포인터': 'Laser pointer',
-      '저장되지 않는 발표용 포인터입니다.': 'A temporary presentation pointer that is not saved.',
-      '손 도구': 'Hand tool',
-      '확대·이동과 읽기에 사용합니다.': 'Use for zooming, panning, and reading.',
-      '선택한 스티커를 현재 페이지에 추가합니다.': 'Add the selected sticker to the current page.',
-      '문서 옵션': 'Document options',
-      '입력한 텍스트, 수식, 제목을 찾습니다.': 'Find entered text, formulas, and titles.',
-      '파일 즐겨찾기': 'Favorite file',
-      '파일 즐겨찾기 해제': 'Remove file favorite',
-      '라이브러리 즐겨찾기와 목록 상단에 고정합니다.': 'Pin it to favorites and the top of the library list.',
-      '페이지 창에서 원하는 페이지 번호를 입력합니다.': 'Enter the target page number in the page panel.',
-      '손글씨 수식 계산': 'Handwritten math calculation',
-      '현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다.': 'Recognize handwritten math on the current screen and show the result.',
-      '편집 모드로 전환': 'Switch to edit mode',
-      '읽기 모드': 'Read mode',
-      '실수로 필기되지 않도록 편집을 잠급니다.': 'Lock editing to prevent accidental writing.',
-      '한 페이지 보기': 'Single page view',
-      '페이지 맞춤': 'Fit page',
-      '노트 가져오기': 'Import note',
-      '.ifnote 파일을 추가합니다.': 'Add an .ifnote file.',
-      'PDF 가져오기': 'Import PDF',
-      'PDF 각 페이지를 노트 배경으로 추가하고 텍스트를 검색합니다.': 'Add each PDF page as a note background and index its text.',
-      '공유 및 내보내기': 'Share and export',
-      '기기 공유': 'Device share',
-      '지원되는 앱으로 편집 가능한 노트를 공유합니다.': 'Share an editable note through supported apps.',
-      '편집 가능한 .ifnote': 'Editable .ifnote',
-      '모든 획과 페이지를 보존합니다.': 'Preserves every stroke and page.',
-      'PDF 주석 내보내기': 'Export PDF annotations',
-      '필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다.': 'Save handwriting, text, and shape annotations as an XFDF file.',
-      '현재 페이지 PNG': 'Current page PNG',
-      'PDF로 인쇄': 'Print to PDF',
-      '시스템 인쇄 화면에서 PDF로 저장합니다.': 'Save as PDF from the system print screen.',
-      '제스처 사용법': 'Gesture guide',
-      '두 손가락 핀치': 'Two-finger pinch',
-      '페이지 중심을 유지하며 8%~800% 확대·축소합니다.': 'Zoom from 8% to 800% while keeping the page anchor.',
-      '두 손가락 탭': 'Two-finger tap',
-      '세 손가락 탭': 'Three-finger tap',
-      '두 손가락 좌우 쓸기': 'Two-finger horizontal swipe',
-      '이전 또는 다음 페이지로 이동합니다.': 'Move to the previous or next page.',
-      '그린 뒤 길게 유지': 'Draw, then hold',
-      '직선이나 닫힌 원을 정돈된 도형으로 변환합니다.': 'Convert lines or closed circles into clean shapes.',
-      '현재 페이지 핵심어': 'Current page keywords',
-      '빠른 복습 문제': 'Quick review prompt',
-      '암기 테이프 시작': 'Start study tape',
-      '손글씨 OCR': 'Handwriting OCR',
-      '현재 페이지 필기를 텍스트로 인식하고 검색 색인에 저장합니다.': 'Recognize current-page handwriting and save it to the search index.',
-      '펜 종류': 'Pen type',
-      '만년필': 'Fountain pen',
-      '볼펜': 'Ballpoint pen',
-      '젤펜': 'Gel pen',
-      '브러시': 'Brush',
-      '연필': 'Pencil',
-      '파인라이너': 'Fineliner',
-      '정렬': 'Sort',
-      '최근 수정순': 'Recently modified',
-      '오래된 수정순': 'Oldest modified',
-      '이름 오름차순': 'Name ascending',
-      '이름 내림차순': 'Name descending',
-      '획': 'Stroke',
-      '정밀': 'Precision',
-      '전체': 'All',
-      '페이지 지우기': 'Clear page',
-      '자유형 선택': 'Freeform selection',
-      '전체 선택': 'Select all',
-      '붙여넣기': 'Paste',
-      '필기 · 텍스트 · 이미지': 'Handwriting · text · images',
-      '텍스트 추가': 'Add text',
-      '페이지를 탭해 입력': 'Tap the page to type',
-      '검색': 'Search',
-      '페이지를 탭해 추가': 'Tap the page to add',
-      '탭하면 정답 보기': 'Tap to reveal',
-      '축소': 'Zoom out',
-      '확대': 'Zoom in',
-      '표시는 저장되지 않습니다': 'Marks are not saved',
-      '수학 계산': 'Math calculation',
-      '페이지를 탭하거나 식 입력': 'Tap the page or enter an expression',
-      '이미지 선택': 'Choose image',
-      '사진을 페이지에 삽입': 'Insert a photo on the page',
-      '도구 설정': 'Tool settings',
-      '무지': 'Blank',
-      '줄 노트': 'Lined',
-      '격자': 'Grid',
-      '도트': 'Dotted',
-      '코넬': 'Cornell',
-      '플래너': 'Planner',
-      '다음 페이지 추가': 'Add next page',
-      '이 페이지 뒤에 추가': 'Add after this page',
-      '검색어를 입력하면 손글씨 OCR, PDF, 텍스트, 수식에서 찾습니다.': 'Enter a query to search handwriting OCR, PDFs, text, and formulas.',
-      '검색 결과가 없습니다.': 'No search results.',
-      '큰 텍스트 제목이나 페이지 제목이 목차에 표시됩니다.': 'Large text headings or page titles appear in the outline.',
-      '마이크 아이콘을 눌러 필기와 함께 오디오를 녹음할 수 있습니다.': 'Use the microphone icon to record audio with your handwriting.'
-    },
-    ja: {
-      '문서': 'ドキュメント', '즐겨찾기': 'お気に入り', '공유됨': '共有', '템플릿': 'テンプレート', '휴지통': 'ゴミ箱', '설정': '設定',
-      '언어': '言語', '앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.': 'アプリの表示言語を変更します。ノート内容とファイル名は変更されません。',
-      '신규': '新規', '새 노트': '新しいノート', '새 문서': '新しいドキュメント', '새 페이지': '新しいページ', '더 보기': 'その他',
-      '노트 검색': 'ノート検索', '제목, 손글씨 OCR, 텍스트, 수식 검색': 'タイトル、手書きOCR、テキスト、数式を検索', '검색어 지우기': '検索語を消去',
-      '기기 안에서 빠르고 안전하게': '端末内で高速かつ安全に', '필기, 손글씨 OCR, 수식 계산, 페이지 검색을 오프라인으로 사용할 수 있습니다.': '手書き、OCR、数式計算、ページ検索をオフラインで使えます。',
-      '사용법': '使い方', '폴더': 'フォルダ', '노트 목록': 'ノート一覧', '노트를 만들어 보세요': 'ノートを作成しましょう',
-      '+ 신규 버튼으로 템플릿을 고르고 바로 필기를 시작할 수 있습니다.': '新規ボタンでテンプレートを選び、すぐに書き始められます。',
-      '라이브러리': 'ライブラリ', '올가미': '投げ縄', '펜': 'ペン', '지우개': '消しゴム', '텍스트': 'テキスト', '스티키 노트': '付箋', '이미지': '画像',
-      '도구 더보기': 'ツールをさらに表示', '자': '定規', '오디오 녹음': '音声録音', '공유와 내보내기': '共有と書き出し', '닫기': '閉じる',
-      '페이지': 'ページ', '목차': '目次', '오디오': '音声', '문서 검색': 'ドキュメント検索', '손글씨 OCR·텍스트·수식 검색': '手書きOCR・テキスト・数式を検索',
-      '페이지 이동': 'ページ移動', '이동할 페이지 번호': '移動するページ番号', '페이지 번호로 이동': 'ページ番号へ移動',
-      '페이지 창에서 원하는 페이지 번호를 입력합니다.': 'ページパネルで移動先のページ番号を入力します。',
-      '펜 입력 대기': 'ペン入力待機中', '새 노트 만들기': '新しいノートを作成', '노트 템플릿 선택': 'ノートテンプレートを選択', '노트 제목': 'ノートタイトル',
-      'PDF로 새 노트': 'PDFから新規ノート', '페이지와 검색 텍스트를 가져옵니다': 'ページと検索用テキストを取り込みます', '취소': 'キャンセル', '만들기': '作成',
-      '텍스트 입력': 'テキスト入力', '내용 입력': '内容を入力', '페이지에 넣을 내용을 입력하세요.': 'ページに入れる内容を入力してください。', '삽입': '挿入',
-      '펜 설정': 'ペン設定', '펜 세부 설정': 'ペン詳細設定', '기본값': '初期値', '완료': '完了', '메뉴': 'メニュー',
-      '스타일러스 전용 필기': 'スタイラス専用入力', '손바닥과 손가락 입력을 필기에서 제외합니다.': '手のひらと指の入力を筆記から除外します。',
-      '낙서해서 지우기': 'なぞって消去', '빠른 지그재그 획으로 겹친 필기를 지웁니다.': '素早いジグザグ線で重なった筆跡を消します。',
-      '그려서 도형 만들기': '描いて図形化', '직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.': '描いた後に少し保持すると整った図形に変換します。',
-      '스타일러스 정보 표시': 'スタイラス情報を表示', '필압, 기울기, 입력 장치를 화면에 표시합니다.': '筆圧、傾き、入力デバイスを表示します。',
-      'HUD 텍스트 투명도': 'HUDテキストの透明度', 'S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.': 'S Pen消しゴムと状態表示HUDの文字透明度を調整します。',
-      '연속 페이지 보기': '連続ページ表示', '모든 페이지를 세로로 이어서 표시합니다.': 'すべてのページを縦につなげて表示します。',
-      '새 폴더': '新しいフォルダ', '노트 묶음 만들기': 'ノートグループを作成', '이 폴더 안에 만들기': 'このフォルダ内に作成',
-      '열기': '開く', '문서 메뉴': 'ドキュメントメニュー', '복원': '復元', '영구 삭제': '完全に削除', '이름 변경': '名前を変更',
-      '즐겨찾기 해제': 'お気に入り解除', '즐겨찾기에 추가': 'お気に入りに追加', '복제': '複製', '폴더 이동': 'フォルダへ移動', '휴지통으로 이동': 'ゴミ箱へ移動',
-      '페이지 레이아웃': 'ページレイアウト', '이 페이지로 이동': 'このページへ移動', '북마크': 'ブックマーク', '북마크 해제': 'ブックマーク解除',
-      '페이지 복제': 'ページを複製', '앞으로 이동': '前へ移動', '뒤로 이동': '後ろへ移動', '페이지 삭제': 'ページ削除',
-      '추가 도구': '追加ツール', '도구막대': 'ツールバー', '형광펜': '蛍光ペン', '도형': '図形', '암기 테이프': '暗記テープ', '스티커': 'ステッカー',
-      '레이저 포인터': 'レーザーポインター', '손 도구': '手のひらツール', '문서 옵션': 'ドキュメントオプション',
-      '파일 즐겨찾기': 'ファイルをお気に入り', '파일 즐겨찾기 해제': 'ファイルのお気に入り解除',
-      '손글씨 수식 계산': '手書き数式計算', '편집 모드로 전환': '編集モードに切替', '읽기 모드': '閲覧モード', '한 페이지 보기': '1ページ表示',
-      '페이지 맞춤': 'ページに合わせる', '노트 가져오기': 'ノートをインポート', 'PDF 가져오기': 'PDFをインポート',
-      '공유 및 내보내기': '共有と書き出し', '기기 공유': '端末共有', '편집 가능한 .ifnote': '編集可能な.ifnote', 'PDF 주석 내보내기': 'PDF注釈を書き出し',
-      '현재 페이지 PNG': '現在ページPNG', 'PDF로 인쇄': 'PDFへ印刷', '제스처 사용법': 'ジェスチャーガイド',
-      '펜 종류': 'ペンの種類', '만년필': '万年筆', '볼펜': 'ボールペン', '젤펜': 'ゲルペン', '브러시': 'ブラシ', '연필': '鉛筆', '파인라이너': 'ファインライナー',
-      '정렬': '並べ替え', '최근 수정순': '最近更新順', '오래된 수정순': '古い更新順', '이름 오름차순': '名前昇順', '이름 내림차순': '名前降順',
-      '획': 'ストローク', '정밀': '精密', '전체': '全体', '페이지 지우기': 'ページを消去', '자유형 선택': '自由選択', '전체 선택': 'すべて選択',
-      '붙여넣기': '貼り付け', '텍스트 추가': 'テキストを追加', '페이지를 탭해 입력': 'ページをタップして入力', '검색': '検索',
-      '다음 페이지 추가': '次のページを追加', '이 페이지 뒤에 추가': 'このページの後に追加', '검색 결과가 없습니다.': '検索結果がありません。'
-    },
-    zh: {
-      '문서': '文档', '즐겨찾기': '收藏', '공유됨': '已共享', '템플릿': '模板', '휴지통': '回收站', '설정': '设置',
-      '언어': '语言', '앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.': '更改应用显示语言。笔记内容和文件名不会改变。',
-      '신규': '新建', '새 노트': '新笔记', '새 문서': '新文档', '새 페이지': '新页面', '더 보기': '更多',
-      '노트 검색': '搜索笔记', '제목, 손글씨 OCR, 텍스트, 수식 검색': '搜索标题、手写 OCR、文本和公式', '검색어 지우기': '清除搜索',
-      '기기 안에서 빠르고 안전하게': '在本机快速且私密', '필기, 손글씨 OCR, 수식 계산, 페이지 검색을 오프라인으로 사용할 수 있습니다.': '离线使用手写、OCR、公式计算和页面搜索。',
-      '사용법': '使用指南', '폴더': '文件夹', '노트 목록': '笔记列表', '노트를 만들어 보세요': '创建你的第一本笔记',
-      '+ 신규 버튼으로 템플릿을 고르고 바로 필기를 시작할 수 있습니다.': '点击新建选择模板并立即开始书写。',
-      '라이브러리': '库', '올가미': '套索', '펜': '笔', '지우개': '橡皮擦', '텍스트': '文本', '스티키 노트': '便签', '이미지': '图片',
-      '도구 더보기': '更多工具', '자': '尺子', '오디오 녹음': '录音', '공유와 내보내기': '分享和导出', '닫기': '关闭',
-      '페이지': '页面', '목차': '大纲', '오디오': '音频', '문서 검색': '文档搜索', '손글씨 OCR·텍스트·수식 검색': '搜索手写 OCR、文本和公式',
-      '페이지 이동': '页面导航', '이동할 페이지 번호': '要跳转的页码', '페이지 번호로 이동': '跳转到页码',
-      '페이지 창에서 원하는 페이지 번호를 입력합니다.': '在页面面板中输入要跳转的页码。',
-      '펜 입력 대기': '等待笔输入', '새 노트 만들기': '创建新笔记', '노트 템플릿 선택': '选择笔记模板', '노트 제목': '笔记标题',
-      'PDF로 새 노트': '从 PDF 新建笔记', '페이지와 검색 텍스트를 가져옵니다': '导入页面和可搜索文本', '취소': '取消', '만들기': '创建',
-      '텍스트 입력': '文本输入', '내용 입력': '输入内容', '페이지에 넣을 내용을 입력하세요.': '输入要放到页面上的内容。', '삽입': '插入',
-      '펜 설정': '笔设置', '펜 세부 설정': '笔详细设置', '기본값': '默认值', '완료': '完成', '메뉴': '菜单',
-      '스타일러스 전용 필기': '仅手写笔书写', '손바닥과 손가락 입력을 필기에서 제외합니다.': '从书写中排除手掌和手指输入。',
-      '낙서해서 지우기': '涂画擦除', '빠른 지그재그 획으로 겹친 필기를 지웁니다.': '用快速之字形笔画擦除相交的手写内容。',
-      '그려서 도형 만들기': '绘制并保持生成图形', '직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.': '绘制后稍作停留即可转换为规整图形。',
-      '스타일러스 정보 표시': '显示手写笔信息', '필압, 기울기, 입력 장치를 화면에 표시합니다.': '显示压感、倾斜和输入设备。',
-      'HUD 텍스트 투명도': 'HUD 文字透明度', 'S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.': '调整 S Pen 橡皮和状态 HUD 标签的文字透明度。',
-      '연속 페이지 보기': '连续页面', '모든 페이지를 세로로 이어서 표시합니다.': '纵向连续显示所有页面。',
-      '새 폴더': '新文件夹', '노트 묶음 만들기': '创建笔记组', '이 폴더 안에 만들기': '在此文件夹中创建',
-      '열기': '打开', '문서 메뉴': '文档菜单', '복원': '恢复', '영구 삭제': '永久删除', '이름 변경': '重命名',
-      '즐겨찾기 해제': '取消收藏', '즐겨찾기에 추가': '添加到收藏', '복제': '复制', '폴더 이동': '移动到文件夹', '휴지통으로 이동': '移到回收站',
-      '페이지 레이아웃': '页面布局', '이 페이지로 이동': '转到此页面', '북마크': '书签', '북마크 해제': '取消书签',
-      '페이지 복제': '复制页面', '앞으로 이동': '上移', '뒤로 이동': '下移', '페이지 삭제': '删除页面',
-      '추가 도구': '更多工具', '도구막대': '工具栏', '형광펜': '荧光笔', '도형': '图形', '암기 테이프': '记忆遮挡条', '스티커': '贴纸',
-      '레이저 포인터': '激光笔', '손 도구': '手形工具', '문서 옵션': '文档选项',
-      '파일 즐겨찾기': '收藏文件', '파일 즐겨찾기 해제': '取消文件收藏',
-      '손글씨 수식 계산': '手写公式计算', '편집 모드로 전환': '切换到编辑模式', '읽기 모드': '阅读模式', '한 페이지 보기': '单页视图',
-      '페이지 맞춤': '适合页面', '노트 가져오기': '导入笔记', 'PDF 가져오기': '导入 PDF',
-      '공유 및 내보내기': '分享和导出', '기기 공유': '设备分享', '편집 가능한 .ifnote': '可编辑 .ifnote', 'PDF 주석 내보내기': '导出 PDF 注释',
-      '현재 페이지 PNG': '当前页面 PNG', 'PDF로 인쇄': '打印为 PDF', '제스처 사용법': '手势指南',
-      '펜 종류': '笔类型', '만년필': '钢笔', '볼펜': '圆珠笔', '젤펜': '中性笔', '브러시': '画笔', '연필': '铅笔', '파인라이너': '细线笔',
-      '정렬': '排序', '최근 수정순': '最近修改', '오래된 수정순': '最早修改', '이름 오름차순': '名称升序', '이름 내림차순': '名称降序',
-      '획': '笔画', '정밀': '精细', '전체': '全部', '페이지 지우기': '清空页面', '자유형 선택': '自由选择', '전체 선택': '全选',
-      '붙여넣기': '粘贴', '텍스트 추가': '添加文本', '페이지를 탭해 입력': '点击页面输入', '검색': '搜索',
-      '다음 페이지 추가': '添加下一页', '이 페이지 뒤에 추가': '在此页后添加', '검색 결과가 없습니다.': '没有搜索结果。'
-    },
-    pt: {
-      '문서': 'Documentos', '즐겨찾기': 'Favoritos', '공유됨': 'Compartilhados', '템플릿': 'Modelos', '휴지통': 'Lixeira', '설정': 'Configurações',
-      '언어': 'Idioma', '앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.': 'Altere o idioma da interface. O conteúdo das notas e nomes de arquivos não mudam.',
-      '신규': 'Novo', '새 노트': 'Nova nota', '새 문서': 'Novo documento', '새 페이지': 'Nova página', '더 보기': 'Mais',
-      '노트 검색': 'Pesquisar notas', '제목, 손글씨 OCR, 텍스트, 수식 검색': 'Pesquisar títulos, OCR manuscrito, texto e fórmulas', '검색어 지우기': 'Limpar busca',
-      '기기 안에서 빠르고 안전하게': 'Rápido e privado neste dispositivo', '필기, 손글씨 OCR, 수식 계산, 페이지 검색을 오프라인으로 사용할 수 있습니다.': 'Use escrita, OCR, cálculo matemático e busca de páginas offline.',
-      '사용법': 'Guia', '폴더': 'Pastas', '노트 목록': 'Lista de notas', '노트를 만들어 보세요': 'Crie sua primeira nota',
-      '+ 신규 버튼으로 템플릿을 고르고 바로 필기를 시작할 수 있습니다.': 'Escolha um modelo pelo botão Novo e comece a escrever.',
-      '라이브러리': 'Biblioteca', '올가미': 'Laço', '펜': 'Caneta', '지우개': 'Borracha', '텍스트': 'Texto', '스티키 노트': 'Nota adesiva', '이미지': 'Imagem',
-      '도구 더보기': 'Mais ferramentas', '자': 'Régua', '오디오 녹음': 'Gravação de áudio', '공유와 내보내기': 'Compartilhar e exportar', '닫기': 'Fechar',
-      '페이지': 'Páginas', '목차': 'Sumário', '오디오': 'Áudio', '문서 검색': 'Busca no documento', '손글씨 OCR·텍스트·수식 검색': 'Pesquisar OCR manuscrito, texto e fórmulas',
-      '페이지 이동': 'Navegação de páginas', '이동할 페이지 번호': 'Número da página', '페이지 번호로 이동': 'Ir para página',
-      '페이지 창에서 원하는 페이지 번호를 입력합니다.': 'Digite o número da página no painel de páginas.',
-      '펜 입력 대기': 'Aguardando caneta', '새 노트 만들기': 'Criar nova nota', '노트 템플릿 선택': 'Escolha um modelo', '노트 제목': 'Título da nota',
-      'PDF로 새 노트': 'Nova nota de PDF', '페이지와 검색 텍스트를 가져옵니다': 'Importa páginas e texto pesquisável', '취소': 'Cancelar', '만들기': 'Criar',
-      '텍스트 입력': 'Entrada de texto', '내용 입력': 'Inserir conteúdo', '페이지에 넣을 내용을 입력하세요.': 'Digite o conteúdo para inserir na página.', '삽입': 'Inserir',
-      '펜 설정': 'Configurações da caneta', '펜 세부 설정': 'Detalhes da caneta', '기본값': 'Padrões', '완료': 'Concluir', '메뉴': 'Menu',
-      '스타일러스 전용 필기': 'Escrita só com stylus', '손바닥과 손가락 입력을 필기에서 제외합니다.': 'Ignora palma e dedos ao escrever.',
-      '낙서해서 지우기': 'Rabiscar para apagar', '빠른 지그재그 획으로 겹친 필기를 지웁니다.': 'Apaga traços tocados por zigue-zagues rápidos.',
-      '그려서 도형 만들기': 'Desenhar e segurar para formas', '직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.': 'Segure após desenhar para converter em formas limpas.',
-      '스타일러스 정보 표시': 'Mostrar dados da stylus', '필압, 기울기, 입력 장치를 화면에 표시합니다.': 'Mostra pressão, inclinação e dispositivo de entrada.',
-      'HUD 텍스트 투명도': 'Opacidade do texto HUD', 'S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.': 'Ajusta a opacidade do texto da borracha da S Pen e dos avisos de status.',
-      '연속 페이지 보기': 'Páginas contínuas', '모든 페이지를 세로로 이어서 표시합니다.': 'Mostra todas as páginas em fluxo vertical.',
-      '새 폴더': 'Nova pasta', '노트 묶음 만들기': 'Criar grupo de notas', '이 폴더 안에 만들기': 'Criar nesta pasta',
-      '열기': 'Abrir', '문서 메뉴': 'Menu do documento', '복원': 'Restaurar', '영구 삭제': 'Excluir permanentemente', '이름 변경': 'Renomear',
-      '즐겨찾기 해제': 'Remover dos favoritos', '즐겨찾기에 추가': 'Adicionar aos favoritos', '복제': 'Duplicar', '폴더 이동': 'Mover para pasta', '휴지통으로 이동': 'Mover para lixeira',
-      '페이지 레이아웃': 'Layout da página', '이 페이지로 이동': 'Ir para esta página', '북마크': 'Marcador', '북마크 해제': 'Remover marcador',
-      '페이지 복제': 'Duplicar página', '앞으로 이동': 'Mover para cima', '뒤로 이동': 'Mover para baixo', '페이지 삭제': 'Excluir página',
-      '추가 도구': 'Mais ferramentas', '도구막대': 'Barra de ferramentas', '형광펜': 'Marcador', '도형': 'Formas', '암기 테이프': 'Fita de estudo', '스티커': 'Adesivo',
-      '레이저 포인터': 'Ponteiro laser', '손 도구': 'Ferramenta mão', '문서 옵션': 'Opções do documento',
-      '파일 즐겨찾기': 'Favoritar arquivo', '파일 즐겨찾기 해제': 'Remover favorito do arquivo',
-      '손글씨 수식 계산': 'Cálculo matemático manuscrito', '편집 모드로 전환': 'Alternar para edição', '읽기 모드': 'Modo leitura', '한 페이지 보기': 'Página única',
-      '페이지 맞춤': 'Ajustar página', '노트 가져오기': 'Importar nota', 'PDF 가져오기': 'Importar PDF',
-      '공유 및 내보내기': 'Compartilhar e exportar', '기기 공유': 'Compartilhar no dispositivo', '편집 가능한 .ifnote': '.ifnote editável', 'PDF 주석 내보내기': 'Exportar anotações PDF',
-      '현재 페이지 PNG': 'Página atual em PNG', 'PDF로 인쇄': 'Imprimir em PDF', '제스처 사용법': 'Guia de gestos',
-      '펜 종류': 'Tipo de caneta', '만년필': 'Caneta tinteiro', '볼펜': 'Esferográfica', '젤펜': 'Caneta gel', '브러시': 'Pincel', '연필': 'Lápis', '파인라이너': 'Caneta fina',
-      '정렬': 'Ordenar', '최근 수정순': 'Modificados recentemente', '오래된 수정순': 'Modificados há mais tempo', '이름 오름차순': 'Nome crescente', '이름 내림차순': 'Nome decrescente',
-      '획': 'Traço', '정밀': 'Precisão', '전체': 'Tudo', '페이지 지우기': 'Limpar página', '자유형 선택': 'Seleção livre', '전체 선택': 'Selecionar tudo',
-      '붙여넣기': 'Colar', '텍스트 추가': 'Adicionar texto', '페이지를 탭해 입력': 'Toque na página para digitar', '검색': 'Pesquisar',
-      '다음 페이지 추가': 'Adicionar próxima página', '이 페이지 뒤에 추가': 'Adicionar após esta página', '검색 결과가 없습니다.': 'Nenhum resultado.'
-    }
+    en: window.I18N_EN || {},
+    ja: window.I18N_JA || {},
+    zh: window.I18N_ZH || {},
+    pt: window.I18N_PT || {},
+    ko: window.I18N_KO || {}
   };
-
-  Object.assign(I18N_PHRASES.en, {
-    '손글씨 수식 자동 계산': 'Automatic handwritten math',
-    '기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.': 'Off by default. Use document options when you need to calculate math on the current page.',
-    'S Pen 버튼 지우개': 'S Pen button eraser',
-    '펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.': 'Hold the pen button to erase, then release it to return to the previous tool.',
-    '앱 자동 업데이트': 'Automatic app updates',
-    '앱 시작 시 GitHub Releases를 확인하고, 새 APK가 있으면 업데이트 화면을 표시합니다.': 'Check GitHub Releases on launch and show the update screen when a new APK is available.',
-    '확인': 'Check',
-    '손글씨 OCR 자동 등록': 'Automatic handwriting OCR indexing',
-    '화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.': 'After you stay on the visible page, update Korean and English OCR search indexes while idle.',
-    '네이티브 인식 엔진': 'Native recognition engine',
-    '모델 상태 확인 중…': 'Checking model status...'
-  });
-  Object.assign(I18N_PHRASES.ja, {
-    '손글씨 수식 자동 계산': '手書き数式の自動計算',
-    '기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.': '初期状態ではオフです。必要なときにドキュメントオプションから現在ページの数式を計算できます。',
-    'S Pen 버튼 지우개': 'S Penボタン消しゴム',
-    '펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.': 'ペンボタンを押している間は消しゴムとして使い、離すと前のツールに戻ります。',
-    '앱 자동 업데이트': 'アプリ自動アップデート',
-    '앱 시작 시 GitHub Releases를 확인하고, 새 APK가 있으면 업데이트 화면을 표시합니다.': '起動時にGitHub Releasesを確認し、新しいAPKがあれば更新画面を表示します。',
-    '확인': '確認',
-    '손글씨 OCR 자동 등록': '手書きOCR自動インデックス',
-    '화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.': '表示中のページに一定時間とどまった後、アイドル時に韓国語・英語OCR検索インデックスを更新します。',
-    '네이티브 인식 엔진': 'ネイティブ認識エンジン',
-    '모델 상태 확인 중…': 'モデル状態を確認中…'
-  });
-  Object.assign(I18N_PHRASES.zh, {
-    '손글씨 수식 자동 계산': '手写公式自动计算',
-    '기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.': '默认关闭。需要时可从文档选项计算当前页面公式。',
-    'S Pen 버튼 지우개': 'S Pen 按钮橡皮擦',
-    '펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.': '按住笔按钮时作为橡皮擦使用，松开后返回之前的工具。',
-    '앱 자동 업데이트': '应用自动更新',
-    '앱 시작 시 GitHub Releases를 확인하고, 새 APK가 있으면 업데이트 화면을 표시합니다.': '启动时检查 GitHub Releases，如有新 APK 则显示更新界面。',
-    '확인': '检查',
-    '손글씨 OCR 자동 등록': '手写 OCR 自动索引',
-    '화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.': '停留在可见页面后，在空闲时更新韩文和英文 OCR 搜索索引。',
-    '네이티브 인식 엔진': '原生识别引擎',
-    '모델 상태 확인 중…': '正在检查模型状态…'
-  });
-  Object.assign(I18N_PHRASES.pt, {
-    '손글씨 수식 자동 계산': 'Cálculo matemático manuscrito automático',
-    '기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.': 'Desativado por padrão. Use as opções do documento para calcular fórmulas da página atual quando precisar.',
-    'S Pen 버튼 지우개': 'Borracha pelo botão da S Pen',
-    '펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.': 'Segure o botão da caneta para apagar e solte para voltar à ferramenta anterior.',
-    '앱 자동 업데이트': 'Atualizações automáticas do app',
-    '앱 시작 시 GitHub Releases를 확인하고, 새 APK가 있으면 업데이트 화면을 표시합니다.': 'Verifica o GitHub Releases ao iniciar e mostra a tela de atualização quando houver um APK novo.',
-    '확인': 'Verificar',
-    '손글씨 OCR 자동 등록': 'Indexação automática de OCR manuscrito',
-    '화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.': 'Depois de permanecer na página visível, atualiza os índices OCR coreano e inglês quando o app estiver ocioso.',
-    '네이티브 인식 엔진': 'Motor de reconhecimento nativo',
-    '모델 상태 확인 중…': 'Verificando status do modelo...'
-  });
-
   const formatByLanguage = {
     en: {
       itemCount: (count) => `${count} items`,
       pageCount: (count) => `${count} pages`,
       pageNumber: (count) => `Page ${count}`,
       objectCount: (count, bookmarked) => `${count} items${bookmarked ? ' · bookmarked' : ''}`,
-      noteCount: (notes, folders = 0) => folders ? `${notes} notes · ${folders} folders` : `${notes} notes`
+      noteCount: (notes, folders = 0) => folders ? `${notes} notes · ${folders} folders` : `${notes} notes`,
+      itemsDeleted: (count) => `${count} items deleted`,
+      currentPageStrokes: (count) => `Current page strokes: ${count}`,
+      selectedStrokes: (count) => `Selected strokes: ${count}`,
+      ocrConfidence: (conf, lines) => `Average confidence ${conf}% · ${lines} lines`,
+      mathConfidence: (conf) => `Confidence ${conf}% · Tap a candidate or edit directly`,
+      mathError: (err) => `Recognition error: ${err}`,
+      mathToastError: (err) => `Handwritten math failed: ${err}`,
+      koModelProgress: (percent) => `Preparing Korean model ${percent}%`,
+      ocrCharProgress: (p, t) => `Character recognition ${p}/${t}`,
+      mathSymbolProgress: (p, t) => `Symbol recognition ${p}/${t}`
     },
     ja: {
       itemCount: (count) => `${count}件`,
       pageCount: (count) => `${count}ページ`,
       pageNumber: (count) => `${count}ページ`,
       objectCount: (count, bookmarked) => `${count}件${bookmarked ? ' · ブックマーク' : ''}`,
-      noteCount: (notes, folders = 0) => folders ? `${notes}件のノート · ${folders}件のフォルダ` : `${notes}件のノート`
+      noteCount: (notes, folders = 0) => folders ? `${notes}件のノート · ${folders}件のフォルダ` : `${notes}件のノート`,
+      itemsDeleted: (count) => `${count}件削除しました`,
+      currentPageStrokes: (count) => `現在のページの筆記 ${count}画`,
+      selectedStrokes: (count) => `選択した筆記 ${count}画`,
+      ocrConfidence: (conf, lines) => `平均信頼度 ${conf}% · ${lines}行`,
+      mathConfidence: (conf) => `信頼度 ${conf}% · 候補をタップまたは直接編集`,
+      mathError: (err) => `認識エラー: ${err}`,
+      mathToastError: (err) => `数式認識失敗: ${err}`,
+      koModelProgress: (percent) => `韓国語モデルを準備中 ${percent}%`,
+      ocrCharProgress: (p, t) => `文字認識 ${p}/${t}`,
+      mathSymbolProgress: (p, t) => `数式記号認識 ${p}/${t}`
     },
     zh: {
       itemCount: (count) => `${count}项`,
       pageCount: (count) => `${count}页`,
       pageNumber: (count) => `第 ${count} 页`,
       objectCount: (count, bookmarked) => `${count}项${bookmarked ? ' · 书签' : ''}`,
-      noteCount: (notes, folders = 0) => folders ? `${notes} 个笔记 · ${folders} 个文件夹` : `${notes} 个笔记`
+      noteCount: (notes, folders = 0) => folders ? `${notes} 个笔记 · ${folders} 个文件夹` : `${notes} 个笔记`,
+      itemsDeleted: (count) => `已删除 ${count} 项`,
+      currentPageStrokes: (count) => `当前页面笔迹 ${count}画`,
+      selectedStrokes: (count) => `选中的笔迹 ${count}画`,
+      ocrConfidence: (conf, lines) => `平均置信度 ${conf}% · ${lines}行`,
+      mathConfidence: (conf) => `置信度 ${conf}% · 点击候选或直接编辑`,
+      mathError: (err) => `识别错误: ${err}`,
+      mathToastError: (err) => `手写公式失败: ${err}`,
+      koModelProgress: (percent) => `准备韩语模型 ${percent}%`,
+      ocrCharProgress: (p, t) => `字符识别 ${p}/${t}`,
+      mathSymbolProgress: (p, t) => `公式符号识别 ${p}/${t}`
     },
     pt: {
       itemCount: (count) => `${count} itens`,
       pageCount: (count) => `${count} páginas`,
       pageNumber: (count) => `Página ${count}`,
       objectCount: (count, bookmarked) => `${count} itens${bookmarked ? ' · marcador' : ''}`,
-      noteCount: (notes, folders = 0) => folders ? `${notes} notas · ${folders} pastas` : `${notes} notas`
+      noteCount: (notes, folders = 0) => folders ? `${notes} notas · ${folders} pastas` : `${notes} notas`,
+      itemsDeleted: (count) => `${count} itens excluídos`,
+      currentPageStrokes: (count) => `Traços da Página Atual: ${count}`,
+      selectedStrokes: (count) => `Traços Selecionados: ${count}`,
+      ocrConfidence: (conf, lines) => `Confiança média de ${conf}% · ${lines} linhas`,
+      mathConfidence: (conf) => `Confiança de ${conf}% · Toque em um candidato ou edite`,
+      mathError: (err) => `Erro de reconhecimento: ${err}`,
+      mathToastError: (err) => `Falha no reconhecimento da fórmula: ${err}`,
+      koModelProgress: (percent) => `Preparando modelo Coreano ${percent}%`,
+      ocrCharProgress: (p, t) => `Reconhecimento de caractere ${p}/${t}`,
+      mathSymbolProgress: (p, t) => `Reconhecimento de símbolo ${p}/${t}`
     }
   };
 
   function currentLanguage() {
-    const lang = state?.settings?.language || 'ko';
-    return LANGUAGE_META[lang] ? lang : 'ko';
+    const sysLang = typeof navigator !== 'undefined' && navigator.language ? navigator.language.split('-')[0] : 'en';
+    const lang = state?.settings?.language || (LANGUAGE_META[sysLang] ? sysLang : 'en');
+    return LANGUAGE_META[lang] ? lang : 'en';
   }
 
   function currentLocale() {
@@ -609,10 +261,30 @@
     if (match) return format.pageCount(Number(match[1]));
     match = text.match(/^(\d+)페이지$/);
     if (match) return format.pageNumber(Number(match[1]));
-    match = text.match(/^(\d+)개 항목( · 북마크)?$/);
+    match = text.match(/^(\d+)개 항목(?: · 북마크)?$/);
     if (match) return format.objectCount(Number(match[1]), !!match[2]);
+    match = text.match(/^(\d+)개 항목을 지웠습니다\.$/);
+    if (match) return format.itemsDeleted(Number(match[1]));
     match = text.match(/^(\d+)개 노트(?: · (\d+)개 폴더)?$/);
     if (match) return format.noteCount(Number(match[1]), Number(match[2] || 0));
+    match = text.match(/^현재 페이지 필기 (\d+)획$/);
+    if (match) return format.currentPageStrokes(Number(match[1]));
+    match = text.match(/^선택한 필기 (\d+)획$/);
+    if (match) return format.selectedStrokes(Number(match[1]));
+    match = text.match(/^평균 신뢰도 (\d+)% · (\d+)줄$/);
+    if (match) return format.ocrConfidence(Number(match[1]), Number(match[2]));
+    match = text.match(/^인식 신뢰도 (\d+)% · 후보를 누르거나 식을 직접 교정하세요\.$/);
+    if (match) return format.mathConfidence(Number(match[1]));
+    match = text.match(/^인식 오류: (.*)$/);
+    if (match) return format.mathError(match[1]);
+    match = text.match(/^손글씨 수식 인식 실패: (.*)$/);
+    if (match) return format.mathToastError(match[1]);
+    match = text.match(/^한글 모델 준비 (\d+)%$/);
+    if (match) return format.koModelProgress(Number(match[1]));
+    match = text.match(/^문자 인식 (\d+)\/(\d+)$/);
+    if (match) return format.ocrCharProgress(Number(match[1]), Number(match[2]));
+    match = text.match(/^수식 기호 인식 (\d+)\/(\d+)$/);
+    if (match) return format.mathSymbolProgress(Number(match[1]), Number(match[2]));
     match = text.match(/^(\d+)-(\d+)페이지는 페이지 번호 입력으로 이동$/);
     if (match) {
       if (lang === 'en') return `Pages ${match[1]}-${match[2]}: use the page number field`;
@@ -633,6 +305,8 @@
     if (!translated) return original;
     return original.replace(source, translated);
   }
+
+  window.localizeString = localizeString;
 
   function localizeSubtree(root) {
     if (!root) return;
@@ -719,7 +393,7 @@
   }
 
   function isWritingTool(tool) {
-    return ['pen','highlighter','eraser','lasso','shape','tape','laser','text','sticky','math','image'].includes(tool);
+    return ['pen', 'highlighter', 'eraser', 'lasso', 'shape', 'tape', 'laser', 'text', 'sticky', 'math', 'image'].includes(tool);
   }
 
   function shouldBlockNonStylusCanvasInput(pointerType, tool) {
@@ -738,9 +412,14 @@
     return colors[Math.floor(Math.random() * colors.length)];
   }
 
+  function getLocalizedDefaultFolders() {
+    return DEFAULT_FOLDERS.map(f => ({ ...f, title: window.localizeString ? window.localizeString(f.title) : f.title }));
+  }
+
   function normalizeFolders(folders) {
-    const source = Array.isArray(folders) ? folders : DEFAULT_FOLDERS;
-    const normalized = [{ ...deepClone(DEFAULT_FOLDERS[0]), parentId: null }];
+    const defaultLoc = getLocalizedDefaultFolders();
+    const source = Array.isArray(folders) && folders.length > 0 ? folders : defaultLoc;
+    const normalized = [{ ...deepClone(defaultLoc[0]), parentId: null }];
     const seen = new Set(['root']);
     for (const folder of source) {
       const id = String(folder?.id || '').trim();
@@ -929,7 +608,8 @@
     };
   }
 
-  function createDocument(title = '새 노트', template = 'grid') {
+  function createDocument(title, template = 'grid') {
+    title = title || (window.localizeString ? window.localizeString('새 노트') : '새 노트');
     return {
       schema: 'com.inkforge.ifnote',
       version: 4,
@@ -1130,7 +810,7 @@
     clearTimeout(state.positionSaveTimer);
     const perform = async () => {
       try { await storage.putDocument(doc); }
-      catch {}
+      catch { }
     };
     if (immediate) await perform();
     else state.positionSaveTimer = setTimeout(perform, 240);
@@ -1468,7 +1148,7 @@
       ctx.fillStyle = '#536273';
       ctx.fillText('WEEKLY PLAN', 60 * sx, 80 * sy);
       ctx.font = `500 ${15 * sx}px sans-serif`;
-      const days = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
+      const days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
       const top = 125 * sy, colW = (width - 120 * sx) / 2, rowH = 155 * sy;
       days.forEach((day, index) => {
         const col = index % 2, row = Math.floor(index / 2);
@@ -1839,7 +1519,7 @@
       default:
         ctx.moveTo(object.x1, object.y1); ctx.lineTo(object.x2, object.y2); break;
     }
-    if (object.fill && object.fill !== 'transparent' && !['line','arrow','double-arrow','arc','curve'].includes(object.shape)) ctx.fill();
+    if (object.fill && object.fill !== 'transparent' && !['line', 'arrow', 'double-arrow', 'arc', 'curve'].includes(object.shape)) ctx.fill();
     ctx.stroke();
     ctx.restore();
   }
@@ -2209,7 +1889,7 @@
     ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
     ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
     ctx.setLineDash([]);
-    for (const [x, y] of [[bounds.x,bounds.y],[bounds.x+bounds.w,bounds.y],[bounds.x,bounds.y+bounds.h],[bounds.x+bounds.w,bounds.y+bounds.h]]) {
+    for (const [x, y] of [[bounds.x, bounds.y], [bounds.x + bounds.w, bounds.y], [bounds.x, bounds.y + bounds.h], [bounds.x + bounds.w, bounds.y + bounds.h]]) {
       ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#1397ed'; ctx.stroke();
     }
     ctx.restore();
@@ -2414,7 +2094,7 @@
     if (!host) return;
     const node = document.createElement('div');
     node.className = 'toast';
-    node.textContent = String(message);
+    node.textContent = localizeString(String(message));
     host.appendChild(node);
     setTimeout(() => { node.style.opacity = '0'; node.style.transform = 'translateY(8px)'; }, Math.max(300, duration - 180));
     setTimeout(() => node.remove(), duration);
@@ -2431,7 +2111,7 @@
     const meta = TEMPLATE_META[template];
     return `<article class="document-card template-card" data-template-id="${template}" tabindex="0">
       <div class="document-cover template-cover"><canvas class="template-card-canvas" aria-hidden="true"></canvas><span class="cover-accent" style="--cover:#2f7fb7"></span></div>
-      <div class="document-meta"><div class="document-title-row"><span class="document-title">${escapeHtml(meta.title)}</span><span class="document-menu">${icon('plus-circle')}</span></div><div class="document-subtitle"><span>새 노트 만들기</span></div></div>
+      <div class="document-meta"><div class="document-title-row"><span class="document-title">${escapeHtml(localizeString(meta.title))}</span><span class="document-menu">${icon('plus-circle')}</span></div><div class="document-subtitle"><span>${localizeString('새 노트 만들기')}</span></div></div>
     </article>`;
   }
 
@@ -2439,8 +2119,8 @@
     setView('library');
     const titleMap = { all: '문서', favorite: '즐겨찾기', shared: '공유됨', templates: '템플릿', trash: '휴지통' };
     const activeFolder = state.folders.find((folder) => folder.id === state.folderId) || state.folders[0];
-    $('#libraryTitle').textContent = state.libraryFilter === 'all' && state.folderId !== 'root' ? activeFolder.title : (titleMap[state.libraryFilter] || '문서');
-    $('#sortLabel').textContent = state.sort.startsWith('title') ? '이름' : '날짜';
+    $('#libraryTitle').textContent = localizeString(state.libraryFilter === 'all' && state.folderId !== 'root' ? activeFolder.title : (titleMap[state.libraryFilter] || '문서'));
+    $('#sortLabel').textContent = localizeString(state.sort.startsWith('title') ? '이름' : '날짜');
     $('#globalSearchInput').value = state.globalQuery;
     $('#globalSearchPanel').hidden = !state.globalQuery && $('#globalSearchPanel').dataset.open !== '1';
     $$('.rail-button[data-library-filter], .mobile-nav-button[data-library-filter]').forEach((button) => button.classList.toggle('is-active', button.dataset.libraryFilter === state.libraryFilter));
@@ -2458,12 +2138,14 @@
         breadcrumb.innerHTML = crumbs.map((folder, index) => {
           const isCurrent = index === crumbs.length - 1;
           const label = folder.id === 'root' ? '문서' : folder.title;
-          const skip = folder.id === 'root' ? '' : ' data-i18n-skip';
-          const button = `<button class="breadcrumb ${isCurrent ? 'is-current' : ''}" data-folder-id="${folder.id}"${skip}>${escapeHtml(label)}</button>`;
+          const isDefaultFolder = DEFAULT_FOLDERS.some(d => d.title === label) || label === '문서' || label === '학교·공부' || label === '프로젝트';
+          const dispTitle = isDefaultFolder && window.localizeString ? window.localizeString(label) : label;
+          const button = `<button class="breadcrumb ${isCurrent ? 'is-current' : ''}" data-folder-id="${folder.id}">${escapeHtml(dispTitle)}</button>`;
           return index === 0 ? button : `<span class="breadcrumb-separator">/</span>${button}`;
         }).join('');
       } else {
-        breadcrumb.innerHTML = '<button class="breadcrumb is-current" data-folder-id="root">문서</button>';
+        const docLabel = window.localizeString ? window.localizeString('문서') : '문서';
+        breadcrumb.innerHTML = `<button class="breadcrumb is-current" data-folder-id="root">${escapeHtml(docLabel)}</button>`;
       }
     }
 
@@ -2476,10 +2158,13 @@
         const count = state.documents.filter((doc) => !doc.trashed && doc.folderId === folder.id).length;
         const nestedCount = childFolders(folder.id).length;
         const countText = formatNoteFolderCount(count, nestedCount);
-        return `<button class="folder-chip" data-folder-id="${folder.id}"><span class="folder-glyph" style="background:${hexToRgba(folder.color,.28)};color:${folder.color}">${icon('folder')}</span><span class="folder-copy"><strong data-i18n-skip>${escapeHtml(folder.title)}</strong><small>${countText}</small></span><span class="folder-menu">${icon('chevron-right')}</span></button>`;
+        const isDefaultFolder = DEFAULT_FOLDERS.some(d => d.title === folder.title) || folder.title === '문서' || folder.title === '학교·공부' || folder.title === '프로젝트';
+        const dispTitle = isDefaultFolder && window.localizeString ? window.localizeString(folder.title) : folder.title;
+        return `<button class="folder-chip" data-folder-id="${folder.id}"><span class="folder-glyph" style="background:${hexToRgba(folder.color, .28)};color:${folder.color}">${icon('folder')}</span><span class="folder-copy"><strong>${escapeHtml(dispTitle)}</strong><small>${countText}</small></span><span class="folder-menu">${icon('chevron-right')}</span></button>`;
       }).join('');
-      const createHint = activeFolder.id === 'root' ? '노트 묶음 만들기' : '이 폴더 안에 만들기';
-      folderStrip.innerHTML = `${folderCards}<button class="folder-chip folder-create-chip" data-action="create-folder"><span class="folder-glyph">${icon('folderPlus')}</span><span class="folder-copy"><strong>새 폴더</strong><small>${createHint}</small></span><span class="folder-menu">${icon('plus')}</span></button>`;
+      const createHint = activeFolder.id === 'root' ? (window.localizeString ? window.localizeString('노트 묶음 만들기') : '노트 묶음 만들기') : (window.localizeString ? window.localizeString('이 폴더 안에 만들기') : '이 폴더 안에 만들기');
+      const createTitle = window.localizeString ? window.localizeString('새 폴더') : '새 폴더';
+      folderStrip.innerHTML = `${folderCards}<button class="folder-chip folder-create-chip" data-action="create-folder"><span class="folder-glyph">${icon('folderPlus')}</span><span class="folder-copy"><strong>${createTitle}</strong><small>${createHint}</small></span><span class="folder-menu">${icon('plus')}</span></button>`;
     }
 
     const grid = $('#documentGrid');
@@ -3096,12 +2781,12 @@
   }
 
   function activeColorPalette() {
-    if (state.tool === 'highlighter') return ['#f5df39','#80e2ff','#ff9fc2','#a8ef82','#b9a3ff'];
-    return ['#111827','#147bd1','#ffffff','#d93939','#2a9d66','#7a57c7'];
+    if (state.tool === 'highlighter') return ['#f5df39', '#80e2ff', '#ff9fc2', '#a8ef82', '#b9a3ff'];
+    return ['#111827', '#147bd1', '#ffffff', '#d93939', '#2a9d66', '#7a57c7'];
   }
 
   function widthButton(width, current, color = '#fff') {
-    return `<button class="width-slot ${Math.abs(width - current) < .2 ? 'is-active' : ''}" data-action="set-width" data-width="${width}" aria-label="굵기 ${width}"><span class="width-swatch" style="height:${clamp(width / 2.2,2,13)}px;color:${color}"></span></button>`;
+    return `<button class="width-slot ${Math.abs(width - current) < .2 ? 'is-active' : ''}" data-action="set-width" data-width="${width}" aria-label="굵기 ${width}"><span class="width-swatch" style="height:${clamp(width / 2.2, 2, 13)}px;color:${color}"></span></button>`;
   }
 
   function widthControl(tool, current, options = {}) {
@@ -3140,24 +2825,24 @@
       const brush = BRUSH_META[state.brush] || BRUSH_META.fountain;
       const widths = state.brush === 'pencil' ? [2.4, 5.2, 10] : state.brush === 'brush' ? [4, 9, 18] : [2, 4.2, 8.5];
       html = `<button class="tool-name-button" data-action="brush-menu">${icon(brush.icon)}<span>${escapeHtml(brush.title)}</span>${icon('chevron-down')}</button>
-        <span class="active-divider"></span>${widths.map((width) => widthButton(width, state.width)).join('')}${widthControl('pen', state.width, { min:.5, max:80, step:.5 })}
+        <span class="active-divider"></span>${widths.map((width) => widthButton(width, state.width)).join('')}${widthControl('pen', state.width, { min: .5, max: 80, step: .5 })}
         <button class="icon-button" data-action="pen-settings" aria-label="펜 설정">${icon('settings')}</button><span class="active-divider"></span>${colorButtons(activeColorPalette(), state.color)}`;
     } else if (tool === 'highlighter') {
-      html = `<button class="tool-name-button" data-action="set-tool" data-tool="highlighter">${icon('highlighter')}<span>형광펜</span></button><span class="active-divider"></span>${[12,22,34].map((width) => widthButton(width, state.highlighterWidth)).join('')}${widthControl('highlighter', state.highlighterWidth, { min:2, max:120, step:1 })}<span class="active-divider"></span>${colorButtons(activeColorPalette(), state.highlighterColor)}`;
+      html = `<button class="tool-name-button" data-action="set-tool" data-tool="highlighter">${icon('highlighter')}<span>형광펜</span></button><span class="active-divider"></span>${[12, 22, 34].map((width) => widthButton(width, state.highlighterWidth)).join('')}${widthControl('highlighter', state.highlighterWidth, { min: 2, max: 120, step: 1 })}<span class="active-divider"></span>${colorButtons(activeColorPalette(), state.highlighterColor)}`;
     } else if (tool === 'eraser') {
-      const modes = [{ id:'stroke', icon:'eraser', title:'획' }, { id:'precision', icon:'lasso', title:'정밀' }, { id:'whole', icon:'trash', title:'전체' }];
-      html = modes.map((mode) => `<button class="tool-name-button ${state.eraserMode === mode.id ? 'is-active' : ''}" data-action="set-eraser-mode" data-mode="${mode.id}">${icon(mode.icon)}<span>${mode.title}</span></button>`).join('') + `<span class="active-divider"></span>${[12,26,48].map((width) => widthButton(width, state.eraserRadius)).join('')}${widthControl('eraser', state.eraserRadius, { min:2, max:180, step:1 })}<button class="icon-button" data-action="clear-page" aria-label="페이지 지우기">${icon('trash')}</button>`;
+      const modes = [{ id: 'stroke', icon: 'eraser', title: '획' }, { id: 'precision', icon: 'lasso', title: '정밀' }, { id: 'whole', icon: 'trash', title: '전체' }];
+      html = modes.map((mode) => `<button class="tool-name-button ${state.eraserMode === mode.id ? 'is-active' : ''}" data-action="set-eraser-mode" data-mode="${mode.id}">${icon(mode.icon)}<span>${mode.title}</span></button>`).join('') + `<span class="active-divider"></span>${[12, 26, 48].map((width) => widthButton(width, state.eraserRadius)).join('')}${widthControl('eraser', state.eraserRadius, { min: 2, max: 180, step: 1 })}<button class="icon-button" data-action="clear-page" aria-label="페이지 지우기">${icon('trash')}</button>`;
     } else if (tool === 'lasso') {
       html = `<button class="tool-name-button is-active">${icon('lasso')}<span>자유형 선택</span></button><button class="icon-button" data-action="select-all" aria-label="전체 선택">${icon('check-circle')}</button><button class="icon-button" data-action="paste" aria-label="붙여넣기">${icon('copy')}</button><span class="active-divider"></span><span class="active-label">필기 · 텍스트 · 이미지</span>`;
     } else if (tool === 'shape') {
-      const shapes = ['line','curve','arc','rectangle','rounded-rectangle','square','ellipse','circle','triangle','diamond','pentagon','hexagon','starshape','trapezoid','parallelogram','heartshape','cloudshape','speech','arrow','double-arrow'];
-      html = shapes.map((shape) => `<button class="icon-button ${state.shape === shape ? 'is-active' : ''}" data-action="set-shape" data-shape="${shape}" aria-label="${shape}">${icon(shape)}</button>`).join('') + `<span class="active-divider"></span>${[2,4,8].map((width) => widthButton(width, state.width)).join('')}${widthControl('pen', state.width, { min:.5, max:80, step:.5 })}${colorButtons(activeColorPalette().slice(0,5), state.color)}`;
+      const shapes = ['line', 'curve', 'arc', 'rectangle', 'rounded-rectangle', 'square', 'ellipse', 'circle', 'triangle', 'diamond', 'pentagon', 'hexagon', 'starshape', 'trapezoid', 'parallelogram', 'heartshape', 'cloudshape', 'speech', 'arrow', 'double-arrow'];
+      html = shapes.map((shape) => `<button class="icon-button ${state.shape === shape ? 'is-active' : ''}" data-action="set-shape" data-shape="${shape}" aria-label="${shape}">${icon(shape)}</button>`).join('') + `<span class="active-divider"></span>${[2, 4, 8].map((width) => widthButton(width, state.width)).join('')}${widthControl('pen', state.width, { min: .5, max: 80, step: .5 })}${colorButtons(activeColorPalette().slice(0, 5), state.color)}`;
     } else if (tool === 'text') {
       html = `<button class="tool-name-button is-active" data-action="insert-text-now">${icon('text')}<span>텍스트 추가</span></button><span class="active-divider"></span><span class="active-label">페이지를 탭해 입력</span><button class="icon-button" data-action="document-search" aria-label="검색">${icon('search')}</button>`;
     } else if (tool === 'sticky') {
-      html = `<button class="tool-name-button is-active">${icon('sticky')}<span>스티키 노트</span></button><span class="active-divider"></span>${['#ffe58d','#ffd2dc','#cfefff','#d8f5ce','#ddd2ff'].map((color) => `<button class="color-slot ${state.stickyColor === color ? 'is-active' : ''}" style="--swatch:${color}" data-action="set-sticky-color" data-color="${color}"></button>`).join('')}<span class="active-label">페이지를 탭해 추가</span>`;
+      html = `<button class="tool-name-button is-active">${icon('sticky')}<span>스티키 노트</span></button><span class="active-divider"></span>${['#ffe58d', '#ffd2dc', '#cfefff', '#d8f5ce', '#ddd2ff'].map((color) => `<button class="color-slot ${state.stickyColor === color ? 'is-active' : ''}" style="--swatch:${color}" data-action="set-sticky-color" data-color="${color}"></button>`).join('')}<span class="active-label">페이지를 탭해 추가</span>`;
     } else if (tool === 'tape') {
-      html = `<button class="tool-name-button is-active">${icon('tape')}<span>암기 테이프</span></button><span class="active-divider"></span>${['#4c91dd','#cf5b74','#6f63c7','#2c9878','#d38a32'].map((color) => `<button class="color-slot ${state.tapeColor === color ? 'is-active' : ''}" style="--swatch:${color}" data-action="set-tape-color" data-color="${color}"></button>`).join('')}<span class="active-label">탭하면 정답 보기</span>`;
+      html = `<button class="tool-name-button is-active">${icon('tape')}<span>암기 테이프</span></button><span class="active-divider"></span>${['#4c91dd', '#cf5b74', '#6f63c7', '#2c9878', '#d38a32'].map((color) => `<button class="color-slot ${state.tapeColor === color ? 'is-active' : ''}" style="--swatch:${color}" data-action="set-tape-color" data-color="${color}"></button>`).join('')}<span class="active-label">탭하면 정답 보기</span>`;
     } else if (tool === 'hand') {
       html = `<button class="tool-name-button is-active">${icon('hand')}<span>손 도구</span></button><button class="icon-button" data-action="zoom-out" aria-label="축소">${icon('close')}</button><span class="active-label">${Math.round(state.zoom * 100)}%</span><button class="icon-button" data-action="zoom-in" aria-label="확대">${icon('plus')}</button><button class="icon-button" data-action="fit-page" aria-label="페이지 맞춤">${icon('fit')}</button>`;
     } else if (tool === 'laser') {
@@ -3239,7 +2924,7 @@
   function setTool(tool, options = {}) {
     if (state.readOnly && tool !== 'hand') state.readOnly = false;
     state.tool = tool;
-    if (['pen','highlighter'].includes(tool)) state.lastWritingTool = tool;
+    if (['pen', 'highlighter'].includes(tool)) state.lastWritingTool = tool;
     if (!options.keepSelection && tool !== 'lasso') state.selection = null;
     if (tool === 'image' && options.openPicker !== false) $('#imageInput').click();
     renderActiveToolMenu();
@@ -4066,7 +3751,7 @@
     if (!node) return;
     node.hidden = !state.settings.telemetry;
     if (!state.settings.telemetry) return;
-    node.textContent = `${event.pointerType || '입력'} · 압력 ${Number(event.pressure || 0).toFixed(2)} · 기울기 ${Math.round(Math.hypot(event.tiltX || 0, event.tiltY || 0))}° · 회전 ${Math.round(event.twist || 0)}°`;
+    node.textContent = `${localizeString(event.pointerType || '입력')} · ${localizeString('압력')} ${Number(event.pressure || 0).toFixed(2)} · ${localizeString('기울기')} ${Math.round(Math.hypot(event.tiltX || 0, event.tiltY || 0))}° · ${localizeString('회전')} ${Math.round(event.twist || 0)}°`;
   }
 
   function touchPointers() {
@@ -4174,7 +3859,7 @@
   function applyStylusButtonEraser(detail = {}) {
     if (!state.settings.sPenGestures) return false;
     const session = state.drawSession;
-    if (!session || !['stroke','eraser'].includes(session.kind)) return false;
+    if (!session || !['stroke', 'eraser'].includes(session.kind)) return false;
     const canvas = $(`.page-canvas[data-page-index="${session.pageIndex}"]`);
     if (!canvas) return false;
     const pointer = state.activePointers.get(session.pointerId);
@@ -4216,7 +3901,7 @@
     if (previousPageIndex !== state.currentPageIndex) notifyPageChanged(previousPageIndex, 'pointer');
     rememberCurrentPage();
     updatePageIndicator();
-    try { canvas.setPointerCapture(event.pointerId); } catch {}
+    try { canvas.setPointerCapture(event.pointerId); } catch { }
     const pointerRecord = { pointerId: event.pointerId, pointerType, clientX: event.clientX, clientY: event.clientY, x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY };
     state.activePointers.set(event.pointerId, pointerRecord);
 
@@ -4486,7 +4171,8 @@
     const left = rect.left + bounds.x / PAGE_WIDTH * rect.width;
     const top = rect.top + bounds.y / PAGE_HEIGHT * rect.height;
     const width = bounds.w / PAGE_WIDTH * rect.width;
-    menu.innerHTML = `<button data-action="selection-cut">${icon('cut')}<span>잘라내기</span></button><button data-action="selection-copy">${icon('copy')}<span>복사</span></button><button data-action="selection-duplicate">${icon('duplicate')}<span>복제</span></button><button data-action="selection-color">${icon('palette')}<span>색상</span></button><button data-action="selection-lock">${icon('lock')}<span>${objects.every((item) => item.locked) ? '잠금 해제' : '잠금'}</span></button><button data-action="selection-front">${icon('arrow-up')}<span>앞으로</span></button><button class="danger" data-action="selection-delete">${icon('trash')}<span>삭제</span></button>`;
+    menu.innerHTML = `<button data-action="selection-cut">${icon('cut')}<span>${localizeString('잘라내기')}</span></button><button data-action="selection-copy">${icon('copy')}<span>${localizeString('복사')}</span></button><button data-action="selection-duplicate">${icon('duplicate')}<span>${localizeString('복제')}</span></button><button data-action="selection-color">${icon('palette')}<span>${localizeString('색상')}</span></button><button data-action="selection-lock">${icon('lock')}<span>${localizeString(objects.every((item) => item.locked) ? '잠금 해제' : '잠금')}</span></button><button data-action="selection-front">${icon('arrow-up')}<span>${localizeString('앞으로')}</span></button><button class="danger" data-action="selection-delete">${icon('trash')}<span>${localizeString('삭제')}</span></button>`;
+    if (window.localizeSubtree) window.localizeSubtree(menu);
     menu.hidden = false;
     requestAnimationFrame(() => {
       const menuRect = menu.getBoundingClientRect();
@@ -4547,7 +4233,7 @@
   function cycleSelectionColor() {
     const objects = selectedObjects();
     if (!objects.length) return;
-    const colors = ['#111827','#147bd1','#d93939','#2a9d66','#7a57c7','#d28b2f'];
+    const colors = ['#111827', '#147bd1', '#d93939', '#2a9d66', '#7a57c7', '#d28b2f'];
     checkpoint('selection-color');
     objects.forEach((object) => {
       const current = object.color || '#111827';
@@ -4675,7 +4361,7 @@
   }
 
   function renderMathKeypad() {
-    const keys = ['7','8','9','÷','sqrt(','(', '4','5','6','×','^',')', '1','2','3','-','pi','!', '0','.','%','+','e','⌫', 'sin(','cos(','tan(','log(','ln(','C'];
+    const keys = ['7', '8', '9', '÷', 'sqrt(', '(', '4', '5', '6', '×', '^', ')', '1', '2', '3', '-', 'pi', '!', '0', '.', '%', '+', 'e', '⌫', 'sin(', 'cos(', 'tan(', 'log(', 'ln(', 'C'];
     $('#mathKeypad').innerHTML = keys.map((key) => `<button class="math-key" data-action="math-key" data-key="${escapeHtml(key)}">${escapeHtml(key)}</button>`).join('');
   }
 
@@ -4721,10 +4407,11 @@
     const settings = state.penSettings[state.brush] || BRUSH_META[state.brush];
     const fields = [];
     const ranges = state.brush === 'pencil' ? [
-      ['hardness','펜촉 경도',0,1,.01],['grain','흑연 입자',0,1,.01],['tiltShade','기울기 음영',0,1,.01],['pressure','압력 민감도',0,1,.01],['smoothing','획 안정화',0,.9,.01],['opacity','농도',.2,1,.01]
+      ['hardness', '펜촉 경도', 0, 1, .01], ['grain', '흑연 입자', 0, 1, .01], ['tiltShade', '기울기 음영', 0, 1, .01], ['pressure', '압력 민감도', 0, 1, .01], ['smoothing', '획 안정화', 0, .9, .01], ['opacity', '농도', .2, 1, .01]
     ] : [
-      ['pressure','압력 민감도',0,1,.01],['sharpness','펜촉 선명도',0,1,.01],['smoothing','획 안정화',0,.9,.01],['taper','시작·끝 테이퍼',0,1,.01],['opacity','불투명도',.2,1,.01]
+      ['pressure', '압력 민감도', 0, 1, .01], ['sharpness', '펜촉 선명도', 0, 1, .01], ['smoothing', '획 안정화', 0, .9, .01], ['taper', '시작·끝 테이퍼', 0, 1, .01], ['opacity', '불투명도', .2, 1, .01]
     ];
+    for (const r of ranges) r[1] = localizeString(r[1]);
     for (const [key, label, min, max, step] of ranges) fields.push(`<div class="range-field"><label for="pen-${key}">${label}</label><output id="pen-${key}-out">${Math.round((settings[key] ?? 0) * 100)}%</output><input id="pen-${key}" data-pen-setting="${key}" type="range" min="${min}" max="${max}" step="${step}" value="${settings[key] ?? 0}"></div>`);
     $('#penSettingsFields').innerHTML = fields.join('');
     renderPenPreview();
@@ -4779,7 +4466,7 @@
       state.recording = recorder; state.audioStream = stream;
       dot.classList.add('is-active');
       toast('녹음을 시작했습니다. 다시 누르면 저장됩니다.');
-    } catch (error) { toast(`마이크를 사용할 수 없습니다: ${error.message || error}`); }
+    } catch (error) { toast((window.localizeString ? window.localizeString('마이크를 사용할 수 없습니다:') : '마이크를 사용할 수 없습니다:') + ` ${error.message || error}`); }
   }
 
   function blobToDataURL(blob) {
@@ -5000,7 +4687,7 @@
   }
 
   function openNewNoteSheet(template = 'grid') {
-    $('#newNoteTitle').value = '새 노트';
+    $('#newNoteTitle').value = '';
     renderTemplatePicker(template);
     $('#newNoteSheet').dataset.template = template;
     openModal('newNoteSheet');
@@ -5008,7 +4695,7 @@
 
   async function createNewNote() {
     const template = $('#newNoteSheet').dataset.template || $('.template-option.is-active')?.dataset.templateId || 'grid';
-    const title = $('#newNoteTitle').value.trim() || '새 노트';
+    const title = $('#newNoteTitle').value.trim() || (window.localizeString ? window.localizeString('새 노트') : '새 노트');
     const doc = createDocument(title, template);
     doc.folderId = activeLibraryFolderId();
     state.documents.push(doc);
@@ -5018,7 +4705,9 @@
   }
 
   async function createFolder(title = null) {
-    const requested = title == null ? prompt('새 폴더 이름', '새 폴더') : title;
+    const promptTitle = window.localizeString ? window.localizeString('새 폴더 이름') : '새 폴더 이름';
+    const promptDefault = window.localizeString ? window.localizeString('새 폴더') : '새 폴더';
+    const requested = title == null ? prompt(promptTitle, promptDefault) : title;
     const name = String(requested || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     if (!name) return null;
     const parentId = activeLibraryFolderId();
@@ -5138,18 +4827,18 @@
     if (!doc) return;
     if (doc.trashed) {
       showMenu(doc.title, '휴지통', [
-        { action:'restore-document', attrs:`data-doc-id="${id}"`, icon:'undo', title:'복원', description:'문서 목록으로 되돌립니다.' },
-        { action:'trash-document', attrs:`data-doc-id="${id}"`, icon:'trash', title:'영구 삭제', description:'이 작업은 되돌릴 수 없습니다.', danger:true }
+        { action: 'restore-document', attrs: `data-doc-id="${id}"`, icon: 'undo', title: '복원', description: '문서 목록으로 되돌립니다.' },
+        { action: 'trash-document', attrs: `data-doc-id="${id}"`, icon: 'trash', title: '영구 삭제', description: '이 작업은 되돌릴 수 없습니다.', danger: true }
       ]);
       return;
     }
     showMenu(doc.title, '문서 메뉴', [
-      { action:'open-document-menu', attrs:`data-doc-id="${id}"`, icon:'notebook', title:'열기', description:`${doc.pages.length}페이지` },
-      { action:'rename-document', attrs:`data-doc-id="${id}"`, icon:'text', title:'이름 변경' },
-      { action:'toggle-favorite-menu', attrs:`data-doc-id="${id}"`, icon:'star', title:doc.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가' },
-      { action:'duplicate-document', attrs:`data-doc-id="${id}"`, icon:'duplicate', title:'복제' },
-      { action:'move-document', attrs:`data-doc-id="${id}"`, icon:'folder', title:'폴더 이동' },
-      { action:'trash-document', attrs:`data-doc-id="${id}"`, icon:'trash', title:'휴지통으로 이동', danger:true }
+      { action: 'open-document-menu', attrs: `data-doc-id="${id}"`, icon: 'notebook', title: '열기', description: `${doc.pages.length}페이지` },
+      { action: 'rename-document', attrs: `data-doc-id="${id}"`, icon: 'text', title: '이름 변경' },
+      { action: 'toggle-favorite-menu', attrs: `data-doc-id="${id}"`, icon: 'star', title: doc.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가' },
+      { action: 'duplicate-document', attrs: `data-doc-id="${id}"`, icon: 'duplicate', title: '복제' },
+      { action: 'move-document', attrs: `data-doc-id="${id}"`, icon: 'folder', title: '폴더 이동' },
+      { action: 'trash-document', attrs: `data-doc-id="${id}"`, icon: 'trash', title: '휴지통으로 이동', danger: true }
     ]);
   }
 
@@ -5157,28 +4846,28 @@
     const page = currentDocument()?.pages?.[index];
     if (!page) return;
     showMenu(`${index + 1}페이지`, '페이지 레이아웃', [
-      { action:'go-page-menu', attrs:`data-page-index="${index}"`, icon:'eye', title:'이 페이지로 이동' },
-      { action:'bookmark-page', attrs:`data-page-index="${index}"`, icon:'bookmark', title:page.bookmarked ? '북마크 해제' : '북마크' },
-      { action:'duplicate-page', attrs:`data-page-index="${index}"`, icon:'duplicate', title:'페이지 복제' },
-      { action:'move-page-up', attrs:`data-page-index="${index}"`, icon:'arrow-up', title:'앞으로 이동' },
-      { action:'move-page-down', attrs:`data-page-index="${index}"`, icon:'arrow-down', title:'뒤로 이동' },
-      { action:'delete-page', attrs:`data-page-index="${index}"`, icon:'trash', title:'페이지 삭제', danger:true }
+      { action: 'go-page-menu', attrs: `data-page-index="${index}"`, icon: 'eye', title: '이 페이지로 이동' },
+      { action: 'bookmark-page', attrs: `data-page-index="${index}"`, icon: 'bookmark', title: page.bookmarked ? '북마크 해제' : '북마크' },
+      { action: 'duplicate-page', attrs: `data-page-index="${index}"`, icon: 'duplicate', title: '페이지 복제' },
+      { action: 'move-page-up', attrs: `data-page-index="${index}"`, icon: 'arrow-up', title: '앞으로 이동' },
+      { action: 'move-page-down', attrs: `data-page-index="${index}"`, icon: 'arrow-down', title: '뒤로 이동' },
+      { action: 'delete-page', attrs: `data-page-index="${index}"`, icon: 'trash', title: '페이지 삭제', danger: true }
     ]);
   }
 
   function openToolsOverflow() {
     showMenu('추가 도구', '도구막대', [
-      { action:'select-tool-menu', attrs:'data-tool="highlighter"', icon:'highlighter', title:'형광펜', description:'반투명 마커로 중요한 부분을 표시합니다.' },
-      { action:'select-tool-menu', attrs:'data-tool="shape"', icon:'shape', title:'도형', description:'선, 화살표, 다각형, 별, 말풍선 등 다양한 도형을 만듭니다.' },
-      { action:'select-tool-menu', attrs:'data-tool="tape"', icon:'tape', title:'암기 테이프', description:'내용을 가렸다가 탭해 정답을 확인합니다.' },
-      { action:'sticker-menu', icon:'sticker', title:'스티커', description:'페이지 가운데에 선택한 스티커를 추가합니다.' },
-      { action:'select-tool-menu', attrs:'data-tool="laser"', icon:'laser', title:'레이저 포인터', description:'저장되지 않는 발표용 포인터입니다.' },
-      { action:'select-tool-menu', attrs:'data-tool="hand"', icon:'hand', title:'손 도구', description:'확대·이동과 읽기에 사용합니다.' }
+      { action: 'select-tool-menu', attrs: 'data-tool="highlighter"', icon: 'highlighter', title: '형광펜', description: '반투명 마커로 중요한 부분을 표시합니다.' },
+      { action: 'select-tool-menu', attrs: 'data-tool="shape"', icon: 'shape', title: '도형', description: '선, 화살표, 다각형, 별, 말풍선 등 다양한 도형을 만듭니다.' },
+      { action: 'select-tool-menu', attrs: 'data-tool="tape"', icon: 'tape', title: '암기 테이프', description: '내용을 가렸다가 탭해 정답을 확인합니다.' },
+      { action: 'sticker-menu', icon: 'sticker', title: '스티커', description: '페이지 가운데에 선택한 스티커를 추가합니다.' },
+      { action: 'select-tool-menu', attrs: 'data-tool="laser"', icon: 'laser', title: '레이저 포인터', description: '저장되지 않는 발표용 포인터입니다.' },
+      { action: 'select-tool-menu', attrs: 'data-tool="hand"', icon: 'hand', title: '손 도구', description: '확대·이동과 읽기에 사용합니다.' }
     ]);
   }
 
   function openStickerMenu() {
-    const stickers = ['★','✓','!','?','❤','⚑','→','○','□','△'];
+    const stickers = ['★', '✓', '!', '?', '❤', '⚑', '→', '○', '□', '△'];
     showMenu('스티커', 'Sticker', stickers.map((sticker) => ({
       action: 'select-sticker',
       attrs: `data-sticker="${escapeHtml(sticker)}"`,
@@ -5192,37 +4881,37 @@
     const doc = currentDocument();
     if (!doc) return;
     showMenu('문서 옵션', doc.title, [
-      { action:'document-search', icon:'search', title:'문서 검색', description:'입력한 텍스트, 수식, 제목을 찾습니다.' },
-      { action:'toggle-current-favorite', icon:'star', title:doc.favorite ? '파일 즐겨찾기 해제' : '파일 즐겨찾기', description:'라이브러리 즐겨찾기와 목록 상단에 고정합니다.' },
-      { action:'go-page-number-menu', icon:'arrow', title:'페이지 번호로 이동', description:'페이지 창에서 원하는 페이지 번호를 입력합니다.' },
-      { action:'calculate-page-math', icon:'math', title:'손글씨 수식 계산', description:'현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다.' },
-      { action:'toggle-read-mode', icon:state.readOnly ? 'eye-off' : 'read', title:state.readOnly ? '편집 모드로 전환' : '읽기 모드', description:'실수로 필기되지 않도록 편집을 잠급니다.' },
-      { action:'toggle-page-mode', icon:'sidebar', title:state.pageMode === 'continuous' ? '한 페이지 보기' : '연속 페이지 보기' },
-      { action:'fit-page', icon:'fit', title:'페이지 맞춤' },
-      { action:'import-note', icon:'import', title:'노트 가져오기', description:'.ifnote 파일을 추가합니다.' },
-      { action:'import-pdf', icon:'page-plus', title:'PDF 가져오기', description:'PDF 각 페이지를 노트 배경으로 추가하고 텍스트를 검색합니다.' },
-      { action:'open-settings', icon:'settings', title:'설정' }
+      { action: 'document-search', icon: 'search', title: '문서 검색', description: '입력한 텍스트, 수식, 제목을 찾습니다.' },
+      { action: 'toggle-current-favorite', icon: 'star', title: doc.favorite ? '파일 즐겨찾기 해제' : '파일 즐겨찾기', description: '라이브러리 즐겨찾기와 목록 상단에 고정합니다.' },
+      { action: 'go-page-number-menu', icon: 'arrow', title: '페이지 번호로 이동', description: '페이지 창에서 원하는 페이지 번호를 입력합니다.' },
+      { action: 'calculate-page-math', icon: 'math', title: localizeString('손글씨 수식 계산'), description: localizeString('현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다.') },
+      { action: 'toggle-read-mode', icon: state.readOnly ? 'eye-off' : 'read', title: state.readOnly ? '편집 모드로 전환' : '읽기 모드', description: '실수로 필기되지 않도록 편집을 잠급니다.' },
+      { action: 'toggle-page-mode', icon: 'sidebar', title: state.pageMode === 'continuous' ? '한 페이지 보기' : '연속 페이지 보기' },
+      { action: 'fit-page', icon: 'fit', title: '페이지 맞춤' },
+      { action: 'import-note', icon: 'import', title: '노트 가져오기', description: '.ifnote 파일을 추가합니다.' },
+      { action: 'import-pdf', icon: 'page-plus', title: 'PDF 가져오기', description: 'PDF 각 페이지를 노트 배경으로 추가하고 텍스트를 검색합니다.' },
+      { action: 'open-settings', icon: 'settings', title: '설정' }
     ]);
   }
 
   function openShareMenu() {
     showMenu('공유 및 내보내기', 'Export', [
-      { action:'share-native', icon:'share', title:'기기 공유', description:'지원되는 앱으로 편집 가능한 노트를 공유합니다.' },
-      { action:'export-ifnote', icon:'export', title:'편집 가능한 .ifnote', description:'모든 획과 페이지를 보존합니다.' },
-      { action:'export-pdf-annotations', icon:'bookmark', title:'PDF 주석 내보내기', description:'필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다.' },
-      { action:'export-png', icon:'image', title:'현재 페이지 PNG' },
-      { action:'print-pdf', icon:'page-plus', title:'PDF로 인쇄', description:'시스템 인쇄 화면에서 PDF로 저장합니다.' }
+      { action: 'share-native', icon: 'share', title: '기기 공유', description: '지원되는 앱으로 편집 가능한 노트를 공유합니다.' },
+      { action: 'export-ifnote', icon: 'export', title: '편집 가능한 .ifnote', description: '모든 획과 페이지를 보존합니다.' },
+      { action: 'export-pdf-annotations', icon: 'bookmark', title: 'PDF 주석 내보내기', description: '필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다.' },
+      { action: 'export-png', icon: 'image', title: '현재 페이지 PNG' },
+      { action: 'print-pdf', icon: 'page-plus', title: 'PDF로 인쇄', description: '시스템 인쇄 화면에서 PDF로 저장합니다.' }
     ]);
   }
 
   function showGestureGuide() {
-    showMenu('제스처 사용법', 'Quick Guide', [
-      { action:'close-modal', icon:'gesture', title:'두 손가락 핀치', description:'페이지 중심을 유지하며 8%~800% 확대·축소합니다.' },
-      { action:'close-modal', icon:'undo', title:'두 손가락 탭', description:'실행 취소합니다.' },
-      { action:'close-modal', icon:'redo', title:'세 손가락 탭', description:'다시 실행합니다.' },
-      { action:'close-modal', icon:'arrow', title:'두 손가락 좌우 쓸기', description:'이전 또는 다음 페이지로 이동합니다.' },
-      { action:'close-modal', icon:'eraser', title:'낙서해서 지우기', description:'필기 위를 빠르게 지그재그로 문질러 지웁니다.' },
-      { action:'close-modal', icon:'shape', title:'그린 뒤 길게 유지', description:'직선이나 닫힌 원을 정돈된 도형으로 변환합니다.' }
+    showMenu(localizeString('제스처 사용법'), 'Quick Guide', [
+      { action: 'close-modal', icon: 'gesture', title: localizeString('두 손가락 핀치'), description: localizeString('페이지 중심을 유지하며 8%~800% 확대·축소합니다.') },
+      { action: 'close-modal', icon: 'undo', title: localizeString('두 손가락 탭'), description: localizeString('실행 취소합니다.') },
+      { action: 'close-modal', icon: 'redo', title: localizeString('세 손가락 탭'), description: localizeString('다시 실행합니다.') },
+      { action: 'close-modal', icon: 'arrow', title: localizeString('두 손가락 좌우 쓸기'), description: localizeString('이전 또는 다음 페이지로 이동합니다.') },
+      { action: 'close-modal', icon: 'eraser', title: localizeString('낙서해서 지우기'), description: localizeString('필기 위를 빠르게 지그재그로 문질러 지웁니다.') },
+      { action: 'close-modal', icon: 'shape', title: localizeString('그린 뒤 길게 유지'), description: localizeString('직선이나 닫힌 원을 정돈된 도형으로 변환합니다.') }
     ]);
   }
 
@@ -5232,28 +4921,28 @@
     const words = text.match(/[가-힣A-Za-z0-9]{2,}/g) || [];
     const frequency = new Map();
     words.forEach((word) => frequency.set(word, (frequency.get(word) || 0) + 1));
-    const keywords = [...frequency.entries()].sort((a,b) => b[1] - a[1] || b[0].length - a[0].length).slice(0, 6).map(([word]) => word);
-    showMenu('학습 도우미', 'On-device', [
-      { action:'assistant-keywords', icon:'sparkles', title:'현재 페이지 핵심어', description:keywords.length ? keywords.join(' · ') : '입력한 텍스트가 있는 페이지에서 사용할 수 있습니다.' },
-      { action:'assistant-quiz', icon:'check-circle', title:'빠른 복습 문제', description:keywords.length ? `${keywords[0]}의 정의나 핵심 내용을 말해 보세요.` : '텍스트를 먼저 추가하세요.' },
-      { action:'select-tool-menu', attrs:'data-tool="tape"', icon:'tape', title:'암기 테이프 시작', description:'답을 완전히 가리고 눌러 확인합니다.' },
-      { action:'open-handwriting-ocr', icon:'search', title:'손글씨 OCR', description:'현재 페이지 필기를 텍스트로 인식하고 검색 색인에 저장합니다.' }
+    const keywords = [...frequency.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).slice(0, 6).map(([word]) => word);
+    showMenu(localizeString('학습 도우미'), 'On-device', [
+      { action: 'assistant-keywords', icon: 'sparkles', title: localizeString('현재 페이지 핵심어'), description: keywords.length ? keywords.join(' · ') : localizeString('입력한 텍스트가 있는 페이지에서 사용할 수 있습니다.') },
+      { action: 'assistant-quiz', icon: 'check-circle', title: localizeString('빠른 복습 문제'), description: keywords.length ? localizeString(`${keywords[0]}의 정의나 핵심 내용을 말해 보세요.`) : localizeString('텍스트를 먼저 추가하세요.') },
+      { action: 'select-tool-menu', attrs: 'data-tool="tape"', icon: 'tape', title: localizeString('암기 테이프 시작'), description: localizeString('답을 완전히 가리고 눌러 확인합니다.') },
+      { action: 'open-handwriting-ocr', icon: 'search', title: localizeString('손글씨 OCR'), description: localizeString('현재 페이지 필기를 텍스트로 인식하고 검색 색인에 저장합니다.') }
     ]);
   }
 
   function openBrushMenu() {
-    showMenu('펜 종류', 'Writing Tool', Object.entries(BRUSH_META).filter(([id]) => id !== 'highlighter').map(([id, meta]) => ({
-      action:'select-brush', attrs:`data-brush="${id}"`, icon:meta.icon, title:meta.title,
-      description: id === 'pencil' ? '흑연 입자, 압력 농도, 기울기 음영을 사용하는 새 연필 엔진' : id === 'fountain' ? '필압과 진행 방향에 반응하는 만년필' : id === 'brush' ? '큰 굵기 변화와 테이퍼를 가진 브러시' : id === 'ballpoint' ? '압력 변화가 적은 균일한 볼펜' : id === 'gel' ? '선명한 잉크 코어를 가진 젤펜' : '일정하고 가는 파인라이너'
+    showMenu(localizeString('펜 종류'), 'Writing Tool', Object.entries(BRUSH_META).filter(([id]) => id !== 'highlighter').map(([id, meta]) => ({
+      action: 'select-brush', attrs: `data-brush="${id}"`, icon: meta.icon, title: localizeString(meta.title),
+      description: localizeString(id === 'pencil' ? '흑연 입자, 압력 농도, 기울기 음영을 사용하는 새 연필 엔진' : id === 'fountain' ? '필압과 진행 방향에 반응하는 만년필' : id === 'brush' ? '큰 굵기 변화와 테이퍼를 가진 브러시' : id === 'ballpoint' ? '압력 변화가 적은 균일한 볼펜' : id === 'gel' ? '선명한 잉크 코어를 가진 젤펜' : '일정하고 가는 파인라이너')
     })));
   }
 
   function openSortMenu() {
     showMenu('정렬', 'Library', [
-      { action:'set-sort', attrs:'data-sort="updated-desc"', icon:'calendar', title:'최근 수정순' },
-      { action:'set-sort', attrs:'data-sort="updated-asc"', icon:'calendar', title:'오래된 수정순' },
-      { action:'set-sort', attrs:'data-sort="title-asc"', icon:'text', title:'이름 오름차순' },
-      { action:'set-sort', attrs:'data-sort="title-desc"', icon:'text', title:'이름 내림차순' }
+      { action: 'set-sort', attrs: 'data-sort="updated-desc"', icon: 'calendar', title: '최근 수정순' },
+      { action: 'set-sort', attrs: 'data-sort="updated-asc"', icon: 'calendar', title: '오래된 수정순' },
+      { action: 'set-sort', attrs: 'data-sort="title-asc"', icon: 'text', title: '이름 오름차순' },
+      { action: 'set-sort', attrs: 'data-sort="title-desc"', icon: 'text', title: '이름 내림차순' }
     ]);
   }
 
@@ -5333,7 +5022,7 @@
       case 'undo': undo(); break;
       case 'redo': redo(); break;
       case 'cycle-dock': {
-        const positions = ['top','right','bottom','left']; state.dock = positions[(positions.indexOf(state.dock) + 1) % positions.length]; renderActiveToolMenu(); break;
+        const positions = ['top', 'right', 'bottom', 'left']; state.dock = positions[(positions.indexOf(state.dock) + 1) % positions.length]; renderActiveToolMenu(); break;
       }
       case 'switch-tab': if (target.dataset.docId) openDocument(target.dataset.docId); break;
       case 'close-tab': event.stopPropagation(); closeTab(target.dataset.docId); break;
@@ -5416,7 +5105,7 @@
       case 'math-key': {
         const input = $('#mathExpressionInput'); const key = target.dataset.key;
         if (key === 'C') input.value = ''; else if (key === '⌫') input.value = input.value.slice(0, -1); else input.value += key;
-        state.math.expression = input.value; if (key !== 'C' && key !== '⌫') { try { calculateMath(); } catch {} } else renderMathResult(); input.focus(); break;
+        state.math.expression = input.value; if (key !== 'C' && key !== '⌫') { try { calculateMath(); } catch { } } else renderMathResult(); input.focus(); break;
       }
       case 'toggle-favorite': {
         event.stopPropagation(); const doc = state.documents.find((item) => item.id === target.dataset.docId); if (doc) await toggleDocumentFavorite(doc); break;
@@ -5629,11 +5318,35 @@
     const legacySettings = await storage.getSetting('appSettings', {});
     const savedPreferences = await storage.getSetting('preferences', {});
     state.settings = { ...state.settings, ...(legacySettings || {}), ...(savedPreferences || {}) };
-    if (!LANGUAGE_META[state.settings.language]) state.settings.language = 'ko';
+    let promptLanguage = false;
+    if (!state.settings.language || typeof state.settings.language !== 'string') {
+      const sysLang = typeof navigator !== 'undefined' && navigator.language ? navigator.language.split('-')[0] : 'ko';
+      if (LANGUAGE_META[sysLang]) {
+        state.settings.language = sysLang;
+      } else {
+        state.settings.language = 'en';
+        promptLanguage = true;
+      }
+    } else if (!LANGUAGE_META[state.settings.language]) {
+      state.settings.language = 'en';
+    }
     applyHudTextOpacity();
     await storage.setSetting('preferences', state.settings);
+
+    if (promptLanguage) {
+      setTimeout(() => {
+        const choices = Object.keys(LANGUAGE_META).map(k => `${k}: ${LANGUAGE_META[k].label}`).join('\\n');
+        let chosen = prompt(`Select your language / Seleccione su idioma / Escolha seu idioma:\\n${choices}`, 'en');
+        chosen = String(chosen || 'en').trim().split('-')[0];
+        if (LANGUAGE_META[chosen]) {
+          state.settings.language = chosen;
+          storage.setSetting('preferences', state.settings);
+          applyLanguage(document.body);
+        }
+      }, 300);
+    }
     const savedFolders = await storage.getSetting('folders', null);
-    state.folders = Array.isArray(savedFolders) ? normalizeFolders(savedFolders) : deepClone(DEFAULT_FOLDERS);
+    state.folders = Array.isArray(savedFolders) && savedFolders.length > 0 ? normalizeFolders(savedFolders) : getLocalizedDefaultFolders();
     await persistFolders();
     let docs = await storage.allDocuments();
     if (!Array.isArray(docs)) docs = [];

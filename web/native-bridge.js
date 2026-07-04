@@ -542,7 +542,7 @@
     return { text: best.choices[0], alternatives, languageTag: best.languageTag, result: best.result };
   }
 
-  async function nativeTextRecognizer(strokes, mode = 'auto', progress = () => {}) {
+  async function nativeTextRecognizer(strokes, mode = 'auto', progress = () => { }) {
     if (!nativeAvailable()) return localTextRecognizer(strokes, mode, progress);
     try {
       const lines = groupStrokeLines(strokes);
@@ -637,7 +637,7 @@
     }
   }
 
-  async function nativeMathRecognizer(strokes, progress = () => {}) {
+  async function nativeMathRecognizer(strokes, progress = () => { }) {
     const localPromise = localMathRecognizer ? localMathRecognizer(strokes, progress).catch(() => null) : Promise.resolve(null);
     if (!nativeAvailable()) return localPromise;
     progress('네이티브 숫자·기호 인식 중…');
@@ -773,7 +773,7 @@
     const existing = page.objects.find((object) => object.type === 'ocrIndex' && object.source === 'auto-native');
     if (!force && existing?.sourceHash === hash) return;
     try {
-      const result = await nativeTextRecognizer(objects.map((object) => object.points), 'auto', () => {});
+      const result = await nativeTextRecognizer(objects.map((object) => object.points), 'auto', () => { });
       const text = String(result?.text || '').trim();
       if (!text) return;
       const bounds = unionBounds(objects.map((object) => object.points));
@@ -1002,9 +1002,8 @@
       document.body.appendChild(chip);
     }
     const device = String(detail?.device || '스타일러스');
-    chip.querySelector('.stylus-label').textContent = buttonsActive
-      ? 'S Pen 버튼: 지우개'
-      : (/samsung|s pen/i.test(device) ? 'S Pen 연결됨' : '스타일러스 연결됨');
+    let labelText = buttonsActive ? 'S Pen 버튼: 지우개' : (/samsung|s pen/i.test(device) ? 'S Pen 연결됨' : '스타일러스 연결됨');
+    chip.querySelector('.stylus-label').textContent = window.localizeString ? window.localizeString(labelText) : labelText;
     chip.classList.add('is-visible');
     clearTimeout(chip._hideTimer);
     chip._hideTimer = setTimeout(() => chip.classList.remove('is-visible'), buttonsActive ? 950 : 1200);
@@ -1177,13 +1176,13 @@
       api.setTool(api.state.tool === 'eraser' ? (api.state.lastWritingTool || 'pen') : 'eraser');
     }
   }
-
   function ensurePullIndicator() {
     if (pullIndicator) return pullIndicator;
     pullIndicator = document.createElement('div');
     pullIndicator.id = 'pullToAddIndicator';
     pullIndicator.className = 'pull-to-add-indicator';
-    pullIndicator.innerHTML = '<span class="pull-icon">↓</span><span class="pull-text">더 당기면 새 페이지</span>';
+    const pullText = window.localizeString ? window.localizeString('더 당기면 새 페이지') : '더 당기면 새 페이지';
+    pullIndicator.innerHTML = `<span class="pull-icon">↓</span><span class="pull-text">${pullText}</span>`;
     document.getElementById('editorViewport')?.appendChild(pullIndicator);
     return pullIndicator;
   }
@@ -1228,34 +1227,39 @@
     updateSheet.className = 'sheet modal update-sheet';
     updateSheet.hidden = true;
     updateSheet.setAttribute('aria-label', '앱 업데이트');
+    const t = UPDATE_I18N[currentUiLanguage()] || UPDATE_I18N.ko;
     updateSheet.innerHTML = `
       <header class="sheet-header">
         <div>
-          <span id="nativeUpdateEyebrow" class="eyebrow">앱 업데이트</span>
-          <h2 id="nativeUpdateTitle">업데이트 확인</h2>
+          <span id="nativeUpdateEyebrow" class="eyebrow">${t.appUpdate}</span>
+          <h2 id="nativeUpdateTitle">${t.checkUpdate}</h2>
         </div>
-        <button class="icon-button" data-update-action="close" aria-label="닫기">×</button>
+        <button class="icon-button" data-update-action="close" aria-label="${t.close}">×</button>
       </header>
-      <p id="nativeUpdateSummary" class="sheet-description">GitHub Releases에서 최신 버전을 확인합니다.</p>
+      <p id="nativeUpdateSummary" class="sheet-description">${t.checkingSummary}</p>
       <div id="nativeUpdateVersionRow" class="update-version-row">
         <span><strong id="nativeUpdateVersion">-</strong><small id="nativeUpdateVariant">-</small></span>
-        <a id="nativeUpdateReleaseLink" class="update-release-link" href="#" target="_blank" rel="noopener">릴리즈</a>
+        <a id="nativeUpdateReleaseLink" class="update-release-link" href="#" target="_blank" rel="noopener">${t.release}</a>
       </div>
       <div id="nativeUpdateNotes" class="update-notes"></div>
       <div id="nativeUpdateProgressBlock" class="update-progress-block">
         <div id="nativeUpdateProgressBar" class="update-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <span id="nativeUpdateProgressFill"></span>
         </div>
-        <small id="nativeUpdateProgressText">대기 중</small>
+        <small id="nativeUpdateProgressText">${t.waiting}</small>
       </div>
       <div class="sheet-actions update-actions">
-        <button id="nativeUpdateSecondary" class="secondary-button" data-update-action="close">나중에</button>
-        <button id="nativeUpdatePrimary" class="primary-button" data-update-action="check">확인</button>
+        <button id="nativeUpdateSecondary" class="secondary-button" data-update-action="close">${t.later}</button>
+        <button id="nativeUpdatePrimary" class="primary-button" data-update-action="check">${t.confirm}</button>
       </div>`;
     const anchor = document.getElementById('toastHost');
     (document.getElementById('app') || document.body).insertBefore(updateSheet, anchor || null);
     return updateSheet;
   }
+
+  window.addEventListener('inkforge:language-changed', () => {
+    if (updateSheet) renderUpdateSheet();
+  });
 
   function showUpdateSheet() {
     const sheet = ensureUpdateSheet();
@@ -1288,20 +1292,20 @@
     const t = UPDATE_I18N[currentUiLanguage()] || UPDATE_I18N.ko;
     const title = isNotes ? t.notesTitle :
       status === 'available' ? t.newVersion(release.version) :
-      status === 'downloaded' ? t.downloaded :
-      status === 'permission-required' ? t.permissionRequired :
-      status === 'installing' ? t.installing :
-      status === 'current' ? t.current :
-      status === 'error' ? t.error : t.checkUpdate;
+        status === 'downloaded' ? t.downloaded :
+          status === 'permission-required' ? t.permissionRequired :
+            status === 'installing' ? t.installing :
+              status === 'current' ? t.current :
+                status === 'error' ? t.error : t.checkUpdate;
     const summary = isNotes ? t.notesSummary :
       status === 'checking' ? t.checkingSummary :
-      status === 'available' ? t.availableSummary :
-      status === 'downloading' ? t.downloadingSummary :
-      status === 'downloaded' ? t.downloadedSummary :
-      status === 'permission-required' ? t.permissionSummary :
-      status === 'installing' ? t.installingSummary :
-      status === 'current' ? t.currentSummary :
-      release.message || t.fallbackError;
+        status === 'available' ? t.availableSummary :
+          status === 'downloading' ? t.downloadingSummary :
+            status === 'downloaded' ? t.downloadedSummary :
+              status === 'permission-required' ? t.permissionSummary :
+                status === 'installing' ? t.installingSummary :
+                  status === 'current' ? t.currentSummary :
+                    release.message || t.fallbackError;
     sheet.dataset.status = status;
     sheet.setAttribute('aria-label', t.appUpdate);
     sheet.querySelector('[data-update-action="close"]')?.setAttribute('aria-label', t.close);
@@ -1358,7 +1362,17 @@
     const manual = updateCheckManual;
     updateState = { status, release, progress };
     renderUpdateSheet();
-    const shouldOpen = manual || ['available', 'downloading', 'downloaded', 'permission-required', 'installing'].includes(status) || (manual && status === 'error');
+    let shouldOpen = manual || ['downloading', 'downloaded', 'permission-required', 'installing'].includes(status) || (manual && status === 'error');
+    if (status === 'available' && !manual) {
+      const notifiedKey = 'badnote-update-notified-version';
+      const lastNotified = safeLocalStorageGet(notifiedKey);
+      if (release && release.version && lastNotified !== release.version) {
+        shouldOpen = true;
+        safeLocalStorageSet(notifiedKey, release.version);
+      }
+    } else if (status === 'available' && manual) {
+      shouldOpen = true;
+    }
     if (shouldOpen) showUpdateSheet();
     if (status === 'current' && manual) {
       showUpdateSheet();
@@ -1458,7 +1472,8 @@
       indicator.classList.add('is-visible');
       indicator.classList.toggle('is-ready', pullState.ready);
       indicator.style.setProperty('--pull-progress', String(clamp(distance / 92, 0, 1)));
-      indicator.querySelector('.pull-text').textContent = pullState.ready ? '놓으면 새 페이지 추가' : '더 당기면 새 페이지';
+      let pt = pullState.ready ? '놓으면 새 페이지 추가' : '더 당기면 새 페이지';
+      indicator.querySelector('.pull-text').textContent = window.localizeString ? window.localizeString(pt) : pt;
     }, { passive: true, capture: true });
     viewport.addEventListener('touchend', () => {
       if (pullState?.ready) {
@@ -1475,11 +1490,12 @@
     if (!list || document.getElementById('nativeAutoOcrToggle')) return;
     const updateRow = document.createElement('div');
     updateRow.className = 'setting-row update-setting-row';
-    updateRow.innerHTML = '<span><strong>앱 자동 업데이트</strong><small>앱 시작 시 GitHub Releases를 확인하고, 새 APK가 있으면 업데이트 화면을 표시합니다.</small></span><button class="secondary-button compact-action" data-action="check-app-update" type="button">확인</button>';
+    const L = window.localizeString || (x => x);
+    updateRow.innerHTML = `<span><strong>${L('앱 자동 업데이트')}</strong><small>${L('앱 시작 시 GitHub Releases를 확인하고, 새 APK가 있으면 업데이트 화면을 표시합니다.')}</small></span><button class="secondary-button compact-action" data-action="check-app-update" type="button">${L('확인')}</button>`;
     list.appendChild(updateRow);
     const autoRow = document.createElement('label');
     autoRow.className = 'setting-row';
-    autoRow.innerHTML = '<span><strong>손글씨 OCR 자동 등록</strong><small>화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.</small></span><input id="nativeAutoOcrToggle" type="checkbox" />';
+    autoRow.innerHTML = `<span><strong>${L('손글씨 OCR 자동 등록')}</strong><small>${L('화면에 보이는 페이지에 머문 뒤 한글·영문 OCR 검색 색인을 유휴 상태에서 갱신합니다.')}</small></span><input id="nativeAutoOcrToggle" type="checkbox" />`;
     list.appendChild(autoRow);
     const toggle = autoRow.querySelector('input');
     toggle.checked = api.state.settings.autoOcr !== false;
@@ -1491,7 +1507,7 @@
     const status = document.createElement('div');
     status.id = 'nativeModelStatus';
     status.className = 'native-model-status';
-    status.innerHTML = '<strong>네이티브 인식 엔진</strong><span>모델 상태 확인 중…</span>';
+    status.innerHTML = `<strong>${L('네이티브 인식 엔진')}</strong><span>${L('모델 상태 확인 중…')}</span>`;
     list.appendChild(status);
     modelStatusNode = status.querySelector('span');
     api?.localizeSubtree?.(list);
@@ -1617,7 +1633,7 @@
     updateActivePageDwell('initialize');
     scanCurrentPageSoon();
     setTimeout(() => showInstalledReleaseNotesOnce(false), 600);
-    setTimeout(() => requestUpdateCheck(false), 1700);
+    setTimeout(() => requestUpdateCheck(false), 7000);
     window.__inkforgeNativeBridge = {
       version: VERSION,
       ready: true,

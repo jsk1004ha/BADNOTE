@@ -62,6 +62,7 @@
     node.className = 'toast';
     node.textContent = message;
     host.appendChild(node);
+    if (window.localizeSubtree) window.localizeSubtree(node);
     requestAnimationFrame(() => node.classList.add('is-visible'));
     setTimeout(() => { node.classList.remove('is-visible'); setTimeout(() => node.remove(), 240); }, duration);
   }
@@ -85,7 +86,7 @@
     recognitionBusy = isBusy;
     document.querySelectorAll('[data-recognition-run]').forEach((button) => { button.disabled = isBusy; });
     const status = document.getElementById('ocrStatus');
-    if (status && text) status.textContent = text;
+    if (status && text) status.textContent = window.localizeString(text);
     document.body.classList.toggle('recognition-busy', isBusy);
   }
 
@@ -97,7 +98,7 @@
       this.current = null;
       this.pointerId = null;
       this.readOnly = !!options.readOnly;
-      this.onChange = options.onChange || (() => {});
+      this.onChange = options.onChange || (() => { });
       this.background = options.background || '#ffffff';
       this.inkColor = options.inkColor || '#152235';
       this.lineWidth = options.lineWidth || 3.2;
@@ -146,7 +147,7 @@
       if (this.pointerId != null || (event.pointerType === 'touch' && event.isPrimary === false)) return;
       event.preventDefault();
       this.pointerId = event.pointerId;
-      try { this.canvas.setPointerCapture(event.pointerId); } catch {}
+      try { this.canvas.setPointerCapture(event.pointerId); } catch { }
       this.current = [this.point(event)];
       this.strokes.push(this.current);
       this.draw();
@@ -523,7 +524,7 @@
     return results.sort((a, b) => a.score - b.score);
   }
 
-  async function ensureHangulIndex(progress = () => {}) {
+  async function ensureHangulIndex(progress = () => { }) {
     if (hangulIndex) return hangulIndex;
     if (hangulBuildPromise) return hangulBuildPromise;
     hangulBuildPromise = (async () => {
@@ -594,7 +595,7 @@
     sorted() { return [...this.items].sort((a, b) => a.score - b.score); }
   }
 
-  async function hangulCandidates(raster, limit = 5, progress = () => {}) {
+  async function hangulCandidates(raster, limit = 5, progress = () => { }) {
     const index = await ensureHangulIndex(progress);
     const feature = downsample(raster.alpha, raster.size, 8);
     const heap = new MaxHeap(140);
@@ -656,7 +657,7 @@
     return candidates;
   }
 
-  async function classifyComponent(strokes, mode = 'auto', progress = () => {}) {
+  async function classifyComponent(strokes, mode = 'auto', progress = () => { }) {
     const raster = rasterizeStrokes(strokes, 32);
     let candidates = baseCandidates(raster, mode === 'math' ? MATH_CHARS : BASE_LATIN).slice(0, 10);
     if (mode === 'math') {
@@ -792,7 +793,7 @@
     return lines.sort((a, b) => a.top - b.top).map((line) => ({ ...line, components: line.components.sort((a, b) => a.bounds.x - b.bounds.x) }));
   }
 
-  async function recognizeTextStrokes(strokes, mode = 'auto', progress = () => {}) {
+  async function recognizeTextStrokes(strokes, mode = 'auto', progress = () => { }) {
     if (!strokes.length) throw new Error('인식할 필기 획이 없습니다.');
     let components = groupStrokes(strokes, mode).flatMap((component) => splitComponent(component, mode));
     const lines = organizeLines(components);
@@ -844,7 +845,7 @@
       .replace(/(pi|[a-z]|\))(?=\d)/g, '$1*');
   }
 
-  async function recognizeMathStrokes(strokes, progress = () => {}, depth = 0) {
+  async function recognizeMathStrokes(strokes, progress = () => { }, depth = 0) {
     if (!strokes.length) return { expression: '', confidence: 0, details: [] };
     let components = groupStrokes(strokes, 'math').flatMap((component) => splitComponent(component, 'math'));
     components.sort((a, b) => a.bounds.x - b.bounds.x);
@@ -911,7 +912,7 @@
       if (opens > closes) expression += ')'.repeat(opens - closes);
       expression = addImplicitMultiplication(expression);
       let valid = false;
-      try { api.evaluateMath(expression, { degree: !!api.state.math.degree }); valid = true; } catch {}
+      try { api.evaluateMath(expression, { degree: !!api.state.math.degree }); valid = true; } catch { }
       scored.push({ ...beam, expression, valid, totalCost: beam.cost + (valid ? -.18 : .22) });
     }
     scored.sort((a, b) => a.totalCost - b.totalCost);
@@ -938,7 +939,7 @@
     if (!ocrPreviewPad) return;
     ocrPreviewPad.setStrokes(source.strokes, true);
     const label = document.getElementById('ocrSourceLabel');
-    if (label) label.textContent = source.source === 'selection' ? `선택한 필기 ${source.strokes.length}획` : `현재 페이지 필기 ${source.strokes.length}획`;
+    if (label) label.textContent = window.localizeString(source.source === 'selection' ? `선택한 필기 ${source.strokes.length}획` : `현재 페이지 필기 ${source.strokes.length}획`);
     const runButton = document.querySelector('[data-action="run-page-ocr"]');
     if (runButton) runButton.disabled = !source.strokes.length;
   }
@@ -948,16 +949,16 @@
     const input = document.getElementById('ocrResultText');
     if (input) input.value = result?.text || '';
     const confidence = document.getElementById('ocrConfidence');
-    if (confidence) confidence.textContent = result ? `평균 신뢰도 ${Math.round(result.confidence * 100)}% · ${result.lines}줄` : '아직 인식하지 않았습니다.';
+    if (confidence) confidence.textContent = window.localizeString(result ? `평균 신뢰도 ${Math.round(result.confidence * 100)}% · ${result.lines}줄` : '아직 인식하지 않았습니다.');
     const status = document.getElementById('ocrStatus');
-    if (status) status.textContent = result ? '인식 완료 · 결과를 직접 교정할 수 있습니다.' : '선택 영역이 있으면 선택 필기만, 없으면 현재 페이지 전체를 인식합니다.';
+    if (status) status.textContent = window.localizeString(result ? '인식 완료 · 결과를 직접 교정할 수 있습니다.' : '선택 영역이 있으면 선택 필기만, 없으면 현재 페이지 전체를 인식합니다.');
     const candidates = document.getElementById('ocrCandidateList');
     if (candidates) {
       const uncertain = (result?.details || []).filter((detail) => (detail.candidates[0]?.confidence || 0) < .72).slice(0, 8);
       candidates.innerHTML = uncertain.length ? uncertain.map((detail, index) => {
         const options = detail.candidates.slice(0, 4).map((candidate) => `<button class="recognition-chip" data-action="ocr-replace-candidate" data-detail-index="${result.details.indexOf(detail)}" data-candidate="${escapeHtml(candidate.text)}">${escapeHtml(candidate.text)} <small>${Math.round(candidate.confidence * 100)}%</small></button>`).join('');
         return `<div class="uncertain-row"><span>낮은 신뢰도</span><div>${options}</div></div>`;
-      }).join('') : '<span class="recognition-all-clear">인식 후보가 안정적입니다.</span>';
+      }).join('') : `<span class="recognition-all-clear">${window.localizeString('인식 후보가 안정적입니다.')}</span>`;
     }
   }
 
@@ -1034,19 +1035,19 @@
     if (recognitionBusy || !mathPad?.strokes.length) { if (!mathPad?.strokes.length) toast('수식을 손글씨로 먼저 작성하세요.'); return; }
     const status = document.getElementById('mathInkStatus');
     setBusy(true);
-    if (status) status.textContent = '수식 구조 분석 중…';
+    if (status) status.textContent = window.localizeString('수식 구조 분석 중…');
     try {
-      const result = await recognizeMathStrokes(mathPad.strokes, (message) => { if (status) status.textContent = message; });
+      const result = await recognizeMathStrokes(mathPad.strokes, (message) => { if (status) status.textContent = window.localizeString(message); });
       const input = document.getElementById('mathExpressionInput');
       input.value = result.expression;
       api.state.math.expression = result.expression;
       const alternatives = document.getElementById('mathInkAlternatives');
       alternatives.innerHTML = (result.alternatives || []).filter(Boolean).slice(0, 5).map((expression, index) => `<button class="recognition-chip ${index === 0 ? 'is-primary' : ''}" data-action="math-use-alternative" data-expression="${escapeHtml(expression)}">${escapeHtml(expression)}</button>`).join('');
-      if (status) status.textContent = `인식 신뢰도 ${Math.round(result.confidence * 100)}% · 후보를 누르거나 식을 직접 교정하세요.`;
+      if (status) status.textContent = window.localizeString(`인식 신뢰도 ${Math.round(result.confidence * 100)}% · 후보를 누르거나 식을 직접 교정하세요.`);
       document.querySelector('[data-action="calculate-math"]')?.click();
     } catch (error) {
-      if (status) status.textContent = `인식 오류: ${error.message || error}`;
-      toast(`손글씨 수식 인식 실패: ${error.message || error}`);
+      if (status) status.textContent = window.localizeString(`인식 오류: ${error.message || error}`);
+      toast(window.localizeString(`손글씨 수식 인식 실패: ${error.message || error}`));
     } finally { setBusy(false); }
   }
 
@@ -1099,7 +1100,7 @@
     const tabs = document.createElement('div');
     tabs.id = 'mathModeTabs';
     tabs.className = 'recognition-tabs';
-    tabs.innerHTML = `<button class="recognition-tab is-active" data-math-mode="keyboard">키보드</button><button class="recognition-tab" data-math-mode="ink">${icon(INK_MATH_ICON)} 손글씨 수식</button>`;
+    tabs.innerHTML = `<button class="recognition-tab is-active" data-math-mode="keyboard">${window.localizeString ? window.localizeString('키보드') : '키보드'}</button><button class="recognition-tab" data-math-mode="ink">${icon(INK_MATH_ICON)} ${window.localizeString ? window.localizeString('손글씨 수식') : '손글씨 수식'}</button>`;
     description.insertAdjacentElement('afterend', tabs);
     const inputRow = sheet.querySelector('.math-input-row');
     const keypad = sheet.querySelector('.math-keypad');
@@ -1114,16 +1115,17 @@
     inkPanel.className = 'math-ink-panel';
     inkPanel.hidden = true;
     inkPanel.innerHTML = `
-      <div class="ink-canvas-shell math-ink-shell"><canvas id="mathInkCanvas"></canvas><span class="ink-corner-label">필압·S Pen 지원</span></div>
+      <div class="ink-canvas-shell math-ink-shell"><canvas id="mathInkCanvas"></canvas><span class="ink-corner-label">${window.localizeString ? window.localizeString('필압·S Pen 지원') : '필압·S Pen 지원'}</span></div>
       <div class="ink-action-row">
-        <button class="secondary-button compact-action" data-action="math-ink-undo">${icon(UNDO_ICON)}<span>한 획 취소</span></button>
-        <button class="secondary-button compact-action" data-action="math-ink-clear">${icon(TRASH_ICON)}<span>지우기</span></button>
-        <button class="primary-button" data-action="recognize-math-ink" data-recognition-run>${icon(INK_MATH_ICON)}<span>인식·계산</span></button>
+        <button class="secondary-button compact-action" data-action="math-ink-undo">${icon(UNDO_ICON)}<span>${window.localizeString ? window.localizeString('한 획 취소') : '한 획 취소'}</span></button>
+        <button class="secondary-button compact-action" data-action="math-ink-clear">${icon(TRASH_ICON)}<span>${window.localizeString ? window.localizeString('지우기') : '지우기'}</span></button>
+        <button class="primary-button" data-action="recognize-math-ink" data-recognition-run>${icon(INK_MATH_ICON)}<span>${window.localizeString ? window.localizeString('인식·계산') : '인식·계산'}</span></button>
       </div>
-      <div id="mathInkStatus" class="recognition-status">숫자와 + − × ÷ = ( ) √ 거듭제곱, 간단한 분수를 인식합니다.</div>
+      <div id="mathInkStatus" class="recognition-status">${window.localizeString ? window.localizeString('숫자와 + − × ÷ = ( ) √ 거듭제곱, 간단한 분수를 인식합니다.') : '숫자와 + − × ÷ = ( ) √ 거듭제곱, 간단한 분수를 인식합니다.'}</div>
       <div id="mathInkAlternatives" class="recognition-chip-row"></div>`;
     keyboardPanel.insertAdjacentElement('afterend', inkPanel);
-    mathPad = new InkPad(document.getElementById('mathInkCanvas'), { lineWidth: 3.5, onChange: () => { const status = document.getElementById('mathInkStatus'); if (status) status.textContent = '작성 완료 후 인식·계산을 누르세요.'; } });
+    mathPad = new InkPad(document.getElementById('mathInkCanvas'), { lineWidth: 3.5, onChange: () => { const status = document.getElementById('mathInkStatus'); if (status) status.textContent = window.localizeString('작성 완료 후 인식·계산을 누르세요.'); } });
+    if (window.localizeSubtree) window.localizeSubtree(inkPanel);
   }
 
   function injectOcrSheet() {
@@ -1133,31 +1135,32 @@
     sheet.className = 'sheet modal ocr-sheet';
     sheet.hidden = true;
     sheet.setAttribute('aria-label', '손글씨 OCR');
+    const L = (s) => window.localizeString ? window.localizeString(s) : s;
     sheet.innerHTML = `
       <header class="sheet-header">
-        <div><span class="eyebrow">Offline Digital Ink</span><h2>손글씨 OCR·검색</h2></div>
-        <button class="icon-button" data-action="close-ocr" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        <div><span class="eyebrow">Offline Digital Ink</span><h2>${L('손글씨 OCR·검색')}</h2></div>
+        <button class="icon-button" data-action="close-ocr" aria-label="${L('닫기')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </header>
       <div class="ocr-toolbar-row">
-        <span id="ocrSourceLabel" class="source-pill">현재 페이지</span>
-        <label class="recognition-select-label"><span>언어</span><select id="ocrLanguage" class="recognition-select"><option value="auto">한글+영문 자동</option><option value="ko">한글 우선</option><option value="en">영문·숫자</option><option value="math">수식</option></select></label>
-        <button class="secondary-button compact-action" data-action="ocr-refresh-source">${icon(SEARCH_ICON)}<span>영역 새로고침</span></button>
+        <span id="ocrSourceLabel" class="source-pill">${L('현재 페이지')}</span>
+        <label class="recognition-select-label"><span>${L('언어')}</span><select id="ocrLanguage" class="recognition-select"><option value="auto">${L('한글+영문 자동')}</option><option value="ko">${L('한글 우선')}</option><option value="en">${L('영문·숫자')}</option><option value="math">${L('수식')}</option></select></label>
+        <button class="secondary-button compact-action" data-action="ocr-refresh-source">${icon(SEARCH_ICON)}<span>${L('영역 새로고침')}</span></button>
       </div>
-      <div class="ink-canvas-shell ocr-preview-shell"><canvas id="ocrPreviewCanvas"></canvas><span class="ink-corner-label">선택 영역 우선</span></div>
+      <div class="ink-canvas-shell ocr-preview-shell"><canvas id="ocrPreviewCanvas"></canvas><span class="ink-corner-label">${L('선택 영역 우선')}</span></div>
       <div class="ink-action-row">
-        <button class="primary-button" data-action="run-page-ocr" data-recognition-run>${icon(OCR_ICON)}<span>필기 인식</span></button>
-        <span id="ocrConfidence" class="recognition-confidence">아직 인식하지 않았습니다.</span>
+        <button class="primary-button" data-action="run-page-ocr" data-recognition-run>${icon(OCR_ICON)}<span>${L('필기 인식')}</span></button>
+        <span id="ocrConfidence" class="recognition-confidence">${L('아직 인식하지 않았습니다.')}</span>
       </div>
-      <div id="ocrStatus" class="recognition-status">선택 영역이 있으면 선택 필기만, 없으면 현재 페이지 전체를 인식합니다.</div>
-      <label class="field-label" for="ocrResultText">인식 결과 · 직접 교정 가능</label>
-      <textarea id="ocrResultText" class="text-area ocr-result-area" rows="5" placeholder="인식 결과가 여기에 표시됩니다."></textarea>
+      <div id="ocrStatus" class="recognition-status">${L('선택 영역이 있으면 선택 필기만, 없으면 현재 페이지 전체를 인식합니다.')}</div>
+      <label class="field-label" for="ocrResultText">${L('인식 결과 · 직접 교정 가능')}</label>
+      <textarea id="ocrResultText" class="text-area ocr-result-area" rows="5" placeholder="${L('인식 결과가 여기에 표시됩니다.')}"></textarea>
       <div id="ocrCandidateList" class="ocr-candidate-list"></div>
       <div class="sheet-actions ocr-sheet-actions">
-        <button class="secondary-button" data-action="copy-ocr">${icon(COPY_ICON)}<span>복사</span></button>
-        <button class="secondary-button" data-action="save-ocr-index">${icon(SEARCH_ICON)}<span>검색 색인 저장</span></button>
-        <button class="primary-button" data-action="insert-ocr-text">${icon(TEXT_ICON)}<span>텍스트로 삽입</span></button>
+        <button class="secondary-button" data-action="copy-ocr">${icon(COPY_ICON)}<span>${L('복사')}</span></button>
+        <button class="secondary-button" data-action="save-ocr-index">${icon(SEARCH_ICON)}<span>${L('검색 색인 저장')}</span></button>
+        <button class="primary-button" data-action="insert-ocr-text">${icon(TEXT_ICON)}<span>${L('텍스트로 삽입')}</span></button>
       </div>
-      <p class="recognition-footnote">기기 내부에서 동작하며 네트워크로 필기를 전송하지 않습니다. 또박또박 쓴 한글·영문·숫자와 수식에 최적화되어 있습니다.</p>`;
+      <p class="recognition-footnote">${L('기기 내부에서 동작하며 네트워크로 필기를 전송하지 않습니다. 또박또박 쓴 한글·영문·숫자와 수식에 최적화되어 있습니다.')}</p>`;
     const settings = document.getElementById('settingsSheet');
     settings.parentNode.insertBefore(sheet, settings);
     ocrPreviewPad = new InkPad(document.getElementById('ocrPreviewCanvas'), { readOnly: true, lineWidth: 2.8 });
@@ -1168,8 +1171,10 @@
     if (!list || document.getElementById('ocrAutoIndexToggle')) return;
     const row = document.createElement('label');
     row.className = 'setting-row';
-    row.innerHTML = '<span><strong>손글씨 검색 색인 알림</strong><small>필기 획이 많은 페이지에서 OCR 색인 생성을 제안합니다.</small></span><input id="ocrAutoIndexToggle" type="checkbox" checked />';
+    const L = (s) => window.localizeString ? window.localizeString(s) : s;
+    row.innerHTML = `<span><strong>${L('손글씨 검색 색인 알림')}</strong><small>${L('필기 획이 많은 페이지에서 OCR 색인 생성을 제안합니다.')}</small></span><input id="ocrAutoIndexToggle" type="checkbox" checked />`;
     list.appendChild(row);
+    if (window.localizeSubtree) window.localizeSubtree(row);
   }
 
   function handleAction(event) {

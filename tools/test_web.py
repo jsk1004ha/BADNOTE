@@ -13,9 +13,13 @@ from typing import Any
 from playwright.async_api import async_playwright
 
 
-def inline_document(web: pathlib.Path) -> tuple[str, str, str, str, str, str]:
+def inline_document(web: pathlib.Path) -> tuple[str, str, str, str, str, str, str]:
     html = (web / "index.html").read_text(encoding="utf-8")
     css = (web / "styles.css").read_text(encoding="utf-8")
+    locales = "\n".join(
+        (web / "locales" / filename).read_text(encoding="utf-8")
+        for filename in ("ko.js", "pt.js", "en.js", "ja.js", "zh.js")
+    )
     app = (web / "app.js").read_text(encoding="utf-8")
     recognition = (web / "recognition.js").read_text(encoding="utf-8")
     pdf_tools = (web / "pdf-tools.js").read_text(encoding="utf-8")
@@ -23,8 +27,9 @@ def inline_document(web: pathlib.Path) -> tuple[str, str, str, str, str, str]:
     native_bridge = (web / "native-bridge.js").read_text(encoding="utf-8")
     html = re.sub(r'<link[^>]+rel="manifest"[^>]*>', '', html)
     html = re.sub(r'<link[^>]+rel="stylesheet"[^>]*>', f'<style>{css}</style>', html)
+    html = re.sub(r'<script\s+src="locales/[^"]+\.js"></script>', '', html)
     html = re.sub(r'<script\s+src="(?:app|recognition|pdf-tools|upgrade32|native-bridge)\.js"></script>', '', html)
-    return html, app, recognition, pdf_tools, upgrade, native_bridge
+    return html, locales, app, recognition, pdf_tools, upgrade, native_bridge
 
 
 STORAGE_SHIM = r"""
@@ -42,9 +47,10 @@ if (!navigator.clipboard) Object.defineProperty(navigator,'clipboard',{value:{wr
 """
 
 
-async def install(page, html: str, app: str, recognition: str, pdf_tools: str, upgrade: str, native_bridge: str) -> None:
+async def install(page, html: str, locales: str, app: str, recognition: str, pdf_tools: str, upgrade: str, native_bridge: str) -> None:
     await page.set_content(html, wait_until="domcontentloaded")
     await page.evaluate(STORAGE_SHIM)
+    await page.add_script_tag(content=locales)
     await page.add_script_tag(content=app)
     await page.wait_for_function("window.__inkforge?.ready === true", timeout=30_000)
     await page.add_script_tag(content=recognition)
@@ -105,7 +111,7 @@ async def overlap_metrics(page) -> dict[str, Any]:
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
     web = args.web.resolve()
-    html, app, recognition, pdf_tools, upgrade, native_bridge = inline_document(web)
+    html, locales, app, recognition, pdf_tools, upgrade, native_bridge = inline_document(web)
     errors: list[str] = []
     dialogs: list[str] = []
     results: dict[str, Any] = {}
@@ -117,7 +123,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         page.on("pageerror", lambda error: errors.append(f"pageerror: {error}"))
         page.on("console", lambda message: errors.append(f"console {message.type}: {message.text}") if message.type == "error" else None)
         page.on("dialog", lambda dialog: (dialogs.append(dialog.message), asyncio.create_task(dialog.dismiss())))
-        await install(page, html, app, recognition, pdf_tools, upgrade, native_bridge)
+        await install(page, html, locales, app, recognition, pdf_tools, upgrade, native_bridge)
 
         results["version"] = await page.evaluate("window.__inkforge.VERSION")
         results["upgrade_version"] = await page.evaluate("window.__inkforge32.VERSION")
@@ -1769,7 +1775,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         mobile = await mobile_context.new_page()
         mobile.on("pageerror", lambda error: errors.append(f"mobile pageerror: {error}"))
         mobile.on("console", lambda message: errors.append(f"mobile console {message.type}: {message.text}") if message.type == "error" else None)
-        await install(mobile, html, app, recognition, pdf_tools, upgrade, native_bridge)
+        await install(mobile, html, locales, app, recognition, pdf_tools, upgrade, native_bridge)
         await mobile.evaluate("""
           async () => {
             const api = window.__inkforge;

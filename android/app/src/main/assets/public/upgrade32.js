@@ -35,7 +35,7 @@
   const now = () => Date.now();
 
   function toast(message) {
-    api?.toast?.(message);
+    api?.toast?.(window.localizeString ? window.localizeString(message) : message);
   }
 
   function currentDocument() {
@@ -164,7 +164,7 @@
     const node = $('#autoMathStatus');
     if (!node) return;
     node.dataset.tone = tone;
-    node.innerHTML = `${SVG.math}<span>${message}</span>`;
+    node.innerHTML = `${SVG.math}<span>${window.localizeString ? window.localizeString(message) : message}</span>`;
     node.classList.add('is-visible');
     clearTimeout(node._hideTimer);
     node._hideTimer = setTimeout(() => node.classList.remove('is-visible'), tone === 'busy' ? 5000 : 2500);
@@ -179,7 +179,7 @@
       try {
         const calculation = api.evaluateMath(expression, { degree: !!api.state.math?.degree });
         return { expression, result: formatResult(calculation.result), confidence: result.confidence || 0 };
-      } catch {}
+      } catch { }
     }
     return null;
   }
@@ -364,22 +364,22 @@
 
   function rememberColor(color) {
     const values = [color, ...recentColors().filter((item) => item.toLowerCase() !== color.toLowerCase())].slice(0, 10);
-    try { localStorage.setItem('inkforge-recent-colors', JSON.stringify(values)); } catch {}
+    try { localStorage.setItem('inkforge-recent-colors', JSON.stringify(values)); } catch { }
   }
 
   function renderPaletteTable() {
     const base = [
-      ['#111827','#374151','#6b7280','#9ca3af','#d1d5db','#ffffff'],
-      ['#7f1d1d','#dc2626','#f97316','#f59e0b','#eab308','#84cc16'],
-      ['#166534','#16a34a','#10b981','#14b8a6','#06b6d4','#0ea5e9'],
-      ['#1e40af','#2563eb','#4f46e5','#7c3aed','#9333ea','#c026d3'],
-      ['#9d174d','#db2777','#f472b6','#fb7185','#fca5a5','#fecaca'],
-      ['#713f12','#a16207','#ca8a04','#d97706','#92400e','#78350f']
+      ['#111827', '#374151', '#6b7280', '#9ca3af', '#d1d5db', '#ffffff'],
+      ['#7f1d1d', '#dc2626', '#f97316', '#f59e0b', '#eab308', '#84cc16'],
+      ['#166534', '#16a34a', '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9'],
+      ['#1e40af', '#2563eb', '#4f46e5', '#7c3aed', '#9333ea', '#c026d3'],
+      ['#9d174d', '#db2777', '#f472b6', '#fb7185', '#fca5a5', '#fecaca'],
+      ['#713f12', '#a16207', '#ca8a04', '#d97706', '#92400e', '#78350f']
     ].flat();
     const table = $('#colorPaletteTable');
     const recent = $('#recentColorRow');
-    if (table) table.innerHTML = base.map((color) => `<button class="palette-cell" data-mixer-color="${color}" style="--cell:${color}" aria-label="색상 선택"></button>`).join('');
-    if (recent) recent.innerHTML = recentColors().map((color) => `<button class="recent-color" data-mixer-color="${color}" style="--cell:${color}" aria-label="최근 색상"></button>`).join('') || '<span class="empty-recent">아직 저장된 색상이 없습니다.</span>';
+    if (table) table.innerHTML = base.map((color) => `<button class="palette-cell" data-mixer-color="${color}" style="--cell:${color}" aria-label="${window.localizeString ? window.localizeString('색상 선택') : '색상 선택'}"></button>`).join('');
+    if (recent) recent.innerHTML = recentColors().map((color) => `<button class="recent-color" data-mixer-color="${color}" style="--cell:${color}" aria-label="${window.localizeString ? window.localizeString('최근 색상') : '최근 색상'}"></button>`).join('') || `<span class="empty-recent">${window.localizeString ? window.localizeString('아직 저장된 색상이 없습니다.') : '아직 저장된 색상이 없습니다.'}</span>`;
   }
 
   function openColorMixer(target = null) {
@@ -435,7 +435,7 @@
     api.renderPageCanvas?.(selection.pageIndex);
     api.updateObjectMenu?.();
     try { await api.persistCurrent?.(); }
-    catch { try { await api.storage?.putDocument?.(doc); } catch {} }
+    catch { try { await api.storage?.putDocument?.(doc); } catch { } }
   }
 
   function injectColorMixer() {
@@ -457,6 +457,7 @@
       </div>
       <div class="sheet-actions"><button class="secondary-button" data-action32="close-color-mixer">취소</button><button class="primary-button" data-action32="apply-color-mixer">${SVG.check}<span>적용</span></button></div>`;
     $('#app').appendChild(sheet);
+    if (window.localizeSubtree) window.localizeSubtree(sheet);
     const spectrum = $('#colorSpectrum');
     let mixing = false;
     spectrum.addEventListener('pointerdown', (event) => { mixing = true; spectrum.setPointerCapture?.(event.pointerId); setSpectrumPoint(event); });
@@ -597,7 +598,7 @@
   function handleStylusCaptureDown(event) {
     if (!api.state.settings.sPenGestures || !isBarrelButton(event)) return;
     beginBarrelEraser(event);
-    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch {}
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { }
   }
 
   function handleStylusCaptureMove(event) {
@@ -659,8 +660,9 @@
     const hud = document.createElement('div');
     hud.id = 'sPenGestureHud';
     hud.className = 'spen-gesture-hud';
-    hud.innerHTML = `${SVG.gesture}<strong>S Pen 버튼 제스처</strong><span class="spen-direction-dot"></span>`;
+    hud.innerHTML = `${SVG.gesture}<strong>${window.localizeString ? window.localizeString('S Pen 버튼 제스처') : 'S Pen 버튼 제스처'}</strong><span class="spen-direction-dot"></span>`;
     $('#editorView').appendChild(hud);
+    if (window.localizeSubtree) window.localizeSubtree(hud);
   }
 
   function injectAutoMathStatus() {
@@ -668,8 +670,9 @@
     const status = document.createElement('div');
     status.id = 'autoMathStatus';
     status.className = 'auto-math-status';
-    status.innerHTML = `${SVG.math}<span>손글씨 수식 자동 계산</span>`;
+    status.innerHTML = `${SVG.math}<span>${window.localizeString ? window.localizeString('손글씨 수식 자동 계산') : '손글씨 수식 자동 계산'}</span>`;
     $('#editorView').appendChild(status);
+    if (window.localizeSubtree) window.localizeSubtree(status);
   }
 
   function injectSettings() {
@@ -677,12 +680,13 @@
     if (!list || $('#autoMathToggle')) return;
     const autoMath = document.createElement('label');
     autoMath.className = 'setting-row';
-    autoMath.innerHTML = `<span><strong>손글씨 수식 자동 계산</strong><small>기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.</small></span><input id="autoMathToggle" type="checkbox" />`;
+    const L = window.localizeString || (x => x);
+    autoMath.innerHTML = `<span><strong>${L('손글씨 수식 자동 계산')}</strong><small>${L('기본은 꺼져 있으며, 필요할 때 문서 옵션에서 현재 페이지 수식을 계산할 수 있습니다.')}</small></span><input id="autoMathToggle" type="checkbox" />`;
     const spen = document.createElement('label');
     spen.className = 'setting-row';
-    spen.innerHTML = `<span><strong>S Pen 버튼 지우개</strong><small>펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.</small></span><input id="sPenGesturesToggle" type="checkbox" />`;
+    spen.innerHTML = `<span><strong>${window.localizeString ? window.localizeString('S Pen 버튼 지우개') : 'S Pen 버튼 지우개'}</strong><small>${window.localizeString ? window.localizeString('펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.') : '펜 버튼을 누르는 동안 지우개로 쓰고, 놓으면 이전 도구로 돌아갑니다.'}</small></span><input id="sPenGesturesToggle" type="checkbox" />`;
     list.append(autoMath, spen);
-    api.localizeSubtree?.(list);
+    if (window.localizeSubtree) window.localizeSubtree(list);
     $('#autoMathToggle').checked = api.state.settings.autoMath === true;
     $('#sPenGesturesToggle').checked = api.state.settings.sPenGestures !== false;
     list.addEventListener('change', async (event) => {
@@ -750,7 +754,7 @@
     const oldMath = event.target.closest?.('[data-action="open-math"], [data-tool="math"]');
     if (oldMath) {
       event.preventDefault(); event.stopImmediatePropagation();
-      toast('수식은 필기하면 자동으로 인식·계산됩니다.');
+      toast(window.localizeString ? window.localizeString('수식은 필기하면 자동으로 인식·계산됩니다.') : '수식은 필기하면 자동으로 인식·계산됩니다.');
     }
   }
 
