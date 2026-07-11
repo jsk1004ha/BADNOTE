@@ -1,5 +1,6 @@
 .omx/
 **/.omx/
+.worktrees/
 
 # Local build tool caches and generated outputs
 **/.build-tools/
