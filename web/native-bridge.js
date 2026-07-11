@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.27';
+  const VERSION = '3.3.28';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -12,39 +12,34 @@
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = {
     ko: [
-      '영어 또는 포르투갈어를 선택하면 문질러 지우기가 좌우로 반복해서 긁는 동작만 인식하도록 변경했습니다.',
-      '영문·포르투갈어 필기체와 반복 원형 획이 실수로 지워지는 문제를 줄였습니다.',
-      '한국어·일본어·중국어의 기존 원형 및 혼합 낙서 인식은 그대로 유지합니다.',
-      '문지른 경로에 실제로 닿은 객체만 지우는 기존 범위를 회귀 테스트로 확인했습니다.',
-      'Android 릴리즈 버전을 3.3.27, versionCode 359로 올렸습니다.'
+      'S Pen이 화면에 닿아 필기 중이어도 측면 버튼을 누르는 즉시 현재 획을 중단하고 지우개로 전환합니다.',
+      'Android Activity에서 ACTION_BUTTON_PRESS/RELEASE와 표준 스타일러스 KeyEvent를 먼저 받아 WebView의 현재 필기 세션으로 전달합니다.',
+      '버튼을 놓으면 이전 필기 도구로 돌아가며, 버튼 이벤트의 중복 전달을 막았습니다.',
+      'Android 릴리즈 버전을 3.3.28, versionCode 360으로 올렸습니다.'
     ],
     en: [
-      'When English or Portuguese is selected, scribble erase now recognizes deliberate repeated left-right scratching.',
-      'Cursive Latin writing and repeated circular strokes are less likely to erase content accidentally.',
-      'Korean, Japanese, and Chinese keep the existing circular and mixed scribble behavior.',
-      'Regression tests confirm that only objects touched by the scratch path are removed.',
-      'Updated the Android release metadata to 3.3.27 with versionCode 359.'
+      'Pressing the S Pen side button now switches the active stroke to the eraser immediately, even while the pen is touching the screen.',
+      'Android Activity captures ACTION_BUTTON_PRESS/RELEASE and standard stylus KeyEvents before WebView routing, then forwards them to the active ink session.',
+      'Releasing the button restores the previous writing tool, with duplicate native delivery suppressed.',
+      'Updated the Android release metadata to 3.3.28 with versionCode 360.'
     ],
     ja: [
-      '英語またはポルトガル語を選択した場合、左右に繰り返しこする動作だけをスクラッチ消去として認識します。',
-      'ラテン文字の筆記体や円形の反復ストロークが誤って消去される可能性を減らしました。',
-      '韓国語・日本語・中国語では、従来の円形および混合スクラッチ認識を維持します。',
-      'スクラッチ経路に実際に触れたオブジェクトだけが削除されることを回帰テストで確認しました。',
-      'Androidリリース情報を3.3.27、versionCode 359へ更新しました。'
+      'S Penが画面に触れて筆記中でも、サイドボタンを押すと現在のストロークを直ちに消しゴムへ切り替えます。',
+      'Android ActivityがACTION_BUTTON_PRESS/RELEASEと標準スタイラスKeyEventをWebViewより先に受け取り、現在の筆記セッションへ転送します。',
+      'ボタンを離すと以前の筆記ツールへ戻り、ネイティブイベントの重複配信も防止します。',
+      'Androidリリース情報を3.3.28、versionCode 360へ更新しました。'
     ],
     zh: [
-      '选择英语或葡萄牙语时，涂抹擦除现在只识别明确的左右反复刮擦动作。',
-      '降低了拉丁字母连写和重复圆形笔画被误删的概率。',
-      '韩语、日语和中文继续使用原有的圆形及混合涂抹识别。',
-      '回归测试确认只删除与刮擦路径实际接触的对象。',
-      'Android 发布信息已更新为 3.3.27，versionCode 359。'
+      '即使 S Pen 正接触屏幕书写，按下侧键也会立即把当前笔画切换为橡皮擦。',
+      'Android Activity 会在 WebView 路由之前捕获 ACTION_BUTTON_PRESS/RELEASE 和标准触控笔 KeyEvent，并转发到当前书写会话。',
+      '松开按钮后恢复之前的书写工具，同时避免原生事件重复传递。',
+      'Android 发布信息已更新为 3.3.28，versionCode 360。'
     ],
     pt: [
-      'Ao selecionar inglês ou português, apagar rabiscando agora reconhece apenas movimentos intencionais e repetidos da esquerda para a direita.',
-      'A escrita cursiva latina e os movimentos circulares repetidos têm menos chance de apagar conteúdo por engano.',
-      'Coreano, japonês e chinês mantêm o reconhecimento circular e misto anterior.',
-      'Os testes de regressão confirmam que apenas objetos tocados pelo caminho do risco são removidos.',
-      'Os metadados Android foram atualizados para 3.3.27 com versionCode 359.'
+      'Pressionar o botão lateral da S Pen agora troca imediatamente o traço ativo para a borracha, mesmo com a caneta tocando a tela.',
+      'A Activity do Android captura ACTION_BUTTON_PRESS/RELEASE e KeyEvents padrão da caneta antes do WebView e os encaminha para a sessão de escrita ativa.',
+      'Ao soltar o botão, a ferramenta anterior é restaurada e eventos nativos duplicados são evitados.',
+      'Os metadados Android foram atualizados para 3.3.28 com versionCode 360.'
     ]
   };
   const UPDATE_I18N = {

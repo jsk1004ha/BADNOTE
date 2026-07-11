@@ -81,7 +81,7 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 4172;
     private static final int AUDIO_PERMISSION_REQUEST = 4173;
-    private static final String APP_VERSION = "3.3.27";
+    private static final String APP_VERSION = "3.3.28";
     private static final String RELEASES_API_URL = "https://api.github.com/repos/jsk1004ha/BADNOTE/releases/latest";
     private static final String RELEASES_PAGE_URL = "https://github.com/jsk1004ha/BADNOTE/releases";
 
@@ -283,28 +283,56 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (webView != null && isStylusMotionEvent(event)) {
+            webView.dispatchStylusFromHost(event);
+        }
+        return super.dispatchGenericMotionEvent(event);
+    }
+
+    private static boolean isStylusMotionEvent(MotionEvent event) {
+        if (event == null ||
+                (event.getSource() & InputDevice.SOURCE_STYLUS) != InputDevice.SOURCE_STYLUS) {
+            return false;
+        }
+        if (event.getPointerCount() <= 0) return true;
+        int index = Math.max(0, Math.min(event.getActionIndex(), event.getPointerCount() - 1));
+        int toolType = event.getToolType(index);
+        return toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER;
+    }
+
+    @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         InputDevice device = event.getDevice();
+        boolean standardStylusButton = isStandardStylusButtonKey(event.getKeyCode());
         String deviceName = device != null ? device.getName() : "";
         boolean stylusSource = device != null &&
                 (device.getSources() & InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS;
         boolean likelyStylusButton = deviceName != null &&
                 deviceName.toLowerCase(Locale.ROOT).matches(".*(s pen|spen|stylus|wacom).*");
-        if (webView != null && device != null && (stylusSource || likelyStylusButton)) {
+        if (webView != null && (standardStylusButton || (device != null && (stylusSource || likelyStylusButton)))) {
             JSONObject detail = new JSONObject();
             try {
                 detail.put("keyCode", event.getKeyCode());
                 detail.put("action", event.getAction());
                 detail.put("repeatCount", event.getRepeatCount());
                 detail.put("eventTime", event.getEventTime());
-                detail.put("device", device.getName());
-                detail.put("source", device.getSources());
+                detail.put("device", deviceName.isEmpty() ? "Stylus button" : deviceName);
+                detail.put("source", device != null ? device.getSources() : 0);
                 detail.put("stylus", true);
             } catch (JSONException ignored) {
             }
             dispatchNativeEvent("inkforge:native-stylus-key", detail);
+            if (standardStylusButton) return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private static boolean isStandardStylusButtonKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY ||
+                keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY ||
+                keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_TERTIARY ||
+                keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_TAIL;
     }
 
     void dispatchNativeEvent(String name, JSONObject detail) {
@@ -329,6 +357,7 @@ public final class MainActivity extends Activity {
         private long lastMoveDispatchNanos;
         private boolean stylusPrimaryButtonDown;
         private boolean stylusSecondaryButtonDown;
+        private boolean stylusContactActive;
 
         InkWebView(Activity context) {
             super(context);
@@ -343,12 +372,20 @@ public final class MainActivity extends Activity {
                     ? event.getToolType(index)
                     : MotionEvent.TOOL_TYPE_UNKNOWN;
             if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                    stylusContactActive = true;
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
-                        (event.getActionMasked() == MotionEvent.ACTION_DOWN ||
-                                event.getActionMasked() == MotionEvent.ACTION_MOVE)) {
+                        (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE)) {
                     requestUnbufferedDispatch(event);
                 }
                 dispatchStylus(event, false);
+                if (action == MotionEvent.ACTION_UP ||
+                        action == MotionEvent.ACTION_CANCEL ||
+                        action == MotionEvent.ACTION_POINTER_UP) {
+                    stylusContactActive = false;
+                }
             }
             return super.onTouchEvent(event);
         }
@@ -361,10 +398,11 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onGenericMotionEvent(MotionEvent event) {
-            if ((event.getSource() & InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS) {
-                dispatchStylus(event, true);
-            }
             return super.onGenericMotionEvent(event);
+        }
+
+        void dispatchStylusFromHost(MotionEvent event) {
+            dispatchStylus(event, !stylusContactActive);
         }
 
         private void dispatchStylus(MotionEvent event, boolean hover) {
