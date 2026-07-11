@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.26';
+  const VERSION = '3.3.27';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -3385,7 +3385,7 @@
     return upperRight && midReturn && (lowerLeg || endsLikeLeg) && notHeavyScrub;
   }
 
-  function scribbleGestureProfile(points) {
+  function mixedScribbleGestureProfile(points) {
     const metrics = strokeMetrics(points);
     const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
     const maxDimension = Math.max(metrics.bounds.w, metrics.bounds.h);
@@ -3406,6 +3406,80 @@
     const broadDense = compact && metrics.length > Math.max(128, diagonal * 2.45) && (scrubbedBackAndForth || crossedOver || repeatedArea || loopedScrub);
     const localDense = localCompact && metrics.length > Math.max(58, diagonal * 2.05) && (scrubbedBackAndForth || crossedOver || repeatedArea || loopedScrub) && (openGesture || intersections || revisit.revisits >= 3);
     return { metrics, diagonal, intersections, revisits: revisit.revisits, dense: broadDense || localDense, local: localDense && !broadDense };
+  }
+
+  const LATIN_SCRATCH_LANGUAGES = new Set(['en', 'pt']);
+
+  function horizontalScratchSweeps(points, noise) {
+    if (!points?.length) return [];
+    const sweeps = [];
+    let start = points[0], extreme = points[0], direction = 0;
+    for (let index = 1; index < points.length; index++) {
+      const point = points[index];
+      if (!direction) {
+        const dx = point.x - start.x;
+        if (Math.abs(dx) < noise) continue;
+        direction = Math.sign(dx);
+        extreme = point;
+        continue;
+      }
+      const extendsRun = direction > 0 ? point.x > extreme.x : point.x < extreme.x;
+      if (extendsRun) {
+        extreme = point;
+        continue;
+      }
+      const reversal = point.x - extreme.x;
+      if (Math.abs(reversal) < noise || Math.sign(reversal) === direction) continue;
+      sweeps.push({ start, end: extreme, amplitude: Math.abs(extreme.x - start.x) });
+      start = extreme;
+      direction = Math.sign(reversal);
+      extreme = point;
+    }
+    if (direction) sweeps.push({ start, end: extreme, amplitude: Math.abs(extreme.x - start.x) });
+    return sweeps;
+  }
+
+  function latinScratchGestureProfile(points) {
+    const metrics = strokeMetrics(points);
+    const bounds = metrics.bounds;
+    const diagonal = Math.hypot(bounds.w, bounds.h);
+    const lengthRatio = metrics.length / Math.max(1, diagonal);
+    const samples = points || [];
+    const horizontalTravel = samples.slice(1).reduce((sum, point, index) => sum + Math.abs(point.x - samples[index].x), 0);
+    const verticalTravel = samples.slice(1).reduce((sum, point, index) => sum + Math.abs(point.y - samples[index].y), 0);
+    const noise = Math.max(2.5, bounds.w * .025);
+    const traversalMinimum = Math.max(9, bounds.w * .22);
+    const midpoint = bounds.x + bounds.w / 2;
+    const sweeps = horizontalScratchSweeps(samples, noise);
+    const validSweeps = sweeps.filter((sweep) => sweep.amplitude >= traversalMinimum);
+    const midpointSweeps = validSweeps.filter((sweep) => (sweep.start.x - midpoint) * (sweep.end.x - midpoint) <= 0);
+    const broadSweeps = validSweeps.filter((sweep) => sweep.amplitude >= bounds.w * .55);
+    const dense = samples.length >= 10
+      && bounds.w >= 24
+      && bounds.h >= 4
+      && bounds.w >= bounds.h * 1.15
+      && horizontalTravel >= verticalTravel * 3
+      && sweeps.length >= 4
+      && validSweeps.length >= 3
+      && midpointSweeps.length >= 3
+      && broadSweeps.length >= 2
+      && lengthRatio >= 2.45;
+    const intersections = pathSelfIntersections(samples);
+    const revisit = pathRevisitProfile(samples, clamp(diagonal / 7, 12, 24));
+    return {
+      metrics,
+      diagonal,
+      intersections,
+      revisits: revisit.revisits,
+      dense,
+      local: dense && Math.max(bounds.w, bounds.h) <= 180,
+      mode: 'latin-scratch'
+    };
+  }
+
+  function scribbleGestureProfile(points, language = currentLanguage()) {
+    if (LATIN_SCRATCH_LANGUAGES.has(language)) return latinScratchGestureProfile(points);
+    return { ...mixedScribbleGestureProfile(points), mode: 'mixed-scribble' };
   }
 
   function pointNearPath(point, path, radius) {
@@ -3439,7 +3513,7 @@
 
   function maybeScribbleErase(pageIndex, points, screenPoints = points) {
     if (!state.settings.scribbleErase || points.length < 8) return false;
-    const gesture = scribbleGestureProfile(screenPoints);
+    const gesture = scribbleGestureProfile(screenPoints, currentLanguage());
     if (!gesture.dense) return false;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
@@ -5410,6 +5484,8 @@
       persistFolders,
       blankPage,
       maybeShapeFromStroke,
+      scribbleGestureProfile,
+      latinScratchGestureProfile,
       renderActiveToolMenu,
       applyLanguage,
       refreshLocalizedUi,

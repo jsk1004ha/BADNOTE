@@ -45,7 +45,7 @@ An English or Portuguese stroke is an intentional scratch only when all conditio
 
 1. At least 10 sampled points and a screen-space width of at least 24 px.
 2. Width is at least 1.15 times height, with a minimum height of 4 px so a simple horizontal line is excluded.
-3. Horizontal travel is at least 1.35 times vertical travel.
+3. Horizontal travel is at least 3 times vertical travel. The initial 1.35 ratio was rejected during RED/GREEN evaluation because a repeated narrow ellipse still produced about 2.8 times as much horizontal as vertical travel.
 4. The filtered X direction reverses at least three times.
 5. At least three alternating traversals move by `max(9 px, 22% of gesture width)`.
 6. At least three traversals cross the gesture's horizontal midpoint; at least two span 55% or more of the gesture width.

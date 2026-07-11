@@ -159,19 +159,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.26');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.27');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
             document.querySelector('[data-update-action="ack-notes"]').click();
             const second = bridge.showReleaseNotesOnce();
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.26');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.27');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             window.__inkforge.state.settings.language = 'en';
             window.__inkforge.refreshLocalizedUi();
             const englishFirst = bridge.showReleaseNotesOnce();
             const englishText = document.getElementById('nativeUpdateSheet')?.textContent || '';
-            const englishNotesVisible = englishFirst && englishText.includes('3.3.26 release notes') && englishText.includes('Portuguese (Brazil) interface translations now load from separated locale files');
+            const englishNotesVisible = englishFirst && englishText.includes('3.3.27 release notes') && englishText.includes('deliberate repeated left-right scratching');
             document.querySelector('[data-update-action="ack-notes"]').click();
             window.__inkforge.state.settings.language = 'ko';
             window.__inkforge.refreshLocalizedUi();
@@ -1295,6 +1295,103 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             };
           }
         """)
+        results["language_aware_scribble_erase"] = await page.evaluate("""
+          async () => {
+            const api = window.__inkforge;
+            const pageIndex = api.state.currentPageIndex;
+            const notePage = api.currentPage();
+            const originalLanguage = api.state.settings.language;
+            const baseIds = new Set(notePage.objects.map((object) => object.id));
+            api.setZoom(1);
+            api.setTool('pen');
+            api.state.settings.scribbleErase = true;
+            api.renderPageCanvas(pageIndex);
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const canvas = document.querySelector(`.page-canvas[data-page-index="${pageIndex}"]`);
+            const clientFor = (point) => {
+              const rect = canvas.getBoundingClientRect();
+              return { x: rect.left + point.x / 1000 * rect.width, y: rect.top + point.y / 1414 * rect.height };
+            };
+            const interpolate = (anchors, samples = 3) => anchors.flatMap((start, index) => {
+              if (index === anchors.length - 1) return [start];
+              const end = anchors[index + 1];
+              return Array.from({ length: samples }, (_, step) => {
+                const t = step / samples;
+                return { x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t };
+              });
+            });
+            const horizontalScratch = interpolate([
+              { x: 438, y: 491 }, { x: 562, y: 509 }, { x: 440, y: 493 },
+              { x: 560, y: 507 }, { x: 442, y: 495 }, { x: 558, y: 505 }
+            ], 4);
+            const repeatedLoops = Array.from({ length: 73 }, (_, index) => {
+              const angle = index / 24 * Math.PI * 2;
+              return { x: 500 + Math.cos(angle) * 62, y: 500 + Math.sin(angle) * 22 };
+            });
+            const cursiveProgression = Array.from({ length: 49 }, (_, index) => ({
+              x: 438 + index * 2.6,
+              y: 500 + Math.sin(index / 2.1) * 19
+            }));
+            const sendPath = (pointerId, path) => {
+              const clients = path.map(clientFor);
+              const send = (type, point) => canvas.dispatchEvent(new PointerEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                pointerId,
+                pointerType: 'pen',
+                isPrimary: true,
+                button: 0,
+                buttons: type === 'pointerup' ? 0 : 1,
+                pressure: type === 'pointerup' ? 0 : .55,
+                clientX: point.x,
+                clientY: point.y
+              }));
+              send('pointerdown', clients[0]);
+              clients.slice(1).forEach((point) => send('pointermove', point));
+              send('pointerup', clients[clients.length - 1]);
+            };
+            const runCase = async (name, language, path, expectErased, pointerId) => {
+              notePage.objects = notePage.objects.filter((object) => baseIds.has(object.id));
+              const targetId = `language_scribble_${name}_target`;
+              const guardId = `language_scribble_${name}_guard`;
+              notePage.objects.push({
+                id: targetId,
+                type: 'stroke',
+                brush: 'fountain',
+                color: '#111827',
+                width: 7,
+                opacity: 1,
+                points: [{ x: 435, y: 500, p: .6 }, { x: 500, y: 500, p: .6 }, { x: 565, y: 500, p: .6 }]
+              }, {
+                id: guardId,
+                type: 'stroke',
+                brush: 'fountain',
+                color: '#111827',
+                width: 7,
+                opacity: 1,
+                points: [{ x: 435, y: 558, p: .6 }, { x: 500, y: 558, p: .6 }, { x: 565, y: 558, p: .6 }]
+              });
+              api.state.settings.language = language;
+              sendPath(pointerId, path);
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const targetErased = !notePage.objects.some((object) => object.id === targetId);
+              const guardPresent = notePage.objects.some((object) => object.id === guardId);
+              return { targetErased, guardPresent, passed: targetErased === expectErased && guardPresent };
+            };
+            const cases = {
+              enScratch: await runCase('en_scratch', 'en', horizontalScratch, true, 9011),
+              ptScratch: await runCase('pt_scratch', 'pt', horizontalScratch, true, 9012),
+              enLoops: await runCase('en_loops', 'en', repeatedLoops, false, 9013),
+              ptCursive: await runCase('pt_cursive', 'pt', cursiveProgression, false, 9014),
+              koLoops: await runCase('ko_loops', 'ko', repeatedLoops, true, 9015)
+            };
+            notePage.objects = notePage.objects.filter((object) => baseIds.has(object.id));
+            api.state.settings.language = originalLanguage;
+            api.persistCurrent();
+            api.renderPageCanvas(pageIndex);
+            return { cases, passed: Object.values(cases).every((entry) => entry.passed) };
+          }
+        """)
         results["stylus_only_blocks_non_stylus_marks"] = await page.evaluate("""
           async () => {
             const api = window.__inkforge;
@@ -1798,7 +1895,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.26" and results.get("upgrade_version") == "3.3.26" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.27" and results.get("upgrade_version") == "3.3.27" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 

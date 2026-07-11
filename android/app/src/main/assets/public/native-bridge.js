@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.26';
+  const VERSION = '3.3.27';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -12,39 +12,39 @@
   const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = {
     ko: [
-      '포르투갈어(브라질) UI 번역을 분리된 locale 파일 기준으로 보강했습니다.',
-      '언어 전환 후 색상표, 수식 계산, S Pen 패널 같은 핵심 UI가 번역 키 손상 없이 동작하도록 회귀 검사를 보강했습니다.',
-      '번역 업데이트 도구가 저장소 기준 상대 경로로 web 폴더를 찾도록 정리했습니다.',
-      '웹 원본을 Android WebView asset으로 동기화하는 스크립트를 추가해 APK 빌드 누락 위험을 줄였습니다.',
-      'Android 릴리즈 버전을 3.3.26, versionCode 358로 올렸습니다.'
+      '영어 또는 포르투갈어를 선택하면 문질러 지우기가 좌우로 반복해서 긁는 동작만 인식하도록 변경했습니다.',
+      '영문·포르투갈어 필기체와 반복 원형 획이 실수로 지워지는 문제를 줄였습니다.',
+      '한국어·일본어·중국어의 기존 원형 및 혼합 낙서 인식은 그대로 유지합니다.',
+      '문지른 경로에 실제로 닿은 객체만 지우는 기존 범위를 회귀 테스트로 확인했습니다.',
+      'Android 릴리즈 버전을 3.3.27, versionCode 359로 올렸습니다.'
     ],
     en: [
-      'Portuguese (Brazil) interface translations now load from separated locale files.',
-      'Regression coverage now checks that language switching keeps the color palette, math calculation, and S Pen panel usable.',
-      'The translation update helper now resolves the web folder from the repository instead of a personal local path.',
-      'Added a sync script for copying web sources into Android WebView assets before APK builds.',
-      'Updated the Android release metadata to 3.3.26 with versionCode 358.'
+      'When English or Portuguese is selected, scribble erase now recognizes deliberate repeated left-right scratching.',
+      'Cursive Latin writing and repeated circular strokes are less likely to erase content accidentally.',
+      'Korean, Japanese, and Chinese keep the existing circular and mixed scribble behavior.',
+      'Regression tests confirm that only objects touched by the scratch path are removed.',
+      'Updated the Android release metadata to 3.3.27 with versionCode 359.'
     ],
     ja: [
-      'ポルトガル語(ブラジル)のUI翻訳を分離されたlocaleファイルで補強しました。',
-      '言語切り替え後もカラーパレット、数式計算、S Penパネルが使えることを回帰テストで確認します。',
-      '翻訳更新ツールが個人PCの絶対パスではなくリポジトリ基準のwebフォルダを参照するようにしました。',
-      'APKビルド前にWebソースをAndroid WebView assetsへ同期するスクリプトを追加しました。',
-      'Androidリリース情報を3.3.26、versionCode 358へ更新しました。'
+      '英語またはポルトガル語を選択した場合、左右に繰り返しこする動作だけをスクラッチ消去として認識します。',
+      'ラテン文字の筆記体や円形の反復ストロークが誤って消去される可能性を減らしました。',
+      '韓国語・日本語・中国語では、従来の円形および混合スクラッチ認識を維持します。',
+      'スクラッチ経路に実際に触れたオブジェクトだけが削除されることを回帰テストで確認しました。',
+      'Androidリリース情報を3.3.27、versionCode 359へ更新しました。'
     ],
     zh: [
-      '补强了基于独立 locale 文件加载的葡萄牙语（巴西）界面翻译。',
-      '回归测试现在会确认切换语言后调色板、数学计算和 S Pen 面板仍可使用。',
-      '翻译更新工具现在按仓库相对路径查找 web 文件夹，不再依赖个人电脑的绝对路径。',
-      '新增同步脚本，用于在构建 APK 前把 Web 源文件复制到 Android WebView assets。',
-      'Android 发布信息已更新为 3.3.26，versionCode 358。'
+      '选择英语或葡萄牙语时，涂抹擦除现在只识别明确的左右反复刮擦动作。',
+      '降低了拉丁字母连写和重复圆形笔画被误删的概率。',
+      '韩语、日语和中文继续使用原有的圆形及混合涂抹识别。',
+      '回归测试确认只删除与刮擦路径实际接触的对象。',
+      'Android 发布信息已更新为 3.3.27，versionCode 359。'
     ],
     pt: [
-      'As traducoes da interface em Portugues (Brasil) agora carregam dos arquivos locale separados.',
-      'A cobertura de regressao verifica que a troca de idioma mantem a paleta de cores, o calculo matematico e o painel da S Pen funcionando.',
-      'A ferramenta de atualizacao de traducoes agora encontra a pasta web pelo caminho relativo do repositorio.',
-      'Adicionado um script de sincronizacao para copiar os arquivos web para os assets Android WebView antes do build do APK.',
-      'Os metadados Android foram atualizados para 3.3.26 com versionCode 358.'
+      'Ao selecionar inglês ou português, apagar rabiscando agora reconhece apenas movimentos intencionais e repetidos da esquerda para a direita.',
+      'A escrita cursiva latina e os movimentos circulares repetidos têm menos chance de apagar conteúdo por engano.',
+      'Coreano, japonês e chinês mantêm o reconhecimento circular e misto anterior.',
+      'Os testes de regressão confirmam que apenas objetos tocados pelo caminho do risco são removidos.',
+      'Os metadados Android foram atualizados para 3.3.27 com versionCode 359.'
     ]
   };
   const UPDATE_I18N = {

@@ -216,7 +216,7 @@ function latinScratchGestureProfile(points) {
     && bounds.w >= 24
     && bounds.h >= 4
     && bounds.w >= bounds.h * 1.15
-    && horizontalTravel >= verticalTravel * 1.35
+    && horizontalTravel >= verticalTravel * 3
     && sweeps.length >= 4
     && validSweeps.length >= 3
     && midpointSweeps.length >= 3
