@@ -1,0 +1,32 @@
+name: OSS readiness
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Audit OSS maintenance artifacts
+        id: readiness
+        uses: jsk1004ha/luna-swarm/.github/actions/oss-readiness@b9e5dfc3a77dd0a3492879627ed8feda0ad8514c
+        with:
+          fail-under: "0"
+          report-path: oss-readiness-report.md
+
+      - name: Upload readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-readiness-report
+          path: oss-readiness-report.md
+          if-no-files-found: error
