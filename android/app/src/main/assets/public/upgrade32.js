@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.28';
+  const VERSION = '3.3.30';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const AUTO_MATH_DELAY = 1050;
@@ -22,10 +22,7 @@
   let observedStrokeIds = new Set();
   let colorTarget = 'pen';
   let colorState = { h: 214, s: .8, v: .82 };
-  let stylusGesture = null;
-  let barrelEraser = null;
   let stylusHudTimer = 0;
-  let lastStylusActionAt = 0;
   let collisionFrame = 0;
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -480,155 +477,10 @@
     menu.insertBefore(button, label || null);
   }
 
-  function recentNativeStylus(event, maxAge = 260) {
-    const detail = window.__inkforgeNativeBridge?.lastStylus || window.__inkforgeLastNativeStylus;
-    const buttonState = Number(detail?.buttonState || 0);
-    const barrelActive = !!(
-      detail?.primaryButton ||
-      detail?.secondaryButton ||
-      detail?.barrelButton ||
-      detail?.latchedBarrelButton ||
-      window.__inkforgeNativeBridge?.barrelButtonActive ||
-      (buttonState & 96) !== 0
-    );
-    const effectiveMaxAge = barrelActive ? Math.max(maxAge, 3500) : maxAge;
-    if (!detail || performance.now() - Number(detail.receivedAt || 0) > effectiveMaxAge) return null;
-    if (event && Number.isFinite(detail.x) && Number.isFinite(detail.y)) {
-      const dx = Math.abs(Number(detail.x) - event.clientX);
-      const dy = Math.abs(Number(detail.y) - event.clientY);
-      if ((dx > 90 || dy > 90) && !barrelActive) return null;
-    }
-    return detail;
-  }
-
-  function isBarrelButton(event) {
-    const nativeStylus = recentNativeStylus(event);
-    const buttonState = Number(nativeStylus?.buttonState || 0);
-    return event.pointerType === 'pen' && (
-      event.button === 2 ||
-      event.button === 5 ||
-      (event.buttons & 2) !== 0 ||
-      (event.buttons & 32) !== 0 ||
-      (event.buttons & 64) !== 0 ||
-      (buttonState & 32) !== 0 ||
-      (buttonState & 64) !== 0 ||
-      !!nativeStylus?.primaryButton ||
-      !!nativeStylus?.secondaryButton ||
-      !!nativeStylus?.barrelButton ||
-      !!nativeStylus?.latchedBarrelButton ||
-      !!window.__inkforgeNativeBridge?.barrelButtonActive ||
-      !!nativeStylus?.eraser
-    );
-  }
-
-  function showStylusHud(message, dx = 0, dy = 0) {
-    const hud = $('#sPenGestureHud');
-    if (!hud) return;
-    clearTimeout(stylusHudTimer);
-    hud.classList.add('is-visible');
-    hud.querySelector('strong').textContent = message;
-    hud.style.setProperty('--gesture-x', `${clamp(dx, -90, 90)}px`);
-    hud.style.setProperty('--gesture-y', `${clamp(dy, -90, 90)}px`);
-    stylusHudTimer = setTimeout(() => hideStylusHud(), message.includes('누르는 동안') ? 1400 : 950);
-  }
-
   function hideStylusHud() {
     clearTimeout(stylusHudTimer);
     stylusHudTimer = 0;
     $('#sPenGestureHud')?.classList.remove('is-visible');
-  }
-
-  function beginStylusGesture(event) {
-    stylusGesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, startedAt: performance.now() };
-    showStylusHud('S Pen 버튼 제스처', 0, 0);
-  }
-
-  function beginBarrelEraser(event) {
-    if (barrelEraser?.pointerId === event.pointerId) return;
-    barrelEraser = {
-      pointerId: event.pointerId,
-      restoreTool: api.state.tool === 'eraser' ? null : api.state.tool,
-      startedAt: performance.now()
-    };
-    api.closeDocumentSearch?.();
-    if (api.state.tool !== 'eraser') api.setTool('eraser');
-    hideStylusHud();
-  }
-
-  function updateBarrelEraser(event) {
-    if (!barrelEraser || barrelEraser.pointerId !== event.pointerId) return;
-    hideStylusHud();
-  }
-
-  function finishBarrelEraser(event) {
-    if (!barrelEraser || barrelEraser.pointerId !== event.pointerId) return;
-    const restoreTool = barrelEraser.restoreTool;
-    barrelEraser = null;
-    hideStylusHud();
-    if (restoreTool && api.state.tool === 'eraser') api.setTool(restoreTool);
-  }
-
-  function describeStylusDirection(dx, dy) {
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < 30) return '놓으면 펜 ↔ 지우개';
-    if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? '다음 페이지' : '이전 페이지';
-    return dy < 0 ? '실행 취소' : '다시 실행';
-  }
-
-  function performStylusGesture(dx, dy) {
-    const absoluteX = Math.abs(dx), absoluteY = Math.abs(dy);
-    if (Math.max(absoluteX, absoluteY) < 42) {
-      const next = api.state.tool === 'eraser' ? (api.state.lastWritingTool || 'pen') : 'eraser';
-      api.setTool(next);
-      toast(next === 'eraser' ? 'S Pen 버튼: 지우개' : 'S Pen 버튼: 필기 도구');
-      return;
-    }
-    if (absoluteX > absoluteY * 1.15) {
-      const doc = currentDocument();
-      if (!doc) return;
-      const nextPage = clamp(api.state.currentPageIndex + (dx > 0 ? 1 : -1), 0, doc.pages.length - 1);
-      api.scrollToPage?.(nextPage);
-      toast(dx > 0 ? 'S Pen: 다음 페이지' : 'S Pen: 이전 페이지');
-    } else if (dy < 0) {
-      api.undo?.(); toast('S Pen: 실행 취소');
-    } else {
-      api.redo?.(); toast('S Pen: 다시 실행');
-    }
-  }
-
-  function handleStylusCaptureDown(event) {
-    if (!api.state.settings.sPenGestures || !isBarrelButton(event)) return;
-    beginBarrelEraser(event);
-    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { }
-  }
-
-  function handleStylusCaptureMove(event) {
-    if (!api.state.settings.sPenGestures) return;
-    if (isBarrelButton(event)) {
-      if (!barrelEraser) beginBarrelEraser(event);
-      updateBarrelEraser(event);
-      return;
-    }
-    finishBarrelEraser(event);
-    if (!stylusGesture || stylusGesture.pointerId !== event.pointerId) return;
-    stylusGesture.x = event.clientX; stylusGesture.y = event.clientY;
-    const dx = stylusGesture.x - stylusGesture.startX, dy = stylusGesture.y - stylusGesture.startY;
-    showStylusHud(describeStylusDirection(dx, dy), dx, dy);
-  }
-
-  function handleStylusCaptureUp(event) {
-    if (barrelEraser?.pointerId === event.pointerId) {
-      finishBarrelEraser(event);
-      return;
-    }
-    if (!stylusGesture || stylusGesture.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    const dx = event.clientX - stylusGesture.startX, dy = event.clientY - stylusGesture.startY;
-    stylusGesture = null;
-    hideStylusHud();
-    if (performance.now() - lastStylusActionAt < 120) return;
-    lastStylusActionAt = performance.now();
-    performStylusGesture(dx, dy);
   }
 
   function handleAirAction(action) {
@@ -771,10 +623,7 @@
 
   function installEvents() {
     const stack = $('#pageStack');
-    stack.addEventListener('pointerdown', handleStylusCaptureDown, true);
-    stack.addEventListener('pointermove', handleStylusCaptureMove, true);
-    stack.addEventListener('pointerup', handleStylusCaptureUp, true);
-    stack.addEventListener('pointercancel', handleStylusCaptureUp, true);
+    // app.js owns the temporary barrel tool and the active contact session.
     stack.addEventListener('pointerup', handlePostStroke, false);
     document.addEventListener('click', handleCaptureClick, true);
     document.addEventListener('keydown', handleRemoteKey, true);

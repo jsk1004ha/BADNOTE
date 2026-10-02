@@ -18,6 +18,17 @@ def main() -> None:
     source = MAIN_ACTIVITY.read_text(encoding="utf-8")
 
     require(
+        r"dispatchTouchEvent[\s\S]*?webView\.dispatchStylusTouchFromHost\s*\(\s*event\s*\)[\s\S]*?super\.dispatchTouchEvent",
+        source,
+        "Touch button state must be captured before Chromium handles the motion",
+    )
+    require(
+        r"boolean buttonsChanged = stylusButtons\.update[\s\S]*?if \(!buttonsChanged &&",
+        source,
+        "Motion throttling must never discard a button press or release",
+    )
+
+    require(
         r"public\s+boolean\s+dispatchGenericMotionEvent\s*\(\s*MotionEvent\s+event\s*\)",
         source,
         "MainActivity must capture generic stylus button events before WebView routing",

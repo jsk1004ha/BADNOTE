@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#2f5688" />
   <meta name="color-scheme" content="light dark" />
-  <title>bad note 3.3.28</title>
+  <title>bad note 3.3.30</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
@@ -253,7 +253,7 @@
       <div class="settings-list">
         <label class="setting-row language-setting-row"><span><strong>언어</strong><small>앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.</small></span><select id="languageSelect" class="language-select"><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option><option value="pt">Português</option></select></label>
         <label class="setting-row"><span><strong>스타일러스 전용 필기</strong><small>손바닥과 손가락 입력을 필기에서 제외합니다.</small></span><input id="stylusOnlyToggle" type="checkbox" checked /></label>
-        <label class="setting-row"><span><strong>낙서해서 지우기</strong><small>빠른 지그재그 획으로 겹친 필기를 지웁니다.</small></span><input id="scribbleEraseToggle" type="checkbox" checked /></label>
+        <label class="setting-row"><span><strong>낙서해서 지우기</strong><small>같은 영역을 여러 번 왕복해 덮은 펜 획을 지웁니다.</small></span><input id="scribbleEraseToggle" type="checkbox" checked /></label>
         <label class="setting-row"><span><strong>그려서 도형 만들기</strong><small>직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.</small></span><input id="drawHoldToggle" type="checkbox" checked /></label>
         <label class="setting-row"><span><strong>스타일러스 정보 표시</strong><small>필압, 기울기, 입력 장치를 화면에 표시합니다.</small></span><input id="telemetryToggle" type="checkbox" /></label>
         <label class="setting-row range-setting-row"><span><strong>HUD 텍스트 투명도</strong><small>S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.</small></span><span class="setting-range-control"><output id="hudTextOpacityOutput">100%</output><input id="hudTextOpacityRange" type="range" min="35" max="100" step="5" value="100" /></span></label>
@@ -273,6 +273,7 @@
   <script src="locales/en.js"></script>
   <script src="locales/ja.js"></script>
   <script src="locales/zh.js"></script>
+  <script src="file-export.js"></script>
   <script src="app.js"></script>
   <script src="recognition.js"></script>
   <script src="pdf-tools.js"></script>

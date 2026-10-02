@@ -16,8 +16,9 @@ android {
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 360
-        versionName '3.3.28'
+        versionCode 362
+        versionName '3.3.30'
+        testInstrumentationRunner 'com.inkforge.notesstudio.StylusSmokeInstrumentation'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
@@ -80,6 +81,7 @@ android {
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
     implementation 'androidx.core:core:1.17.0'
     implementation 'androidx.webkit:webkit:1.14.0'
     implementation 'com.google.mlkit:digital-ink-recognition:19.0.0'
@@ -87,3 +89,10 @@ dependencies {
     implementation 'com.google.mlkit:text-recognition-korean:16.0.1'
     implementation 'com.rmtheis:tess-two:9.1.0'
 }
+
+// Never package an older checked-in web copy after fixing the editor sources.
+def syncWebAssets = tasks.register('syncWebAssets', Sync) {
+    from rootProject.file('../web')
+    into layout.projectDirectory.dir('src/main/assets/public')
+}
+tasks.named('preBuild').configure { dependsOn syncWebAssets }
