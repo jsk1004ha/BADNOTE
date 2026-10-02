@@ -81,7 +81,7 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 4172;
     private static final int AUDIO_PERMISSION_REQUEST = 4173;
-    private static final String APP_VERSION = "3.3.28";
+    private static final String APP_VERSION = "3.3.30";
     private static final String RELEASES_API_URL = "https://api.github.com/repos/jsk1004ha/BADNOTE/releases/latest";
     private static final String RELEASES_PAGE_URL = "https://github.com/jsk1004ha/BADNOTE/releases";
 
@@ -89,6 +89,7 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileChooserCallback;
     private NativeInkBridge nativeInkBridge;
     private PermissionRequest pendingAudioPermission;
+    private FileExporter fileExporter;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -113,6 +114,10 @@ public final class MainActivity extends Activity {
         setContentView(root);
 
         nativeInkBridge = new NativeInkBridge(webView);
+        fileExporter = new FileExporter(this, (requestId, saved, cancelled, error) -> {
+            if (error != null) nativeInkBridge.reject(requestId, new IOException(error));
+            else nativeInkBridge.resolve(requestId, nativeInkBridge.jsonObject("saved", saved, "cancelled", cancelled));
+        });
         configureWebView(webView);
         webView.addJavascriptInterface(nativeInkBridge, "InkForgeNative");
         webView.loadUrl("https://appassets.androidplatform.net/assets/public/index.html");
@@ -235,6 +240,10 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == FileExporter.REQUEST_CODE) {
+            fileExporter.onResult(resultCode, data);
+            return;
+        }
         if (requestCode != FILE_CHOOSER_REQUEST || fileChooserCallback == null) return;
         Uri[] result = null;
         if (resultCode == RESULT_OK && data != null) {
@@ -283,6 +292,15 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (webView != null && isStylusMotionEvent(event)) {
+            // Observe every touch before WebView/Chromium can consume a button change.
+            webView.dispatchStylusTouchFromHost(event);
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
         if (webView != null && isStylusMotionEvent(event)) {
             webView.dispatchStylusFromHost(event);
@@ -291,14 +309,16 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean isStylusMotionEvent(MotionEvent event) {
-        if (event == null ||
-                (event.getSource() & InputDevice.SOURCE_STYLUS) != InputDevice.SOURCE_STYLUS) {
-            return false;
+        return stylusPointerIndex(event) >= 0;
+    }
+
+    private static int stylusPointerIndex(MotionEvent event) {
+        if (event == null) return -1;
+        for (int index = 0; index < event.getPointerCount(); index++) {
+            int toolType = event.getToolType(index);
+            if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) return index;
         }
-        if (event.getPointerCount() <= 0) return true;
-        int index = Math.max(0, Math.min(event.getActionIndex(), event.getPointerCount() - 1));
-        int toolType = event.getToolType(index);
-        return toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER;
+        return -1;
     }
 
     @Override
@@ -344,6 +364,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (fileExporter != null) fileExporter.close();
         if (nativeInkBridge != null) nativeInkBridge.close();
         if (webView != null) {
             webView.removeJavascriptInterface("InkForgeNative");
@@ -355,8 +376,7 @@ public final class MainActivity extends Activity {
 
     private final class InkWebView extends WebView {
         private long lastMoveDispatchNanos;
-        private boolean stylusPrimaryButtonDown;
-        private boolean stylusSecondaryButtonDown;
+        private final StylusButtonState stylusButtons = new StylusButtonState();
         private boolean stylusContactActive;
 
         InkWebView(Activity context) {
@@ -367,24 +387,11 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
-            int index = Math.max(0, Math.min(event.getActionIndex(), event.getPointerCount() - 1));
-            int toolType = event.getPointerCount() > 0
-                    ? event.getToolType(index)
-                    : MotionEvent.TOOL_TYPE_UNKNOWN;
-            if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
+            if (isStylusMotionEvent(event)) {
                 int action = event.getActionMasked();
-                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
-                    stylusContactActive = true;
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
                         (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE)) {
                     requestUnbufferedDispatch(event);
-                }
-                dispatchStylus(event, false);
-                if (action == MotionEvent.ACTION_UP ||
-                        action == MotionEvent.ACTION_CANCEL ||
-                        action == MotionEvent.ACTION_POINTER_UP) {
-                    stylusContactActive = false;
                 }
             }
             return super.onTouchEvent(event);
@@ -392,7 +399,7 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onHoverEvent(MotionEvent event) {
-            dispatchStylus(event, true);
+            // Hover/button events are forwarded once, at Activity level.
             return super.onHoverEvent(event);
         }
 
@@ -405,51 +412,61 @@ public final class MainActivity extends Activity {
             dispatchStylus(event, !stylusContactActive);
         }
 
+        void dispatchStylusTouchFromHost(MotionEvent event) {
+            int action = event.getActionMasked();
+            int index = stylusPointerIndex(event);
+            boolean stylusChanged = index == event.getActionIndex();
+            if (action == MotionEvent.ACTION_DOWN || (action == MotionEvent.ACTION_POINTER_DOWN && stylusChanged)) {
+                stylusContactActive = true;
+            }
+            dispatchStylus(event, false);
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
+                    (action == MotionEvent.ACTION_POINTER_UP && stylusChanged)) {
+                stylusContactActive = false;
+            }
+        }
+
         private void dispatchStylus(MotionEvent event, boolean hover) {
-            if (event.getPointerCount() <= 0) return;
+            int index = stylusPointerIndex(event);
+            if (index < 0) return;
             long now = System.nanoTime();
             int action = event.getActionMasked();
-            if ((action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_HOVER_MOVE) &&
+            int buttonState = event.getButtonState();
+            int actionButton = (action == MotionEvent.ACTION_BUTTON_PRESS || action == MotionEvent.ACTION_BUTTON_RELEASE)
+                    ? event.getActionButton() : 0;
+            boolean buttonsChanged = stylusButtons.update(action, buttonState, actionButton);
+            if (!buttonsChanged && (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_HOVER_MOVE) &&
                     now - lastMoveDispatchNanos < 8_000_000L) return;
             lastMoveDispatchNanos = now;
-            int index = Math.max(0, Math.min(event.getActionIndex(), event.getPointerCount() - 1));
-            int buttonState = event.getButtonState();
-            int actionButton = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? event.getActionButton() : 0;
-            boolean primaryNow = (buttonState & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
-                    actionButton == MotionEvent.BUTTON_STYLUS_PRIMARY;
-            boolean secondaryNow = (buttonState & MotionEvent.BUTTON_STYLUS_SECONDARY) != 0 ||
-                    actionButton == MotionEvent.BUTTON_STYLUS_SECONDARY;
-            if (action == MotionEvent.ACTION_BUTTON_RELEASE ||
-                    action == MotionEvent.ACTION_CANCEL ||
-                    action == MotionEvent.ACTION_UP ||
-                    action == MotionEvent.ACTION_HOVER_EXIT) {
-                stylusPrimaryButtonDown = false;
-                stylusSecondaryButtonDown = false;
-            } else {
-                if (primaryNow) stylusPrimaryButtonDown = true;
-                if (secondaryNow) stylusSecondaryButtonDown = true;
-            }
-            boolean primaryButton = primaryNow || stylusPrimaryButtonDown;
-            boolean secondaryButton = secondaryNow || stylusSecondaryButtonDown;
-            int latchedButtonState = buttonState;
-            if (primaryButton) latchedButtonState |= MotionEvent.BUTTON_STYLUS_PRIMARY;
-            if (secondaryButton) latchedButtonState |= MotionEvent.BUTTON_STYLUS_SECONDARY;
+            int currentButtons = stylusButtons.getButtons();
+            boolean primaryButton = (currentButtons & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
+            boolean secondaryButton = (currentButtons & MotionEvent.BUTTON_STYLUS_SECONDARY) != 0;
+            int[] location = new int[2];
+            getLocationOnScreen(location);
+            float density = getResources().getDisplayMetrics().density;
             JSONObject detail = new JSONObject();
             try {
                 detail.put("action", action);
                 detail.put("hover", hover);
+                boolean contactEnded = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
+                        action == MotionEvent.ACTION_HOVER_EXIT ||
+                        (action == MotionEvent.ACTION_POINTER_UP && index == event.getActionIndex());
+                detail.put("contact", stylusContactActive && !contactEnded);
                 detail.put("toolType", event.getToolType(index));
                 detail.put("pointerId", event.getPointerId(index));
                 detail.put("source", event.getSource());
                 detail.put("stylus", event.getToolType(index) == MotionEvent.TOOL_TYPE_STYLUS);
                 detail.put("eraser", event.getToolType(index) == MotionEvent.TOOL_TYPE_ERASER);
-                detail.put("x", event.getX(index));
-                detail.put("y", event.getY(index));
+                // Host events use screen pixels; JS pointer coordinates use CSS pixels.
+                detail.put("x", (event.getX(index) + event.getRawX() - event.getX() - location[0]) / density);
+                detail.put("y", (event.getY(index) + event.getRawY() - event.getY() - location[1]) / density);
                 detail.put("pressure", event.getPressure(index));
                 detail.put("tilt", event.getAxisValue(MotionEvent.AXIS_TILT, index));
                 detail.put("orientation", event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index));
                 detail.put("distance", event.getAxisValue(MotionEvent.AXIS_DISTANCE, index));
-                detail.put("buttonState", latchedButtonState);
+                detail.put("buttonState", currentButtons);
+                detail.put("buttonsAuthoritative", true);
+                detail.put("actionButton", actionButton);
                 detail.put("rawButtonState", buttonState);
                 detail.put(
                         "primaryButton",
@@ -500,6 +517,34 @@ public final class MainActivity extends Activity {
 
         NativeInkBridge(WebView target) {
             this.target = target;
+        }
+
+        @JavascriptInterface
+        public boolean usesNativeStylusInput() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public String beginFileExport(String filename, String mime) {
+            return fileExporter.begin(filename, mime);
+        }
+
+        @JavascriptInterface
+        public boolean appendFileExport(String token, String base64) {
+            return fileExporter.append(token, base64);
+        }
+
+        @JavascriptInterface
+        public void cancelFileExport(String token) {
+            fileExporter.cancel(token);
+        }
+
+        @JavascriptInterface
+        public void finishFileExport(String requestId, String payload) {
+            try {
+                String token = new JSONObject(payload).getString("token");
+                mainHandler.post(() -> fileExporter.finish(requestId, token));
+            } catch (Exception error) { reject(requestId, error); }
         }
 
         @JavascriptInterface

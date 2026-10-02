@@ -1,13 +1,13 @@
-# bad note 3.3.28
+# bad note 3.3.30
 
 S Pen과 대용량 PDF를 전제로 만든 Android 필기 노트 앱입니다. 필기, PDF 주석, 손글씨 OCR, 손글씨 수식 계산, 도형 변환, 폴더 관리, 파일 즐겨찾기, 자동 업데이트를 한 앱 안에서 처리합니다.
 
 ## 바로 설치
 
-GitHub Releases에서 기기에 맞는 APK를 받습니다.
+이 PC에서 빌드한 APK는 `build/apk/`에 있습니다. GitHub에 공개된 버전은 Releases에서 확인할 수 있습니다.
 
-- `bad-note-Android-3.3.28-Update.apk`: 기존 `com.inkforge.note4` 설치판을 업데이트할 때 사용
-- `bad-note-Android-3.3.28-SideBySide.apk`: 기존 앱과 별도로 설치할 때 사용
+- `bad-note-Android-3.3.30-Update.apk`: 기존 `com.inkforge.note4` 설치판을 업데이트할 때 사용
+- `bad-note-Android-3.3.30-SideBySide.apk`: `com.inkforge.note5` 설치판 업데이트 또는 `note4`와 함께 설치할 때 사용
 
 배포 서명키가 다른 기존 설치판 위에는 Android가 업데이트 설치를 거부할 수 있습니다. 그 경우 기존 앱에서 `.ifnote`로 백업한 뒤 병행 설치판을 사용하십시오. 자세한 절차는 `docs/INSTALL-KO.txt`에 있습니다.
 
@@ -15,7 +15,8 @@ GitHub Releases에서 기기에 맞는 APK를 받습니다.
 
 - **필기 엔진**: 만년필, 볼펜, 젤펜, 브러시, 연필, 형광펜, 지우개, 올가미를 지원합니다.
 - **S Pen 대응**: 측면 버튼을 누르는 동안 지우개로 전환하고, 터치 중 버튼 입력과 손 잠금 상태에서 손가락 입력이 필기로 새는 문제를 줄입니다.
-- **PDF 작업**: PDF를 새 노트로 불러오고, 검색 텍스트를 색인하며, 필기·텍스트·도형 주석을 XFDF로 내보냅니다.
+- **파일 내보내기**: 더 보기 → 파일 내보내기에서 편집 가능한 `.ifnote` 또는 전체 페이지 PDF를 기기에 저장합니다. 노트 파일은 PDF 배경·이미지·녹음을 포함합니다.
+- **PDF 작업**: PDF를 새 노트로 불러오고, 검색 텍스트를 색인하며, PDF 또는 필기·텍스트·도형 주석(XFDF)을 내보냅니다.
 - **OCR**: Android ML Kit Digital Ink 기반으로 한글·영문 필기 인식을 우선 사용하고, 화면에 머문 페이지를 유휴 상태에서 자동 색인합니다.
 - **수식 계산**: 손글씨 수식을 인식해 결과 객체를 페이지에 삽입합니다. 자동 계산은 기본값이 꺼져 있습니다.
 - **도형 변환**: 직선, 곡선, 원, 사각형, 삼각형, 오각형, 육각형을 필기 후 유지 동작으로 정리합니다.
@@ -78,7 +79,7 @@ python3 tools/test_web.py --web web
 
 - 기능 안내: `docs/README-KO.md`
 - 설치 안내: `docs/INSTALL-KO.txt`
-- 최신 변경 내역: `docs/CHANGELOG-3.3.28-KO.md`
+- 최신 변경 내역: `docs/CHANGELOG-3.3.30-KO.md`
 
 ## 기여자
 
