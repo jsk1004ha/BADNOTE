@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.28';
+  const VERSION = '3.3.30';
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 1414;
   const HANDWRITING_OCR_DWELL_MS = 2800;
@@ -9,37 +9,41 @@
   const OCR_ACTIVITY_GRACE_MS = 1400;
   const IDLE_OCR_TIMEOUT_MS = 2400;
   const SHAPE_HOLD_MS = 650;
-  const BARREL_BUTTON_LATCH_MS = 3500;
   const RELEASE_NOTES = {
     ko: [
-      'S Pen이 화면에 닿아 필기 중이어도 측면 버튼을 누르는 즉시 현재 획을 중단하고 지우개로 전환합니다.',
-      'Android Activity에서 ACTION_BUTTON_PRESS/RELEASE와 표준 스타일러스 KeyEvent를 먼저 받아 WebView의 현재 필기 세션으로 전달합니다.',
-      '버튼을 놓으면 이전 필기 도구로 돌아가며, 버튼 이벤트의 중복 전달을 막았습니다.',
-      'Android 릴리즈 버전을 3.3.28, versionCode 360으로 올렸습니다.'
+      'S Pen 버튼을 누른 상태의 접촉·이동을 Android에서 직접 처리해 실제로 필기를 지웁니다.',
+      '더 보기 → 파일 내보내기에서 배경·이미지·녹음을 포함한 노트 파일(.ifnote)과 전체 페이지 PDF를 저장할 수 있습니다.',
+      '낙서 지우기는 같은 영역을 여러 번 왕복하는 펜 동작만 인식하며, 주변 획과 형광펜·텍스트·도형은 보존합니다.',
+      '확대·축소한 크기를 유지하며, 빠른 연속 필기나 사이드바·창 크기 변화로 페이지 맞춤이 실행되지 않습니다.',
+      'S Pen 버튼을 누르면 접촉 중에도 지우개로 전환하고, 놓으면 펜을 떼지 않아도 이전 도구로 돌아갑니다.'
     ],
     en: [
-      'Pressing the S Pen side button now switches the active stroke to the eraser immediately, even while the pen is touching the screen.',
-      'Android Activity captures ACTION_BUTTON_PRESS/RELEASE and standard stylus KeyEvents before WebView routing, then forwards them to the active ink session.',
-      'Releasing the button restores the previous writing tool, with duplicate native delivery suppressed.',
-      'Updated the Android release metadata to 3.3.28 with versionCode 360.'
+      'Android pen contacts now erase ink while the S Pen button is held, even when WebView pointer events stop.',
+      'Use More → Export file to save a complete .ifnote backup or a PDF of all pages.',
+      'Scribble erasing requires repeated passes over the same area and preserves nearby ink, highlighters, text and shapes.',
+      'Manual zoom stays in place during rapid writing, sidebar changes and window resizing.',
+      'Pressing the S Pen side button switches the active stroke to the eraser immediately; releasing it resumes the previous tool without lifting the pen.'
     ],
     ja: [
-      'S Penが画面に触れて筆記中でも、サイドボタンを押すと現在のストロークを直ちに消しゴムへ切り替えます。',
-      'Android ActivityがACTION_BUTTON_PRESS/RELEASEと標準スタイラスKeyEventをWebViewより先に受け取り、現在の筆記セッションへ転送します。',
-      'ボタンを離すと以前の筆記ツールへ戻り、ネイティブイベントの重複配信も防止します。',
-      'Androidリリース情報を3.3.28、versionCode 360へ更新しました。'
+      'S Penボタンを押したままの接触と移動をAndroidで直接処理し、手書きを消去します。',
+      'その他 → ファイルを書き出しで、背景・画像・録音を含むノート(.ifnote)と全ページのPDFを保存できます。',
+      'なぞり書き消去は同じ範囲を繰り返し往復するペン操作だけを認識し、周囲の線・蛍光ペン・テキスト・図形を保護します。',
+      '連続した筆記、サイドバーの切り替え、画面サイズの変更後も手動ズームを維持します。',
+      'S Penのボタンを押すと接触中も消しゴムになり、離すとペンを持ち上げずに元のツールへ戻ります。'
     ],
     zh: [
-      '即使 S Pen 正接触屏幕书写，按下侧键也会立即把当前笔画切换为橡皮擦。',
-      'Android Activity 会在 WebView 路由之前捕获 ACTION_BUTTON_PRESS/RELEASE 和标准触控笔 KeyEvent，并转发到当前书写会话。',
-      '松开按钮后恢复之前的书写工具，同时避免原生事件重复传递。',
-      'Android 发布信息已更新为 3.3.28，versionCode 360。'
+      '按住S Pen按钮时直接处理Android触笔接触和移动事件，实际擦除笔迹。',
+      '通过更多 → 导出文件，可保存包含背景、图片和录音的笔记(.ifnote)，或所有页面的PDF。',
+      '涂写擦除仅识别在同一区域反复来回的笔画，并保留附近笔迹、荧光笔、文字和形状。',
+      '快速书写、切换侧边栏或调整窗口大小时保持手动缩放。',
+      '按住 S Pen 侧键时立即切换为橡皮擦，松开后无需抬笔即可恢复之前的工具。'
     ],
     pt: [
-      'Pressionar o botão lateral da S Pen agora troca imediatamente o traço ativo para a borracha, mesmo com a caneta tocando a tela.',
-      'A Activity do Android captura ACTION_BUTTON_PRESS/RELEASE e KeyEvents padrão da caneta antes do WebView e os encaminha para a sessão de escrita ativa.',
-      'Ao soltar o botão, a ferramenta anterior é restaurada e eventos nativos duplicados são evitados.',
-      'Os metadados Android foram atualizados para 3.3.28 com versionCode 360.'
+      'O Android processa diretamente o contato e o movimento da S Pen para apagar enquanto o botão estiver pressionado.',
+      'Use Mais → Exportar arquivo para salvar uma nota completa (.ifnote) ou um PDF de todas as páginas.',
+      'Apagar rabiscando exige passagens repetidas sobre a mesma área e preserva traços próximos, marca-textos, textos e formas.',
+      'O zoom manual é mantido durante a escrita rápida, mudanças na barra lateral e redimensionamento da janela.',
+      'Pressionar o botão da S Pen ativa a borracha durante o contato; soltá-lo restaura a ferramenta anterior sem levantar a caneta.'
     ]
   };
   const UPDATE_I18N = {
@@ -240,13 +244,11 @@
   let lastStylusDetail = null;
   let lastStylusChipShownAt = 0;
   let stylusGesture = null;
-  let eraserRestoreTool = null;
   let pullState = null;
   let pullIndicator = null;
   let modelStatusNode = null;
   let recognitionReadyChipShown = false;
-  let barrelRestoreTool = null;
-  let barrelButtonLatchUntil = 0;
+  let motionBarrelButtonDown = false;
   let stylusKeyBarrelDown = false;
   let updateSheet = null;
   let updateCheckManual = false;
@@ -326,10 +328,10 @@
     if (!nativeApi || typeof nativeApi[method] !== 'function') return Promise.reject(new Error('네이티브 인식 엔진을 사용할 수 없습니다.'));
     const requestId = uid('native');
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = timeout > 0 ? setTimeout(() => {
         pending.delete(requestId);
         reject(new Error('인식 시간이 초과되었습니다.'));
-      }, timeout);
+      }, timeout) : null;
       pending.set(requestId, { resolve, reject, timer });
       try {
         if (method === 'downloadInkModel') nativeApi[method](requestId, String(payload));
@@ -340,6 +342,23 @@
         reject(error);
       }
     });
+  }
+
+  async function saveBlob(blob, filename) {
+    if (!nativeApi?.beginFileExport) throw new Error('이 버전에서는 파일 저장을 지원하지 않습니다. 앱을 업데이트하세요.');
+    const token = nativeApi.beginFileExport(filename, blob.type || 'application/octet-stream');
+    if (!token) throw new Error('다른 파일을 저장 중이거나 임시 파일을 만들 수 없습니다.');
+    try {
+      for (let offset = 0; offset < blob.size; offset += 192 * 1024) {
+        const url = await window.InkForgeFileExport.blobDataUrl(blob.slice(offset, offset + 192 * 1024));
+        if (!nativeApi.appendFileExport(token, url.slice(url.indexOf(',') + 1))) throw new Error('파일을 준비하지 못했습니다. 저장 공간을 확인하세요.');
+      }
+      // No timer while the user chooses a destination in the system picker.
+      return await callNative('finishFileExport', { token }, 0);
+    } catch (error) {
+      nativeApi.cancelFileExport(token);
+      throw error;
+    }
   }
 
   function nativeCapabilities() {
@@ -986,32 +1005,34 @@
 
   function rememberNativeStylus(detail) {
     const action = Number(detail?.action);
-    const releaseAction = isStylusReleaseAction(action);
+    const authoritative = detail?.buttonsAuthoritative === true;
+    const releaseAction = action === 3 || action === 10 || (action === 12 && !authoritative);
     const nowTime = performance.now();
     const buttonState = Number(detail?.buttonState || 0);
     const rawButtonState = Number(detail?.rawButtonState ?? buttonState);
-    const effectiveButtonState = releaseAction ? 0 : buttonState;
-    const rawPrimarySignal = !!detail?.primaryButton || (buttonState & 32) !== 0 || (rawButtonState & 32) !== 0;
-    const rawSecondarySignal = !!detail?.secondaryButton || (buttonState & 64) !== 0 || (rawButtonState & 64) !== 0;
+    const rawPrimarySignal = (buttonState & 32) !== 0 || (!authoritative && (!!detail?.primaryButton || (rawButtonState & 32) !== 0));
+    const rawSecondarySignal = (buttonState & 64) !== 0 || (!authoritative && (!!detail?.secondaryButton || (rawButtonState & 64) !== 0));
     const rawPrimary = !releaseAction && rawPrimarySignal;
     const rawSecondary = !releaseAction && rawSecondarySignal;
-    const rawBarrel = !releaseAction && (!!detail?.barrelButton || rawPrimarySignal || rawSecondarySignal || (buttonState & 96) !== 0 || (rawButtonState & 96) !== 0);
-    if (rawBarrel) barrelButtonLatchUntil = nowTime + BARREL_BUTTON_LATCH_MS;
-    else if (releaseAction) barrelButtonLatchUntil = 0;
-    const latchedBarrel = nowTime < barrelButtonLatchUntil;
+    const rawBarrel = !releaseAction && (rawPrimarySignal || rawSecondarySignal || (!authoritative && !!detail?.barrelButton));
+    // A zero MOVE/hover state is a release, even on devices without BUTTON_RELEASE.
+    // Only preserve an explicit hover press across a legacy, buttonless DOWN.
+    motionBarrelButtonDown = rawBarrel || (!releaseAction && action === 0 && !detail?.buttonsAuthoritative && motionBarrelButtonDown);
+    if (action === 3 || action === 10) stylusKeyBarrelDown = false;
+    const barrel = motionBarrelButtonDown || stylusKeyBarrelDown;
     lastStylusDetail = {
       ...detail,
       x: Number(detail?.x),
       y: Number(detail?.y),
       pressure: Number(detail?.pressure),
       toolType: Number(detail?.toolType),
-      buttonState: effectiveButtonState,
+      buttonState: barrel ? (buttonState & 96) || 32 : 0,
       rawButtonState,
       releaseAction,
-      primaryButton: rawPrimary || (latchedBarrel && !rawSecondary),
+      primaryButton: rawPrimary || (barrel && !rawSecondary),
       secondaryButton: rawSecondary,
-      barrelButton: rawBarrel || latchedBarrel,
-      latchedBarrelButton: latchedBarrel && !rawBarrel,
+      barrelButton: barrel,
+      latchedBarrelButton: barrel && !rawBarrel,
       eraser: Number(detail?.toolType) === 4,
       receivedAt: nowTime
     };
@@ -1047,28 +1068,21 @@
     const detail = event.detail || {};
     rememberNativeStylus(detail);
     setStylusChip(lastStylusDetail || detail);
-    const button = !!(lastStylusDetail?.primaryButton || lastStylusDetail?.secondaryButton || lastStylusDetail?.barrelButton);
+    const button = !!lastStylusDetail?.barrelButton;
     const toolType = Number(detail.toolType);
     const action = Number(detail.action);
     const releaseAction = isStylusReleaseAction(action);
-    if (button && !releaseAction) {
+    const eraserTip = toolType === 4 && !releaseAction && action !== 10;
+    if (typeof detail.contact === 'boolean') {
+      api.handleNativeStylusContact?.(lastStylusDetail);
+      if (detail.contact) return;
+    }
+    if (api.state.settings.sPenGestures && (button || eraserTip)) {
       api.suppressDocumentSearch?.(1200) ?? api.closeDocumentSearch?.();
       api.applyStylusButtonEraser?.(lastStylusDetail);
-    }
-    if (button && !releaseAction && !barrelRestoreTool && api.state.tool !== 'eraser') {
-      barrelRestoreTool = api.state.tool;
-      api.setTool('eraser');
-    } else if ((!button || releaseAction) && barrelRestoreTool) {
-      if (api.state.tool === 'eraser') api.setTool(barrelRestoreTool);
-      barrelRestoreTool = null;
+    } else {
+      api.releaseStylusButtonEraser?.();
       hideStylusChip(120);
-    }
-    if (toolType === 4 && action === 0 && api.state.tool !== 'eraser') {
-      eraserRestoreTool = api.state.tool;
-      api.setTool('eraser');
-    } else if (eraserRestoreTool && releaseAction) {
-      api.setTool(eraserRestoreTool);
-      eraserRestoreTool = null;
     }
   }
 
@@ -1076,7 +1090,6 @@
     if (!api?.state.settings.sPenGestures) return;
     const nowTime = performance.now();
     const previous = lastStylusDetail || {};
-    barrelButtonLatchUntil = nowTime + BARREL_BUTTON_LATCH_MS;
     stylusKeyBarrelDown = true;
     lastStylusDetail = {
       ...previous,
@@ -1100,30 +1113,26 @@
     setStylusChip(lastStylusDetail);
     api.suppressDocumentSearch?.(1200) ?? api.closeDocumentSearch?.();
     api.applyStylusButtonEraser?.(lastStylusDetail);
-    if (!barrelRestoreTool && api.state.tool !== 'eraser') barrelRestoreTool = api.state.tool;
-    if (api.state.tool !== 'eraser') api.setTool('eraser');
   }
 
   function releaseStylusKeyBarrel() {
     if (!stylusKeyBarrelDown) return false;
     stylusKeyBarrelDown = false;
-    barrelButtonLatchUntil = 0;
     if (lastStylusDetail) {
       lastStylusDetail = {
         ...lastStylusDetail,
-        buttonState: 0,
-        rawButtonState: 0,
+        buttonState: motionBarrelButtonDown ? 32 : 0,
+        rawButtonState: motionBarrelButtonDown ? 32 : 0,
         releaseAction: true,
-        primaryButton: false,
+        primaryButton: motionBarrelButtonDown,
         secondaryButton: false,
-        barrelButton: false,
+        barrelButton: motionBarrelButtonDown,
         latchedBarrelButton: false,
         receivedAt: performance.now()
       };
       window.__inkforgeLastNativeStylus = lastStylusDetail;
     }
-    if (barrelRestoreTool && api.state.tool === 'eraser') api.setTool(barrelRestoreTool);
-    barrelRestoreTool = null;
+    if (!motionBarrelButtonDown) api.releaseStylusButtonEraser?.();
     hideStylusChip(120);
     return true;
   }
@@ -1588,6 +1597,14 @@
     });
     window.addEventListener('inkforge:native-stylus', handleNativeStylus);
     window.addEventListener('inkforge:native-stylus-key', handleNativeStylusKey);
+    window.addEventListener('blur', () => {
+      motionBarrelButtonDown = false;
+      stylusKeyBarrelDown = false;
+      lastStylusDetail = null;
+      window.__inkforgeLastNativeStylus = null;
+      api.releaseStylusButtonEraser?.();
+      hideStylusChip();
+    });
     window.addEventListener('inkforge:native-model-status', handleModelStatus);
     window.addEventListener('inkforge:native-update', handleNativeUpdate);
     window.addEventListener('inkforge:language-changed', () => {
@@ -1614,12 +1631,13 @@
       ready: true,
       autoIndexPage,
       recognizeNativeInk,
+      saveBlob,
       isRecentStylusEvent,
       checkForUpdate: () => requestUpdateCheck(true),
       applyUpdateState: applyNativeUpdateState,
       showReleaseNotesOnce: () => showInstalledReleaseNotesOnce(true),
       get lastStylus() { return lastStylusDetail; },
-      get barrelButtonActive() { return performance.now() < barrelButtonLatchUntil; }
+      get barrelButtonActive() { return motionBarrelButtonDown || stylusKeyBarrelDown; }
     };
   }
 

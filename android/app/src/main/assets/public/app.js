@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.3.28';
+  const VERSION = '3.3.30';
   const PAGE_RENDER_SCALE_LIMIT = 4;
   const LEGACY_RASTER_PAGE_RENDER_SCALE_LIMIT = 2.15;
   const RASTER_PAGE_RENDER_SCALE_LIMIT = 2.55;
@@ -653,11 +653,15 @@
     highlighterWidth: 22,
     eraserMode: 'stroke',
     eraserRadius: 26,
+    stylusButtonRestoreTool: null,
+    nativeStylusInputEnabled: !!window.InkForgeNative?.usesNativeStylusInput?.(),
+    nativeStylusContact: null,
     shape: 'line',
     stickyColor: '#ffe58d',
     tapeColor: '#4c91dd',
     sticker: '★',
     zoom: 1,
+    pageBaseWidth: null,
     pageMode: 'continuous',
     dock: 'top',
     sidebarOpen: false,
@@ -2256,7 +2260,9 @@
     if (!viewport) return;
     const mobile = window.matchMedia('(max-width: 840px)').matches;
     const available = Math.max(280, viewport.clientWidth - sidebarReservedWidth(viewport) - (mobile ? 20 : 104));
-    const base = Math.min(880, available);
+    // Keep the same physical page scale across sidebar, keyboard and window changes.
+    if (!state.pageBaseWidth) state.pageBaseWidth = Math.min(880, available);
+    const base = state.pageBaseWidth;
     const width = Math.round(base * state.zoom);
     const stack = $('#pageStack');
     stack.style.setProperty('--zoom', String(state.zoom));
@@ -2957,6 +2963,7 @@
 
   function fitPage() {
     state.zoom = 1;
+    state.pageBaseWidth = null;
     updatePageSizing();
     scrollToPage(state.currentPageIndex);
     renderActiveToolMenu();
@@ -3067,11 +3074,11 @@
   }
 
   function isStylusEraser(event) {
+    if (!state.settings.sPenGestures) return false;
     const nativeStylus = recentNativeStylus(event);
     const nativeButtons = Number(nativeStylus?.buttonState || 0);
     return effectivePointerType(event) === 'pen' && (
-      event.button === 2 ||
-      event.button === 5 ||
+      (event.type === 'pointerdown' && (event.button === 2 || event.button === 5)) ||
       (event.buttons & 2) !== 0 ||
       (event.buttons & 32) !== 0 ||
       (event.buttons & 64) !== 0 ||
@@ -3235,7 +3242,10 @@
       const bounds = computeBounds(object);
       if (point.x + radius < bounds.x || point.x - radius > bounds.x + bounds.w || point.y + radius < bounds.y || point.y - radius > bounds.y + bounds.h) continue;
       if (object.type === 'stroke') {
-        if (object.points.some((sample) => distance(sample, point) <= radius + objectPageWidth(object, pageIndex))) candidates.push(object);
+        const tolerance = radius + objectPageWidth(object, pageIndex);
+        if (object.points.some((sample, index) => index
+          ? distanceToSegment(point, object.points[index - 1], sample) <= tolerance
+          : distance(sample, point) <= tolerance)) candidates.push(object);
       } else if (object.type === 'shape') {
         if (shapeIntersectsPoint(object, point, radius, pageIndex)) candidates.push(object);
       } else candidates.push(object);
@@ -3246,12 +3256,43 @@
   function splitStrokeByEraser(stroke, point, radius, pageIndex = state.currentPageIndex) {
     const runs = [];
     const strokeWidth = objectPageWidth(stroke, pageIndex);
+    const cutRadius = radius + strokeWidth * .45;
     let run = [];
-    for (const sample of stroke.points) {
-      if (distance(sample, point) > radius + strokeWidth * .45) run.push(sample);
-      else if (run.length) { if (run.length > 1) runs.push(run); run = []; }
+    const finish = () => { if (run.length > 1) runs.push(run); run = []; };
+    const interpolate = (a, b, t) => {
+      const sample = { ...a };
+      for (const key of Object.keys(a)) {
+        if (Number.isFinite(a[key]) && Number.isFinite(b[key])) sample[key] = a[key] + (b[key] - a[key]) * t;
+      }
+      return sample;
+    };
+    // Clip line segments at the eraser boundary, including sparse/fast strokes
+    // whose endpoints both lie outside the eraser circle.
+    for (let i = 1; i < stroke.points.length; i++) {
+      const a = stroke.points[i - 1], b = stroke.points[i];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const fx = a.x - point.x, fy = a.y - point.y;
+      const aa = dx * dx + dy * dy;
+      const bb = 2 * (fx * dx + fy * dy);
+      const cc = fx * fx + fy * fy - cutRadius * cutRadius;
+      const discriminant = bb * bb - 4 * aa * cc;
+      const cuts = [0, 1];
+      if (aa > 0 && discriminant > 0) {
+        for (const t of [(-bb - Math.sqrt(discriminant)) / (2 * aa), (-bb + Math.sqrt(discriminant)) / (2 * aa)]) {
+          if (t > 0 && t < 1) cuts.push(t);
+        }
+      }
+      cuts.sort((left, right) => left - right);
+      for (let j = 1; j < cuts.length; j++) {
+        if (distance(interpolate(a, b, (cuts[j - 1] + cuts[j]) / 2), point) < cutRadius) finish();
+        else {
+          const start = interpolate(a, b, cuts[j - 1]);
+          if (!run.length || distance(run[run.length - 1], start) > .001) run.push(start);
+          run.push(interpolate(a, b, cuts[j]));
+        }
+      }
     }
-    if (run.length > 1) runs.push(run);
+    finish();
     return runs.map((points) => ({ ...deepClone(stroke), id: uid('stroke'), points }));
   }
 
@@ -3326,94 +3367,10 @@
     return o1 * o2 < 0 && o3 * o4 < 0;
   }
 
-  function pathSelfIntersections(points, maxCount = 24) {
-    if (!points || points.length < 5) return 0;
-    let count = 0;
-    for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1], b = points[i];
-      for (let j = i + 2; j < points.length; j++) {
-        if (i === 1 && j === points.length - 1) continue;
-        const c = points[j - 1], d = points[j];
-        if (segmentsCross(a, b, c, d) && ++count >= maxCount) return count;
-      }
-    }
-    return count;
-  }
-
-  function pathRevisitProfile(points, cellSize = 18) {
-    const seen = new Set();
-    let revisits = 0, previous = '';
-    for (const point of points || []) {
-      const key = `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`;
-      if (key === previous) continue;
-      if (seen.has(key)) revisits++;
-      seen.add(key);
-      previous = key;
-    }
-    return { revisits, cells: seen.size };
-  }
-
-  function latinRLikeGesture(points, metrics, lengthRatio, revisits) {
-    if (!points || points.length < 7) return false;
-    const bounds = metrics.bounds;
-    if (bounds.w < 12 || bounds.h < 18) return false;
-    const aspect = bounds.h / Math.max(1, bounds.w);
-    if (aspect < .78 || aspect > 3.4) return false;
-    const leftLimit = bounds.x + bounds.w * .44;
-    let verticalLength = 0, verticalMinY = Infinity, verticalMaxY = -Infinity;
-    for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1], b = points[i];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const length = Math.hypot(dx, dy);
-      if (length < 2) continue;
-      const midX = (a.x + b.x) / 2;
-      if (midX <= leftLimit && Math.abs(dy) > Math.abs(dx) * 1.55) {
-        verticalLength += length;
-        verticalMinY = Math.min(verticalMinY, a.y, b.y);
-        verticalMaxY = Math.max(verticalMaxY, a.y, b.y);
-      }
-    }
-    const verticalSpan = verticalMaxY - verticalMinY;
-    const hasStem = verticalLength >= bounds.h * .48 && verticalSpan >= bounds.h * .58;
-    if (!hasStem) return false;
-    const upperRight = points.some((point) => point.x >= bounds.x + bounds.w * .48 && point.y <= bounds.y + bounds.h * .5);
-    const midReturn = points.some((point) => point.x <= bounds.x + bounds.w * .62 && point.y >= bounds.y + bounds.h * .34 && point.y <= bounds.y + bounds.h * .72);
-    const lowerLeg = points.slice(Math.floor(points.length * .42)).some((point) => point.x >= bounds.x + bounds.w * .56 && point.y >= bounds.y + bounds.h * .58);
-    const end = points[points.length - 1];
-    const endsLikeLeg = end.x >= bounds.x + bounds.w * .5 && end.y >= bounds.y + bounds.h * .55;
-    const notHeavyScrub = lengthRatio < 5.6 && metrics.axisReversals <= 10 && revisits <= 12;
-    return upperRight && midReturn && (lowerLeg || endsLikeLeg) && notHeavyScrub;
-  }
-
-  function mixedScribbleGestureProfile(points) {
-    const metrics = strokeMetrics(points);
-    const diagonal = Math.hypot(metrics.bounds.w, metrics.bounds.h);
-    const maxDimension = Math.max(metrics.bounds.w, metrics.bounds.h);
-    const minDimension = Math.min(metrics.bounds.w, metrics.bounds.h);
-    const lengthRatio = metrics.length / Math.max(1, diagonal);
-    const intersections = pathSelfIntersections(points);
-    const revisit = pathRevisitProfile(points, clamp(diagonal / 7, 12, 24));
-    if (latinRLikeGesture(points, metrics, lengthRatio, revisit.revisits)) {
-      return { metrics, diagonal, intersections, revisits: revisit.revisits, dense: false, local: false, glyphGuard: 'latin-r' };
-    }
-    const compact = maxDimension < 560 && minDimension > 8 && diagonal > 24;
-    const localCompact = maxDimension <= 180 && minDimension >= 4 && diagonal >= 12;
-    const openGesture = metrics.closure > diagonal * .46;
-    const scrubbedBackAndForth = metrics.axisReversals >= 4 && metrics.reversals >= 2 && lengthRatio > 2.25;
-    const crossedOver = intersections >= 2 && lengthRatio > 1.85;
-    const repeatedArea = revisit.revisits >= 4 && metrics.reversals >= 2 && lengthRatio > 2.15;
-    const loopedScrub = metrics.axisReversals >= 6 && revisit.revisits >= 5 && lengthRatio > 3;
-    const broadDense = compact && metrics.length > Math.max(128, diagonal * 2.45) && (scrubbedBackAndForth || crossedOver || repeatedArea || loopedScrub);
-    const localDense = localCompact && metrics.length > Math.max(58, diagonal * 2.05) && (scrubbedBackAndForth || crossedOver || repeatedArea || loopedScrub) && (openGesture || intersections || revisit.revisits >= 3);
-    return { metrics, diagonal, intersections, revisits: revisit.revisits, dense: broadDense || localDense, local: localDense && !broadDense };
-  }
-
-  const LATIN_SCRATCH_LANGUAGES = new Set(['en', 'pt']);
-
   function horizontalScratchSweeps(points, noise) {
     if (!points?.length) return [];
     const sweeps = [];
-    let start = points[0], extreme = points[0], direction = 0;
+    let start = points[0], extreme = points[0], direction = 0, startIndex = 0, extremeIndex = 0;
     for (let index = 1; index < points.length; index++) {
       const point = points[index];
       if (!direction) {
@@ -3421,65 +3378,72 @@
         if (Math.abs(dx) < noise) continue;
         direction = Math.sign(dx);
         extreme = point;
+        extremeIndex = index;
         continue;
       }
       const extendsRun = direction > 0 ? point.x > extreme.x : point.x < extreme.x;
       if (extendsRun) {
         extreme = point;
+        extremeIndex = index;
         continue;
       }
       const reversal = point.x - extreme.x;
       if (Math.abs(reversal) < noise || Math.sign(reversal) === direction) continue;
-      sweeps.push({ start, end: extreme, amplitude: Math.abs(extreme.x - start.x) });
+      sweeps.push({ start, end: extreme, startIndex, endIndex: extremeIndex, amplitude: Math.abs(extreme.x - start.x) });
       start = extreme;
+      startIndex = extremeIndex;
       direction = Math.sign(reversal);
       extreme = point;
+      extremeIndex = index;
     }
-    if (direction) sweeps.push({ start, end: extreme, amplitude: Math.abs(extreme.x - start.x) });
+    if (direction) sweeps.push({ start, end: extreme, startIndex, endIndex: extremeIndex, amplitude: Math.abs(extreme.x - start.x) });
     return sweeps;
   }
 
-  function latinScratchGestureProfile(points) {
+  function scratchGestureProfile(points) {
+    // Project onto the main axis so deliberate vertical/diagonal scratches work too.
+    const samples = points || [];
+    const center = samples.reduce((sum, point) => ({ x: sum.x + point.x / samples.length, y: sum.y + point.y / samples.length }), { x: 0, y: 0 });
+    let xx = 0, yy = 0, xy = 0;
+    for (const point of samples) {
+      const x = point.x - center.x, y = point.y - center.y;
+      xx += x * x; yy += y * y; xy += x * y;
+    }
+    const angle = .5 * Math.atan2(2 * xy, xx - yy);
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const projected = samples.map((point) => ({ x: point.x * cos + point.y * sin, y: -point.x * sin + point.y * cos }));
     const metrics = strokeMetrics(points);
-    const bounds = metrics.bounds;
+    const bounds = strokeMetrics(projected).bounds;
     const diagonal = Math.hypot(bounds.w, bounds.h);
     const lengthRatio = metrics.length / Math.max(1, diagonal);
-    const samples = points || [];
-    const horizontalTravel = samples.slice(1).reduce((sum, point, index) => sum + Math.abs(point.x - samples[index].x), 0);
-    const verticalTravel = samples.slice(1).reduce((sum, point, index) => sum + Math.abs(point.y - samples[index].y), 0);
+    const horizontalTravel = projected.slice(1).reduce((sum, point, index) => sum + Math.abs(point.x - projected[index].x), 0);
+    const verticalTravel = projected.slice(1).reduce((sum, point, index) => sum + Math.abs(point.y - projected[index].y), 0);
     const noise = Math.max(2.5, bounds.w * .025);
-    const traversalMinimum = Math.max(9, bounds.w * .22);
+    const traversalMinimum = Math.max(12, bounds.w * .6);
     const midpoint = bounds.x + bounds.w / 2;
-    const sweeps = horizontalScratchSweeps(samples, noise);
+    const sweeps = horizontalScratchSweeps(projected, noise);
     const validSweeps = sweeps.filter((sweep) => sweep.amplitude >= traversalMinimum);
     const midpointSweeps = validSweeps.filter((sweep) => (sweep.start.x - midpoint) * (sweep.end.x - midpoint) <= 0);
-    const broadSweeps = validSweeps.filter((sweep) => sweep.amplitude >= bounds.w * .55);
     const dense = samples.length >= 10
       && bounds.w >= 24
-      && bounds.h >= 4
-      && bounds.w >= bounds.h * 1.15
+      && bounds.w <= 560
+      && bounds.w >= bounds.h * 1.5
       && horizontalTravel >= verticalTravel * 3
-      && sweeps.length >= 4
-      && validSweeps.length >= 3
-      && midpointSweeps.length >= 3
-      && broadSweeps.length >= 2
-      && lengthRatio >= 2.45;
-    const intersections = pathSelfIntersections(samples);
-    const revisit = pathRevisitProfile(samples, clamp(diagonal / 7, 12, 24));
+      && midpointSweeps.length >= 4
+      && lengthRatio >= 3.5;
     return {
       metrics,
       diagonal,
-      intersections,
-      revisits: revisit.revisits,
       dense,
       local: dense && Math.max(bounds.w, bounds.h) <= 180,
-      mode: 'latin-scratch'
+      sweeps: midpointSweeps,
+      mode: 'repeated-scratch'
     };
   }
 
   function scribbleGestureProfile(points, language = currentLanguage()) {
-    if (LATIN_SCRATCH_LANGUAGES.has(language)) return latinScratchGestureProfile(points);
-    return { ...mixedScribbleGestureProfile(points), mode: 'mixed-scribble' };
+    // UI language must never make the same handwriting destructive.
+    return scratchGestureProfile(points);
   }
 
   function pointNearPath(point, path, radius) {
@@ -3492,23 +3456,24 @@
   }
 
   function pathNearPath(a, b, radius) {
-    return a?.some((point) => pointNearPath(point, b, radius)) || b?.some((point) => pointNearPath(point, a, radius));
+    if (a?.some((point) => pointNearPath(point, b, radius)) || b?.some((point) => pointNearPath(point, a, radius))) return true;
+    for (let i = 1; i < (a?.length || 0); i++) {
+      for (let j = 1; j < (b?.length || 0); j++) {
+        if (segmentsCross(a[i - 1], a[i], b[j - 1], b[j])) return true;
+      }
+    }
+    return false;
   }
 
-  function scribbleEraseHitRadius(pageIndex, gesture) {
-    const screenRadius = gesture.local ? 6 : 7.5;
-    return clamp(screenToPageDistance(pageIndex, screenRadius), 2.2, 9);
+  function scribbleEraseHitRadius(pageIndex) {
+    return screenToPageDistance(pageIndex, 2);
   }
 
   function objectIntersectsScribble(object, points, expanded, hitRadius, pageIndex = state.currentPageIndex) {
     const bounds = computeBounds(object);
     const overlapsBox = bounds.x < expanded.x + expanded.w && bounds.x + bounds.w > expanded.x && bounds.y < expanded.y + expanded.h && bounds.y + bounds.h > expanded.y;
     if (!overlapsBox) return false;
-    if (object.type === 'stroke') {
-      return pathNearPath(object.points || [], points, hitRadius + objectPageWidth(object, pageIndex) * .28);
-    }
-    if (object.type === 'shape') return points.some((point) => shapeIntersectsPoint(object, point, hitRadius, pageIndex));
-    return points.some((point) => point.x >= bounds.x - hitRadius && point.x <= bounds.x + bounds.w + hitRadius && point.y >= bounds.y - hitRadius && point.y <= bounds.y + bounds.h + hitRadius);
+    return pathNearPath(object.points || [], points, hitRadius + objectPageWidth(object, pageIndex) * .28);
   }
 
   function maybeScribbleErase(pageIndex, points, screenPoints = points) {
@@ -3518,15 +3483,20 @@
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return false;
     const metrics = strokeMetrics(points);
-    const hitRadius = scribbleEraseHitRadius(pageIndex, gesture);
+    const hitRadius = scribbleEraseHitRadius(pageIndex);
     const margin = hitRadius + Math.max(2, screenToPageDistance(pageIndex, 3));
     const expanded = { x: metrics.bounds.x - margin, y: metrics.bounds.y - margin, w: metrics.bounds.w + margin * 2, h: metrics.bounds.h + margin * 2 };
-    const ids = page.objects.filter((object) => objectIntersectsScribble(object, points, expanded, hitRadius, pageIndex)).map((object) => object.id);
-    if (!ids.length) return false;
+    const passes = gesture.sweeps.map((sweep) => points.slice(sweep.startIndex, sweep.endIndex + 1));
+    const ids = new Set(page.objects.filter((object) => {
+      if (object.locked || object.type !== 'stroke' || object.brush === 'highlighter') return false;
+      let hits = 0;
+      return passes.some((pass) => objectIntersectsScribble(object, pass, expanded, hitRadius, pageIndex) && ++hits >= 3);
+    }).map((object) => object.id));
+    if (!ids.size) return false;
     checkpoint('scribble-erase');
-    page.objects = page.objects.filter((object) => !ids.includes(object.id));
+    page.objects = page.objects.filter((object) => !ids.has(object.id));
     state.selection = null;
-    toast(`${ids.length}개 항목을 지웠습니다.`);
+    toast(`${ids.size}개 항목을 지웠습니다.`);
     return true;
   }
 
@@ -3914,6 +3884,12 @@
   function switchStrokeSessionToEraser(session, point) {
     if (!session || session.kind !== 'stroke') return null;
     if (session.holdTimer) clearTimeout(session.holdTimer);
+    // A button press ends the ink segment; it must not discard earlier writing.
+    if (session.object.points.length > 1) {
+      checkpoint('draw-stroke');
+      currentDocument().pages[session.pageIndex].objects.push(session.object);
+      persistCurrent();
+    }
     checkpoint('erase');
     const radius = screenToolWidthToPage(session.pageIndex, state.eraserRadius);
     const nextSession = {
@@ -3931,7 +3907,11 @@
   }
 
   function applyStylusButtonEraser(detail = {}) {
-    if (!state.settings.sPenGestures) return false;
+    if (!state.settings.sPenGestures || state.readOnly) return false;
+    if (!state.stylusButtonRestoreTool && state.tool !== 'eraser') {
+      state.stylusButtonRestoreTool = state.tool;
+      setTool('eraser');
+    }
     const session = state.drawSession;
     if (!session || !['stroke', 'eraser'].includes(session.kind)) return false;
     const canvas = $(`.page-canvas[data-page-index="${session.pageIndex}"]`);
@@ -3962,7 +3942,81 @@
     return true;
   }
 
+  function releaseStylusButtonEraser() {
+    const restoreTool = state.stylusButtonRestoreTool;
+    state.stylusButtonRestoreTool = null;
+    if (restoreTool && state.tool === 'eraser') setTool(restoreTool);
+    const session = state.drawSession;
+    if (!session || session.kind !== 'eraser' || !session.fromStylusButton) return;
+    if (session.changed) persistCurrent();
+    const pointer = state.activePointers.get(session.pointerId);
+    state.drawSession = null;
+    if (pointer && ['pen', 'highlighter'].includes(state.tool)) {
+      const canvas = $(`.page-canvas[data-page-index="${session.pageIndex}"]`);
+      const point = canvas ? eventPoint({ ...pointer, pressure: .55 }, canvas) : session.point;
+      startStrokeSession(session.pageIndex, session.pointerId, point, eventScreenPoint(pointer), state.tool);
+    }
+    scheduleRenderPage(session.pageIndex);
+  }
+
+  function startStrokeSession(pageIndex, pointerId, point, screen, tool) {
+    const brush = tool === 'highlighter' ? 'highlighter' : state.brush;
+    const first = state.ruler.visible ? constrainToRuler(point) : point;
+    const displayWidth = brush === 'highlighter' ? state.highlighterWidth : state.width;
+    state.drawSession = {
+      kind: 'stroke', pageIndex, startedAt: performance.now(), lastMovedAt: performance.now(), pointerId,
+      screenPoints: [screen], holdScreenPoint: screen,
+      object: { id: uid('stroke'), type: 'stroke', brush, color: brush === 'highlighter' ? state.highlighterColor : state.color, width: toolStrokeWidthToPage(pageIndex, displayWidth), screenWidth: displayWidth, opacity: brush === 'highlighter' ? .3 : 1, createdAt: now(), points: [first] }
+    };
+    scheduleLiveShapeHold(state.drawSession);
+  }
+
+  // Android continues reporting contact coordinates when Chromium cancels or
+  // suppresses PointerEvents for a held barrel button. Use one input stream for
+  // the whole pen contact, including press/release transitions and ordinary ink.
+  function handleNativeStylusContact(detail) {
+    if (typeof detail.contact !== 'boolean') return;
+    state.nativeStylusInputEnabled = true;
+    const action = Number(detail.action);
+    let contact = state.nativeStylusContact;
+    const ending = !detail.contact || action === 1 || action === 3 || action === 10;
+    if (!contact && (ending || state.view !== 'editor' || !$('#modalBackdrop').hidden)) return;
+    const x = Number(detail.x), y = Number(detail.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (!contact) {
+      if (action !== 0 && action !== 5) return;
+      const hit = document.elementFromPoint(x, y);
+      const canvas = hit?.closest?.('.page-canvas') || hit?.closest?.('.page-wrap')?.querySelector('.page-canvas');
+      if (!canvas) return; // Toolbar taps continue through the WebView normally.
+      const rect = canvas.getBoundingClientRect();
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return;
+      contact = { canvas, pointerId: 100000 + Number(detail.pointerId || 0) };
+      state.nativeStylusContact = contact;
+    }
+    const type = ending ? (action === 3 || action === 10 ? 'pointercancel' : 'pointerup')
+      : state.activePointers.has(contact.pointerId) ? 'pointermove' : 'pointerdown';
+    const event = {
+      type, target: contact.canvas, pointerId: contact.pointerId, pointerType: 'pen',
+      inkforgeNative: true, clientX: x, clientY: y,
+      buttons: ending ? 0 : 1 | (detail.barrelButton ? 2 : 0),
+      button: type === 'pointermove' ? -1 : 0,
+      pressure: ending ? 0 : Number(detail.pressure || .55),
+      timeStamp: performance.now(), preventDefault() {}
+    };
+    if (type === 'pointerdown') handlePointerDown(event);
+    else if (type === 'pointermove') handlePointerMove(event);
+    else if (type === 'pointercancel') handlePointerCancel(event);
+    else handlePointerUp(event);
+    if (ending) state.nativeStylusContact = null;
+  }
+
+  function isDuplicateNativePointer(event) {
+    return state.nativeStylusInputEnabled && !event.inkforgeNative &&
+      isStylusPointer(effectivePointerType(event));
+  }
+
   function handlePointerDown(event) {
+    if (isDuplicateNativePointer(event)) { event.preventDefault(); return; }
     const canvas = event.target.closest?.('.page-canvas');
     if (!canvas) return;
     event.preventDefault();
@@ -4000,7 +4054,11 @@
     }
 
     const point = eventPoint(event, canvas);
-    const effectiveTool = isStylusEraser(event) ? 'eraser' : (state.readOnly ? 'hand' : state.tool);
+    if (isStylusPointer(pointerType)) {
+      if (isStylusEraser(event)) applyStylusButtonEraser();
+      else releaseStylusButtonEraser();
+    }
+    const effectiveTool = state.readOnly ? 'hand' : isStylusEraser(event) ? 'eraser' : state.tool;
     if (shouldBlockNonStylusCanvasInput(pointerType, effectiveTool)) return;
     const page = currentDocument()?.pages?.[pageIndex];
     if (!page) return;
@@ -4036,21 +4094,11 @@
       }
     }
     if (effectiveTool === 'pen' || effectiveTool === 'highlighter') {
-      const brush = effectiveTool === 'highlighter' ? 'highlighter' : state.brush;
-      const first = state.ruler.visible ? constrainToRuler(point) : point;
-      const screen = eventScreenPoint(event);
-      const displayWidth = brush === 'highlighter' ? state.highlighterWidth : state.width;
-      const pageWidth = toolStrokeWidthToPage(pageIndex, displayWidth);
-      state.drawSession = {
-        kind: 'stroke', pageIndex, startedAt: performance.now(), lastMovedAt: performance.now(), pointerId: event.pointerId,
-        screenPoints: [screen], holdScreenPoint: screen,
-        object: { id: uid('stroke'), type: 'stroke', brush, color: brush === 'highlighter' ? state.highlighterColor : state.color, width: pageWidth, screenWidth: displayWidth, opacity: brush === 'highlighter' ? .3 : 1, createdAt: now(), points: [first] }
-      };
-      scheduleLiveShapeHold(state.drawSession);
+      startStrokeSession(pageIndex, event.pointerId, point, eventScreenPoint(event), effectiveTool);
     } else if (effectiveTool === 'eraser') {
       const radius = screenToolWidthToPage(pageIndex, state.eraserRadius);
       checkpoint('erase');
-      state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, point, radius, changed: eraseAt(pageIndex, point, radius) };
+      state.drawSession = { kind: 'eraser', pageIndex, pointerId: event.pointerId, point, radius, fromStylusButton: !!state.stylusButtonRestoreTool, changed: eraseAt(pageIndex, point, radius) };
       renderPageCanvas(pageIndex);
     } else if (effectiveTool === 'lasso') {
       state.selection = null;
@@ -4080,6 +4128,7 @@
   }
 
   function handlePointerMove(event) {
+    if (isDuplicateNativePointer(event)) { event.preventDefault(); return; }
     const canvas = event.target.closest?.('.page-canvas') || $(`.page-canvas[data-page-index="${state.drawSession?.pageIndex}"]`);
     if (!canvas) return;
     event.preventDefault();
@@ -4087,6 +4136,10 @@
     const pointer = state.activePointers.get(event.pointerId);
     if (pointer) { pointer.clientX = event.clientX; pointer.clientY = event.clientY; pointer.x = event.clientX; pointer.y = event.clientY; }
     const pointerType = pointer?.pointerType || effectivePointerType(event);
+    if (isStylusPointer(pointerType)) {
+      if (isStylusEraser(event)) applyStylusButtonEraser();
+      else releaseStylusButtonEraser();
+    }
     if (pointerType === 'touch' && state.touchGesture) { updateTouchGesture(event); if (state.settings.stylusOnly || touchPointers().length > 1 || !state.drawSession) return; }
     const session = state.drawSession;
     if (!session || session.pointerId !== event.pointerId) return;
@@ -4161,6 +4214,7 @@
   }
 
   function handlePointerUp(event) {
+    if (isDuplicateNativePointer(event)) { event.preventDefault(); return; }
     const canvas = event.target.closest?.('.page-canvas') || $(`.page-canvas[data-page-index="${state.drawSession?.pageIndex}"]`);
     const session = state.drawSession;
     const pointerType = state.activePointers.get(event.pointerId)?.pointerType || effectivePointerType(event);
@@ -4178,7 +4232,7 @@
       const screenPoints = session.screenPoints || points;
       const duration = performance.now() - session.startedAt;
       const holdDuration = performance.now() - (session.lastMovedAt || session.startedAt);
-      const allowScribbleErase = holdDuration < Math.max(260, SHAPE_HOLD_MS * .65);
+      const allowScribbleErase = session.object.brush !== 'highlighter' && holdDuration < Math.max(260, SHAPE_HOLD_MS * .65);
       const scribbleErased = allowScribbleErase && maybeScribbleErase(session.pageIndex, points, screenPoints);
       const shape = !scribbleErased && session.object.brush !== 'highlighter' ? maybeShapeFromStroke(points, duration, holdDuration, screenPoints) : null;
       if (points.length > 1 && !scribbleErased) {
@@ -4217,21 +4271,21 @@
     renderPageCanvas(session.pageIndex);
     renderSidebar();
     updateObjectMenu();
+    if (isStylusPointer(pointerType) && !isStylusEraser(event)) releaseStylusButtonEraser();
   }
 
   function handlePointerCancel(event) {
+    if (isDuplicateNativePointer(event)) return;
     state.activePointers.delete(event.pointerId);
     if (state.drawSession?.pointerId === event.pointerId) {
       const pageIndex = state.drawSession.pageIndex;
       if (state.drawSession.holdTimer) clearTimeout(state.drawSession.holdTimer);
+      if (state.drawSession.kind === 'eraser' && state.drawSession.changed) persistCurrent();
       state.drawSession = null;
       renderPageCanvas(pageIndex);
     }
+    releaseStylusButtonEraser();
     finishTouchGesture();
-  }
-
-  function handleDoubleClick(event) {
-    if (event.target.closest('.page-canvas')) fitPage();
   }
 
   function updateObjectMenu() {
@@ -4587,35 +4641,89 @@
     image.src = src;
   }
 
-  function downloadBlob(blob, filename) {
+  async function downloadBlob(blob, filename) {
+    if (window.InkForgeNative) return window.__inkforgeNativeBridge.saveBlob(blob, filename);
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url; anchor.download = filename; anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return { saved: true };
   }
 
   function safeFilename(value) {
     return String(value || 'bad note').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 100) || 'bad note';
   }
 
-  function exportIfnote() {
-    const doc = currentDocument();
-    if (!doc) return;
-    const payload = { ...deepClone(doc), exportedAt: now(), appVersion: VERSION };
-    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `${safeFilename(doc.title)}.ifnote`);
-    toast('편집 가능한 노트 파일을 내보냈습니다.');
+  async function runFileExport(createBlob, filename) {
+    if (state.exportBusy) { toast('파일 내보내기가 진행 중입니다.'); return false; }
+    state.exportBusy = true;
+    toast('내보낼 파일을 준비하고 있습니다.');
+    try {
+      const blob = await createBlob();
+      const result = await downloadBlob(blob, filename);
+      toast(result.cancelled ? '파일 저장을 취소했습니다.' : '파일을 저장했습니다.');
+      return !!result.saved;
+    } catch (error) {
+      toast(`내보내기 실패: ${error.message || error}`);
+      return false;
+    } finally { state.exportBusy = false; }
   }
 
-  function exportPng() {
+  async function exportIfnote(doc = currentDocument()) {
+    if (!doc) return false;
+    const snapshot = deepClone(doc);
+    return runFileExport(async () => {
+      const payload = await window.InkForgeFileExport.packDocument(snapshot, storage, VERSION);
+      return new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    }, `${safeFilename(doc.title)}.ifnote`);
+  }
+
+  async function renderExportPage(page, pageIndex = 0) {
+    await document.fonts?.ready;
+    let background = loadPageBackground(page, pageIndex);
+    if (!background && page.backgroundAssetId) {
+      await state.assetLoadQueue.get(page.backgroundAssetId);
+      background = loadPageBackground(page, pageIndex);
+      if (!background) throw new Error('PDF 배경 원본을 읽지 못했습니다.');
+    }
+    const objectImages = new Map((page.objects || []).filter(object => object.type === 'image' && !object.hidden)
+      .map(object => [object.src, loadImageObject(object, pageIndex)]));
+    const images = [background, ...objectImages.values()].filter(Boolean);
+    await Promise.all(images.map(image => image.decode()));
+    const canvas = document.createElement('canvas');
+    canvas.width = 1800; canvas.height = Math.round(1800 * PAGE_HEIGHT / PAGE_WIDTH);
+    const ctx = canvas.getContext('2d', { alpha: false });
+    ctx.__inkforgeTextBaseCssWidth = TEXT_REFERENCE_PAGE_CSS_WIDTH;
+    ctx.__inkforgePageCssWidth = TEXT_REFERENCE_PAGE_CSS_WIDTH;
+    ctx.__inkforgeBasePageCssWidth = TEXT_REFERENCE_PAGE_CSS_WIDTH;
+    ctx.setTransform(canvas.width / PAGE_WIDTH, 0, 0, canvas.height / PAGE_HEIGHT, 0, 0);
+    drawTemplate(ctx, page.template || 'blank', PAGE_WIDTH, PAGE_HEIGHT);
+    if (background) ctx.drawImage(background, 0, 0, PAGE_WIDTH, PAGE_HEIGHT);
+    for (const object of page.objects || []) {
+      // A page can contain more images than the interactive viewport cache limit.
+      if (objectImages.has(object.src)) state.imageCache.set(object.src, objectImages.get(object.src));
+      renderObject(ctx, object, pageIndex);
+    }
+    trimImageCache();
+    return canvas;
+  }
+
+  async function exportPdf(doc = currentDocument()) {
+    if (!doc) return false;
+    const snapshot = deepClone(doc);
+    return runFileExport(() => window.InkForgeFileExport.buildPdf(snapshot, renderExportPage, (page, total) => {
+      if (page === 1 || page % 10 === 0) toast(`PDF 생성 중: ${page} / ${total}페이지`);
+    }), `${safeFilename(doc.title)}.pdf`);
+  }
+
+  async function exportPng() {
     const doc = currentDocument();
     const page = currentPage();
     if (!doc || !page) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = PAGE_WIDTH; canvas.height = PAGE_HEIGHT;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    renderPageBackground(ctx, page, state.currentPageIndex);
-    page.objects.forEach((object) => renderObject(ctx, object, state.currentPageIndex));
-    canvas.toBlob((blob) => blob && downloadBlob(blob, `${safeFilename(doc.title)}-${state.currentPageIndex + 1}.png`), 'image/png');
+    return runFileExport(async () => {
+      const canvas = await renderExportPage(deepClone(page), state.currentPageIndex);
+      return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PNG 생성 실패')), 'image/png'));
+    }, `${safeFilename(doc.title)}-${state.currentPageIndex + 1}.png`);
   }
 
   function xmlEscape(value) {
@@ -4717,7 +4825,7 @@
     return { xfdf, annotationCount: annotations.length, pageCount: doc.pages?.length || 0, sourceName };
   }
 
-  function exportPdfAnnotations() {
+  async function exportPdfAnnotations() {
     const doc = currentDocument();
     if (!doc) return;
     const result = buildPdfAnnotationsXfdf(doc);
@@ -4725,8 +4833,7 @@
       toast('내보낼 주석이 없습니다.');
       return;
     }
-    downloadBlob(new Blob([result.xfdf], { type: 'application/vnd.adobe.xfdf' }), `${safeFilename(doc.title)}-pdf-annotations.xfdf`);
-    toast(`PDF 주석 ${result.annotationCount}개를 내보냈습니다.`);
+    return runFileExport(() => new Blob([result.xfdf], { type: 'application/vnd.adobe.xfdf' }), `${safeFilename(doc.title)}-pdf-annotations.xfdf`);
   }
 
   async function importIfnote(file) {
@@ -4752,7 +4859,8 @@
   async function shareDocument() {
     const doc = currentDocument();
     if (!doc) return;
-    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const payload = await window.InkForgeFileExport.packDocument(doc, storage, VERSION);
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
     const file = new File([blob], `${safeFilename(doc.title)}.ifnote`, { type: 'application/json' });
     if (navigator.share && navigator.canShare?.({ files: [file] })) {
       try { await navigator.share({ title: doc.title, text: 'bad note 노트', files: [file] }); }
@@ -4908,6 +5016,7 @@
     }
     showMenu(doc.title, '문서 메뉴', [
       { action: 'open-document-menu', attrs: `data-doc-id="${id}"`, icon: 'notebook', title: '열기', description: `${doc.pages.length}페이지` },
+      { action: 'export-document-menu', attrs: `data-doc-id="${id}"`, icon: 'export', title: '파일 내보내기', description: '노트 파일 또는 PDF로 저장합니다.' },
       { action: 'rename-document', attrs: `data-doc-id="${id}"`, icon: 'text', title: '이름 변경' },
       { action: 'toggle-favorite-menu', attrs: `data-doc-id="${id}"`, icon: 'star', title: doc.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가' },
       { action: 'duplicate-document', attrs: `data-doc-id="${id}"`, icon: 'duplicate', title: '복제' },
@@ -4955,6 +5064,7 @@
     const doc = currentDocument();
     if (!doc) return;
     showMenu('문서 옵션', doc.title, [
+      { action: 'share', icon: 'export', title: '파일 내보내기', description: '노트 파일 또는 PDF로 저장합니다.' },
       { action: 'document-search', icon: 'search', title: '문서 검색', description: '입력한 텍스트, 수식, 제목을 찾습니다.' },
       { action: 'toggle-current-favorite', icon: 'star', title: doc.favorite ? '파일 즐겨찾기 해제' : '파일 즐겨찾기', description: '라이브러리 즐겨찾기와 목록 상단에 고정합니다.' },
       { action: 'go-page-number-menu', icon: 'arrow', title: '페이지 번호로 이동', description: '페이지 창에서 원하는 페이지 번호를 입력합니다.' },
@@ -4968,14 +5078,16 @@
     ]);
   }
 
-  function openShareMenu() {
+  function openShareMenu(docId = currentDocument()?.id) {
     showMenu('공유 및 내보내기', 'Export', [
+      { action: 'export-ifnote', icon: 'export', title: '노트 파일 (.ifnote)', description: '필기·이미지·PDF 배경·녹음을 보존합니다. 다시 가져와 편집할 수 있습니다.' },
+      { action: 'export-pdf', icon: 'page-plus', title: 'PDF 파일 (.pdf)', description: '모든 페이지를 필기와 배경이 포함된 PDF로 저장합니다.' },
+      ...(state.view === 'editor' ? [
       { action: 'share-native', icon: 'share', title: '기기 공유', description: '지원되는 앱으로 편집 가능한 노트를 공유합니다.' },
-      { action: 'export-ifnote', icon: 'export', title: '편집 가능한 .ifnote', description: '모든 획과 페이지를 보존합니다.' },
       { action: 'export-pdf-annotations', icon: 'bookmark', title: 'PDF 주석 내보내기', description: '필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다.' },
-      { action: 'export-png', icon: 'image', title: '현재 페이지 PNG' },
-      { action: 'print-pdf', icon: 'page-plus', title: 'PDF로 인쇄', description: '시스템 인쇄 화면에서 PDF로 저장합니다.' }
-    ]);
+      { action: 'export-png', icon: 'image', title: '현재 페이지 PNG' }
+      ] : [])
+    ].map(item => ({ ...item, attrs: `data-doc-id="${escapeHtml(docId || '')}"` })));
   }
 
   function showGestureGuide() {
@@ -5090,6 +5202,7 @@
       case 'add-page': addPage(); break;
       case 'insert-page-after': addPage(Number(target.dataset.pageIndex)); break;
       case 'share': openShareMenu(); break;
+      case 'export-document-menu': openShareMenu(target.dataset.docId); break;
       case 'editor-more': openEditorMore(); break;
       case 'sticker-menu': openStickerMenu(); break;
       case 'select-sticker': state.sticker = target.dataset.sticker || state.sticker; closeModal(); insertSticker(state.sticker); break;
@@ -5169,10 +5282,11 @@
       case 'import-note': closeModal(); $('#importInput').click(); break;
       case 'import-pdf': closeModal(); window.__inkforgePdf?.openPicker(); break;
       case 'share-native': closeModal(); await shareDocument(); break;
-      case 'export-ifnote': closeModal(); exportIfnote(); break;
+      case 'export-ifnote': closeModal(); await exportIfnote(state.documents.find(doc => doc.id === target.dataset.docId) || currentDocument()); break;
+      case 'export-pdf': closeModal(); await exportPdf(state.documents.find(doc => doc.id === target.dataset.docId) || currentDocument()); break;
       case 'export-pdf-annotations': closeModal(); exportPdfAnnotations(); break;
       case 'export-png': closeModal(); exportPng(); break;
-      case 'print-pdf': closeModal(); window.print(); break;
+      case 'print-pdf': closeModal(); await exportPdf(); break;
       case 'insert-text-object': insertTextObject(); break;
       case 'calculate-math': calculateMath(); break;
       case 'insert-math': insertMathObject(); break;
@@ -5343,7 +5457,6 @@
     $('#pageStack').addEventListener('pointerup', handlePointerUp, { passive: false });
     $('#pageStack').addEventListener('pointercancel', handlePointerCancel, { passive: false });
     $('#pageStack').addEventListener('click', handleCanvasTap);
-    $('#pageStack').addEventListener('dblclick', handleDoubleClick);
     $('#editorViewport').addEventListener('scroll', handleEditorScroll, { passive: true });
     $('#editorViewport').addEventListener('wheel', handleWheel, { passive: false });
     $('#globalSearchInput').addEventListener('input', (event) => { state.globalQuery = event.target.value; renderLibrary(); });
@@ -5372,6 +5485,14 @@
       renderPenPreview();
     });
     window.addEventListener('resize', () => { if (state.view === 'editor') { updatePageSizing(); updateObjectMenu(); } });
+    window.addEventListener('blur', () => {
+      const session = state.drawSession;
+      if (session) handlePointerCancel({ pointerId: session.pointerId, inkforgeNative: true });
+      state.nativeStylusContact = null;
+      state.activePointers.clear();
+      state.touchGesture = null;
+      releaseStylusButtonEraser();
+    });
     window.addEventListener('beforeunload', () => {
       const doc = currentDocument();
       if (!doc) return;
@@ -5447,6 +5568,8 @@
       setTool,
       setZoom,
       exportIfnote,
+      exportPdf,
+      renderExportPage,
       exportPdfAnnotations,
       buildPdfAnnotationsXfdf,
       renderPageCanvas,
@@ -5462,6 +5585,8 @@
       closeDocumentSearch,
       suppressDocumentSearch,
       applyStylusButtonEraser,
+      releaseStylusButtonEraser,
+      handleNativeStylusContact,
       applyHudTextOpacity,
       screenToolWidthToPage,
       toolStrokeWidthToPage,
@@ -5485,7 +5610,7 @@
       blankPage,
       maybeShapeFromStroke,
       scribbleGestureProfile,
-      latinScratchGestureProfile,
+      scratchGestureProfile,
       renderActiveToolMenu,
       applyLanguage,
       refreshLocalizedUi,

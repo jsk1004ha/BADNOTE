@@ -1,87 +1,79 @@
-# bad note 3.3.28
+# bad note 4.0.1 — Kotlin native
 
-S Pen과 대용량 PDF를 전제로 만든 Android 필기 노트 앱입니다. 필기, PDF 주석, 손글씨 OCR, 손글씨 수식 계산, 도형 변환, 폴더 관리, 파일 즐겨찾기, 자동 업데이트를 한 앱 안에서 처리합니다.
+갤럭시 탭·S Pen용 Android 필기 앱입니다. 라이브러리, 필기 편집기, 저장, PDF, 공유, OCR, 녹음과 설정을 Kotlin으로 전면 교체했습니다. 앱의 편집 화면에서 JavaScript나 WebView를 사용하지 않습니다. WebView는 기존 설치판의 IndexedDB를 읽는 일회성 이전에만 사용합니다.
 
-## 바로 설치
+## 설치와 데이터 이전
 
-GitHub Releases에서 기기에 맞는 APK를 받습니다.
+빌드 결과는 `build/apk/`에 생성됩니다.
 
-- `bad-note-Android-3.3.28-Update.apk`: 기존 `com.inkforge.note4` 설치판을 업데이트할 때 사용
-- `bad-note-Android-3.3.28-SideBySide.apk`: 기존 앱과 별도로 설치할 때 사용
+- `bad-note-Android-4.0.1-Update.apk`: `com.inkforge.note4` 업데이트
+- `bad-note-Android-4.0.1-SideBySide.apk`: `com.inkforge.note5` 업데이트 또는 병행 설치
 
-배포 서명키가 다른 기존 설치판 위에는 Android가 업데이트 설치를 거부할 수 있습니다. 그 경우 기존 앱에서 `.ifnote`로 백업한 뒤 병행 설치판을 사용하십시오. 자세한 절차는 `docs/INSTALL-KO.txt`에 있습니다.
+기존 앱과 동일한 패키지·서명으로 업데이트하면 첫 실행에 노트, PDF 배경, 이미지, 녹음, 폴더와 설정을 이전합니다. 이전은 문서별 트랜잭션으로 처리하고, 완료한 문서는 재시도 시 건너뜁니다. 기존 IndexedDB는 삭제하지 않습니다. 다른 패키지의 데이터는 Android 격리 때문에 자동으로 읽을 수 없으므로 `.ifnote` 파일을 가져와야 합니다.
 
-## 핵심 기능
+**4.0의 `.ifnote`는 ZIP 기반 버전 5입니다.** 원본 자산과 편집 가능한 페이지를 담습니다. 3.x의 JSON `.ifnote`도 가져올 수 있습니다. 4.0에서 내보낸 파일은 3.x에서 열 수 없으며, 4.0 데이터가 3.x 저장소로 역동기화되지는 않습니다. 업데이트 전 3.x 백업을 보관하십시오.
 
-- **필기 엔진**: 만년필, 볼펜, 젤펜, 브러시, 연필, 형광펜, 지우개, 올가미를 지원합니다.
-- **S Pen 대응**: 측면 버튼을 누르는 동안 지우개로 전환하고, 터치 중 버튼 입력과 손 잠금 상태에서 손가락 입력이 필기로 새는 문제를 줄입니다.
-- **PDF 작업**: PDF를 새 노트로 불러오고, 검색 텍스트를 색인하며, 필기·텍스트·도형 주석을 XFDF로 내보냅니다.
-- **OCR**: Android ML Kit Digital Ink 기반으로 한글·영문 필기 인식을 우선 사용하고, 화면에 머문 페이지를 유휴 상태에서 자동 색인합니다.
-- **수식 계산**: 손글씨 수식을 인식해 결과 객체를 페이지에 삽입합니다. 자동 계산은 기본값이 꺼져 있습니다.
-- **도형 변환**: 직선, 곡선, 원, 사각형, 삼각형, 오각형, 육각형을 필기 후 유지 동작으로 정리합니다.
-- **대용량 최적화**: 큰 PDF는 현재 화면 근처의 페이지만 마운트하고, 이미지 캐시와 캔버스 픽셀 예산을 제한합니다.
-- **정리 기능**: 중첩 폴더, 폴더 삭제, 파일 즐겨찾기, 마지막 페이지 복원, 2열 페이지 창과 페이지 번호 이동을 지원합니다.
-- **다국어 UI**: 설정에서 한국어, 영어, 일본어, 중국어, 포르투갈어 표시 언어와 HUD 텍스트 투명도를 선택할 수 있습니다.
+## 기능
 
-## 사용 흐름
+- Kotlin Canvas 필기: 필압·기울기·방향·historical samples, S Pen 버튼 지우개, 스타일러스 전용 입력, 손가락 팬·핀치 확대
+- 만년필·볼펜·젤펜·브러시·연필·파인라이너, 형광펜, 필압·색상·굵기·획 안정화·불투명도 설정
+- 획·정밀 지우개, 낙서 지우기, 올가미 이동·확대·축소·색 변경·복사·붙여넣기·잠금, 실행 취소·다시 실행
+- 텍스트·스티키 노트·이미지·도형·스티커·암기 가림 테이프·자·레이저 포인터
+- 연속/단일 페이지, 페이지 추가·복제·이동·삭제, 북마크·목차·문서 탭·최근 페이지 복원
+- 중첩 폴더, 즐겨찾기, 태그, 검색, 휴지통과 복원
+- 원본 PDF 보관 및 화면에 보이는 영역의 타일 렌더링, PDF 삽입, `.ifnote`/PDF/PNG/XFDF 내보내기
+- ML Kit 한글·영문 및 선택 언어 필기 OCR, 유휴 OCR 검색 색인, 이미지 OCR, 손글씨 수식과 기기 내 계산
+- 마이크 녹음·재생, 한국어·영어·일본어·중국어·포르투갈어 사전, 앱 업데이트 확인
 
-1. 앱을 열고 **신규** 또는 **PDF로 새 노트**를 선택합니다.
-2. 필기 도구를 고르고 페이지에 씁니다.
-3. 필요한 경우 문서 옵션에서 OCR, 수식 계산, PDF 주석 내보내기를 실행합니다.
-4. 자주 쓰는 문서는 별표로 즐겨찾기에 고정합니다.
-5. 설정에서 언어, 스타일러스 전용 필기, 낙서 지우기, 도형 변환, 자동 OCR을 조정합니다.
+## 대용량 내보내기와 공유
 
-## 빌드
+노트는 SQLite WAL에 문서 정보·페이지·객체를 분리해 저장하며, 대형 자산은 별도 파일입니다. `.ifnote` 내보내기는 페이지 단위 JSON과 자산을 `ZipOutputStream`에 64 KiB씩 기록합니다. 문서 전체 복제나 자산 base64 변환, 전체 결과 Blob 생성이 없습니다. PDF도 한 페이지씩 JPEG 임시 파일로 만든 뒤 최종 출력에 복사합니다.
 
-필요 조건:
+공유 파일을 디스크에 완성한 다음 Android `ACTION_SEND`와 FileProvider 읽기 권한으로 시스템 공유 창을 엽니다. Web Share API의 transient user activation에 의존하지 않습니다. 공유 파일은 수신 앱이 비동기로 읽을 수 있도록 유지하고, 7일이 지난 파일은 다음 내보내기 때 정리합니다.
 
-- Java 17
-- Android SDK 36
-- Gradle 8.14 이상
-- 릴리스 서명 설정: `android/local-signing.properties.example`을 복사해 작성
+## 빌드와 검증
 
-```bash
-python3 tools/build_apk.py --variant both
+Java 17 이상, Android SDK 36 / Build Tools 36.1.0이 필요합니다. Gradle 8.14.5 wrapper, AGP 8.13.2, Kotlin 2.3.0을 사용합니다.
+
+```powershell
+python tools/test_native.py
+python tools/build_apk.py --variant both
 ```
 
-웹 회귀 테스트:
+릴리스 빌드는 `android/local.properties`의 SDK 경로와 `android/local-signing.properties`의 서명 설정이 필요합니다. 예제 서명 파일을 참고하십시오. 실제 비밀 값은 저장소에 포함하지 않습니다.
 
-```bash
-python3 tools/test_web.py --web web
+에뮬레이터/테스트 기기를 명시해 네이티브 회귀 테스트를 실행할 수 있습니다. 테스트는 별도 `.debug` 패키지만 사용합니다.
+
+```powershell
+python tools/test_native.py --device emulator-5580 --adb "C:/Users/User/AppData/Local/Android/Sdk/platform-tools/adb.exe"
+python tools/verify_apk.py build/apk/bad-note-Android-4.0.1-Update.apk --build-tools "C:/Users/User/AppData/Local/Android/Sdk/build-tools/36.1.0"
 ```
 
-## 소스 구성
+테스트에는 96 MiB JVM에서의 100/300 MiB 자산 왕복·SHA-256 검증, 100 MiB legacy base64 가져오기, 실제 Android 저장소의 300 MiB 내보내기·가져오기, S Pen MotionEvent, 데이터 이전, 공유 URI가 포함됩니다. 물리 Galaxy/S Pen의 지연·압력 특성·펌웨어 동작은 별도 실기기 확인이 필요합니다.
 
-- `web/`: 노트 편집기, 라이브러리, 설정, PDF/OCR UI
-- `android/`: Android WebView, ML Kit, S Pen 입력, APK 업데이트 브리지
-- `tools/test_web.py`: Playwright 기반 회귀 테스트
-- `tools/build_apk.py`: Gradle 릴리스 빌드 도우미
-- `docs/`: 설치 안내, 기능 설명, 버전별 변경 내역
+## 소스
 
-## 검증 기준
+- `android/app/src/main/java/com/inkforge/notesstudio/*.kt`: 네이티브 앱 전체
+- `android/app/src/nativeAssets/migration.html`: 이전용 로컬 IndexedDB 리더
+- `android/app/src/nativeAssets/locales/`: 네이티브 UI 번역 사전
+- `android/app/src/test/`: 기하·계산·스트리밍 파일 테스트
+- `android/app/src/androidTest/`: Android 저장소·입력·이전 회귀 테스트
+- `web/` 및 기존 `assets/public/`: 3.x 참고 소스와 호환 회귀 자료. **4.0 APK에는 포함하지 않습니다.**
 
-릴리즈 전 다음 항목을 확인합니다.
+현재 범위와 호환 제약은 `docs/NATIVE-4.0-KO.md`에 정리했습니다.
 
-- 웹 회귀 테스트 통과
-- update / side-by-side APK 빌드 통과
-- APK zip CRC, 16KB zipalign, v1/v2/v3 signing 검증
-- APK 내부에 최신 `web/` 자산 포함
-- GitHub Releases에 버전 태그와 APK asset 업로드
+## 4.0.1 수정
 
-## 알려진 한계
+3.3.30 화면의 원본 벡터 아이콘, 어두운 라이브러리, 파란 편집 도구막대, 검은 도구 설정 막대, 페이지 사이드바와 각 설정 창을 네이티브 View로 재구성했습니다. 색상 조합기의 채도·명도 색상판과 색조 막대, 기존 용지 크기·격자 간격도 복원했습니다.
 
-- PDF 주석 내보내기는 XFDF 형식입니다. PDF 앱마다 XFDF 가져오기 지원 수준이 다를 수 있습니다.
-- Bluetooth Air Actions 같은 제조사 전용 S Pen 원격 기능은 일반 Android MotionEvent 범위 밖일 수 있습니다.
-- 복잡한 적분, 행렬, 연립방정식 전체를 푸는 서버형 HMER/CAS 파이프라인은 포함하지 않았습니다.
+낙서 지우기는 개별 입력점 사이의 이동량 대신 획의 주축과 왕복 구간으로 판정합니다. 촘촘한 S Pen historical samples, 수평·대각선·세로 왕복, 확대율 변화에서도 동일하게 처리하며 3회 이상 겹친 필기만 지웁니다. 잠긴 획, 숨긴 객체, 텍스트, 형광펜은 보존합니다.
 
-## 문서
-
-- 기능 안내: `docs/README-KO.md`
-- 설치 안내: `docs/INSTALL-KO.txt`
-- 최신 변경 내역: `docs/CHANGELOG-3.3.28-KO.md`
+```powershell
+python tools/test_native.py --ui-only --device emulator-5580 --adb "C:/Users/User/AppData/Local/Android/Sdk/platform-tools/adb.exe"
+```
 
 ## 기여자
 
 - 프로젝트 관리 및 개발: [jsk1004ha](https://github.com/jsk1004ha)
-- 포르투갈어(브라질) 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
-- Special thanks: [Photon616](https://github.com/Photon616) - 앱 아이콘 제작
+- 포르투갈어 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
+- 아이콘: [Photon616](https://github.com/Photon616)

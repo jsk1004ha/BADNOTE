@@ -21,6 +21,7 @@ def inline_document(web: pathlib.Path) -> tuple[str, str, str, str, str, str, st
         for filename in ("ko.js", "pt.js", "en.js", "ja.js", "zh.js")
     )
     app = (web / "app.js").read_text(encoding="utf-8")
+    app = (web / "file-export.js").read_text(encoding="utf-8") + "\n" + app
     recognition = (web / "recognition.js").read_text(encoding="utf-8")
     pdf_tools = (web / "pdf-tools.js").read_text(encoding="utf-8")
     upgrade = (web / "upgrade32.js").read_text(encoding="utf-8")
@@ -28,7 +29,7 @@ def inline_document(web: pathlib.Path) -> tuple[str, str, str, str, str, str, st
     html = re.sub(r'<link[^>]+rel="manifest"[^>]*>', '', html)
     html = re.sub(r'<link[^>]+rel="stylesheet"[^>]*>', f'<style>{css}</style>', html)
     html = re.sub(r'<script\s+src="locales/[^"]+\.js"></script>', '', html)
-    html = re.sub(r'<script\s+src="(?:app|recognition|pdf-tools|upgrade32|native-bridge)\.js"></script>', '', html)
+    html = re.sub(r'<script\s+src="(?:file-export|app|recognition|pdf-tools|upgrade32|native-bridge)\.js"></script>', '', html)
     return html, locales, app, recognition, pdf_tools, upgrade, native_bridge
 
 
@@ -159,19 +160,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const progressWidth = document.getElementById('nativeUpdateProgressFill')?.style.width;
             document.querySelectorAll('.modal').forEach(node => node.hidden = true);
             document.getElementById('modalBackdrop').hidden = true;
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.28');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.30');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             const first = bridge.showReleaseNotesOnce();
             const notesVisible = !document.getElementById('nativeUpdateSheet').hidden && document.getElementById('nativeUpdateSheet').dataset.status === 'release-notes';
             document.querySelector('[data-update-action="ack-notes"]').click();
             const second = bridge.showReleaseNotesOnce();
-            localStorage.removeItem('badnote.releaseNotes.seen.3.3.28');
+            localStorage.removeItem('badnote.releaseNotes.seen.3.3.30');
             localStorage.removeItem('badnote.releaseNotes.lastVersion');
             window.__inkforge.state.settings.language = 'en';
             window.__inkforge.refreshLocalizedUi();
             const englishFirst = bridge.showReleaseNotesOnce();
             const englishText = document.getElementById('nativeUpdateSheet')?.textContent || '';
-            const englishNotesVisible = englishFirst && englishText.includes('3.3.28 release notes') && englishText.includes('switches the active stroke to the eraser immediately');
+            const englishNotesVisible = englishFirst && englishText.includes('3.3.30 release notes') && englishText.includes('switches the active stroke to the eraser immediately');
             document.querySelector('[data-update-action="ack-notes"]').click();
             window.__inkforge.state.settings.language = 'ko';
             window.__inkforge.refreshLocalizedUi();
@@ -1123,7 +1124,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               clientY: point.y
             }));
             const path = Array.from({ length: 18 }, (_, index) => ({
-              x: center.x - 126 + index * 14,
+              x: center.x + (index % 2 ? -126 : 126),
               y: center.y + (index % 2 ? -18 : 18)
             }));
             send('pointerdown', path[0]);
@@ -1180,7 +1181,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             }));
             const center = clientFor(560, 520);
             const path = Array.from({ length: 10 }, (_, index) => ({
-              x: center.x - 16 + index * 3.6,
+              x: center.x + (index % 2 ? -16 : 16),
               y: center.y + (index % 2 ? -7 : 7)
             }));
             send('pointerdown', path[0]);
@@ -1270,7 +1271,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             };
             const c = clientFor(560, 590);
             const localPath = Array.from({ length: 10 }, (_, index) => ({
-              x: c.x - 16 + index * 3.6,
+              x: c.x + (index % 2 ? -16 : 16),
               y: c.y + (index % 2 ? -7 : 7)
             }));
             sendPath(8812, localPath);
@@ -1383,7 +1384,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               ptScratch: await runCase('pt_scratch', 'pt', horizontalScratch, true, 9012),
               enLoops: await runCase('en_loops', 'en', repeatedLoops, false, 9013),
               ptCursive: await runCase('pt_cursive', 'pt', cursiveProgression, false, 9014),
-              koLoops: await runCase('ko_loops', 'ko', repeatedLoops, true, 9015)
+              koLoops: await runCase('ko_loops', 'ko', repeatedLoops, false, 9015),
+              koScratch: await runCase('ko_scratch', 'ko', horizontalScratch, true, 9016)
             };
             notePage.objects = notePage.objects.filter((object) => baseIds.has(object.id));
             api.state.settings.language = originalLanguage;
@@ -1895,7 +1897,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results["dialogs"] = dialogs
     results["console_errors"] = errors
-    required_scalars = results.get("version") == "3.3.28" and results.get("upgrade_version") == "3.3.28" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
+    required_scalars = results.get("version") == "3.3.30" and results.get("upgrade_version") == "3.3.30" and results.get("math_engine") == 60 and results.get("editor_visible") is True and results.get("ocr_toolbar") is True and results.get("pdf_tools_ready") is True and results.get("auto_math_default_off") is True
     results["passed"] = required_scalars and not errors and not dialogs and all(value.get("passed", True) if isinstance(value, dict) else True for key, value in results.items() if key not in {"console_errors", "dialogs"})
     return results
 
