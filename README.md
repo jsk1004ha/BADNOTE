@@ -75,5 +75,6 @@ python tools/test_native.py --ui-only --device emulator-5580 --adb "C:/Users/Use
 ## 기여자
 
 - 프로젝트 관리 및 개발: [jsk1004ha](https://github.com/jsk1004ha)
+- 4.0.1 개발: [greencow](https://github.com/grncow)
 - 포르투갈어 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
 - 아이콘: [Photon616](https://github.com/Photon616)
