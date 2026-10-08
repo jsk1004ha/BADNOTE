@@ -20,7 +20,7 @@ class LegacyJsonReader(reader: Reader, private val dataSink: (String) -> Pair<St
         spaces()
         var pages = false
         while (next != '}'.code) {
-            val key = string(false)
+            val key = string(false, 4096)
             expect(':')
             if (key == "pages") {
                 require(!pages) { "페이지 목록이 중복되었습니다." }; pages = true
@@ -33,7 +33,7 @@ class LegacyJsonReader(reader: Reader, private val dataSink: (String) -> Pair<St
                     expect(',')
                 }
                 expect(']')
-            } else result.put(key, value())
+            } else result.put(key, value(isAssetField(key)))
             spaces(); if (next == '}'.code) break
             expect(',')
         }
@@ -41,15 +41,15 @@ class LegacyJsonReader(reader: Reader, private val dataSink: (String) -> Pair<St
         require(next == -1 && pages) { "지원하는 노트 파일이 아닙니다." }
         return result
     }
-    private fun value(): Any {
+    private fun value(assets: Boolean = false): Any {
         spaces(); require(++depth < 100) { "노트 구조가 너무 깊습니다." }
         try {
             return when (next) {
-                '"'.code -> string(true)
+                '"'.code -> string(assets)
                 '{'.code -> {
                     expect('{'); val obj = JSONObject(); spaces()
                     while (next != '}'.code) {
-                        val key = string(false); expect(':'); obj.put(key, value())
+                        val key = string(false, 4096); expect(':'); obj.put(key, value(isAssetField(key)))
                         spaces(); if (next == '}'.code) break; expect(',')
                     }
                     expect('}'); obj
@@ -90,7 +90,7 @@ class LegacyJsonReader(reader: Reader, private val dataSink: (String) -> Pair<St
             else -> error("문자열 이스케이프 오류")
         }
     }
-    private fun string(assets: Boolean): String {
+    private fun string(assets: Boolean, maxLength: Int = 8 * 1024 * 1024): String {
         expect('"'); val text = StringBuilder()
         while (true) {
             val c = character(); if (c < 0) return text.toString()
@@ -123,7 +123,7 @@ class LegacyJsonReader(reader: Reader, private val dataSink: (String) -> Pair<St
                 }
                 return reference
             }
-            require(text.length <= if (assets) 8 * 1024 * 1024 else 4096) { "노트 문자열이 너무 큽니다." }
+            require(text.length <= maxLength) { "노트 문자열이 너무 큽니다." }
         }
     }
 }

@@ -66,3 +66,12 @@ Android 테스트는 별도 `.debug` 패키지에서 네이티브 S Pen 이벤�
 - 업데이트용·병행 설치용 서명 APK의 릴리스 빌드, ZIP CRC, v1/v2/v3 서명, 16 KiB ZIP 정렬을 확인했습니다. 두 APK는 기존 3.3.30과 같은 인증서를 사용합니다.
 - 서명된 업데이트 APK를 API 35 에뮬레이터에 설치하고 실행 및 라이브러리·편집기 화면을 확인했습니다.
 - 결과: `build/classic-ui-final-build.log`, `build/classic-ui-checks.log`, `build/classic-ui-instrumentation.log`, `build/classic-ui-release.log`, `build/classic-ui-verify-update.json`, `build/classic-ui-verify-sidebyside.json`.
+
+## 기존 노트 호환성과 Android 안전 여백
+
+- 구형 테이프의 `x1/y1/x2/y2` 좌표와 이동·확대, 객체의 라디안 회전을 편집기와 PDF/PNG에 반영합니다. 회전된 이미지의 표시·선택과 회전된 필기의 부분 지우개도 같은 좌표를 사용합니다.
+- 제목·본문·태그의 `data:` 및 `asset:` 접두사는 일반 문자열로 유지합니다. 이미지·녹음·PDF의 실제 자산 필드만 스트리밍 변환하고 잘못된 실제 자산은 오류로 처리합니다.
+- 페이지 제목과 크기 30 이상 텍스트에서 기존 목차를 구성하며, 문서의 `settings.pageMode`를 전역 기본값보다 우선합니다. 보기 전환은 문서별로 저장합니다.
+- 루트 화면에서 상태바·홈 버튼/제스처 바·디스플레이 컷아웃·키보드의 안전 여백을 한 번 처리하고 위아래에 8dp를 추가합니다. 어두운 여백에는 밝은 시스템 아이콘을 사용합니다.
+- 좁은 화면의 상단 아이콘은 같은 세로 중심에 배치하고 펜 이름은 한 줄로 표시합니다. 도구 패널은 화면 폭에 맞춰 여러 줄로 나누며, 높이를 넘으면 스크롤합니다.
+- `CompatibilityRegressionTest`와 `CompatibilityChecks`는 일반 접두사 텍스트, 구형 좌표, 실제 회전 렌더링·PDF, 문서별 보기 저장, 반복 인셋·키보드·실제 시스템 바 경계, 도구 잘림을 검사합니다. `tools/test_native.py --device <serial>`로 실행하며 실제 Galaxy/S Pen 하드웨어 검증은 별도로 필요합니다.

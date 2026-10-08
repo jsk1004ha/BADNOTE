@@ -76,6 +76,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
             result.putString("stylus","PASS: hover, button eraser, same-contact pen restore, cancel, finger rejection, undo/redo, partial erase")
             await("partial erase persisted"){repository.page(page.id)?.objects?.size==2}
             scratchAndClassicUi(result)
+            CompatibilityChecks.run(this,activity,result)
             ui{activity.openDocument(doc.id)}
             await("original document ready"){ui{activity.inkView?.currentPage?.id==page.id}}
             if(uiOnly){result.putString("passed","true");finish(Activity.RESULT_OK,result);return}
@@ -172,11 +173,15 @@ class NativeSmokeInstrumentation:Instrumentation(){
         fun find(label:String):android.view.View?{fun walk(v:android.view.View):android.view.View?{if(v.contentDescription?.toString()==label)return v;if(v is ViewGroup)for(i in 0 until v.childCount)walk(v.getChildAt(i))?.let{return it};return null};return walk(activity.window.decorView)}
         fun click(label:String){ui{check(find(label)?.performClick()==true,"Control is reachable: $label")};waitForIdleSync()}
         ui{activity.inkView!!.changeObjects(activity.inkView!!.currentPage!!.objects.toList(),emptyList());activity.inkView!!.tool=InkCanvasView.Tool.PEN;activity.inkView!!.scribbleErase=true;activity.inkView!!.resetZoom()}
-        click("페이지 사이드바");click("목차");click("오디오");click("페이지");click("닫기")
+        if(activity.resources.configuration.screenWidthDp<=840){click("더 보기");click("페이지 번호로 이동")}
+        else click("페이지 사이드바")
+        click("목차");click("오디오");click("페이지");click("닫기")
         click("도구 더보기");click("형광펜");check(ui{activity.inkView!!.tool==InkCanvasView.Tool.HIGHLIGHTER},"Highlighter accessible from original overflow")
         click("펜");click("펜 설정");click("완료")
         click("색상 추가");click("닫기")
-        check(ui{val v=activity.inkView!!;kotlin.math.abs(v.screenPoint(0f,0f).x-(v.width-880*activity.resources.displayMetrics.density)/2)<3},"Original 880dp paper width")
+        check(ui{val v=activity.inkView!!;val density=activity.resources.displayMetrics.density
+            val margin=if(activity.resources.configuration.screenWidthDp<=840)9 else 52
+            kotlin.math.abs(v.screenPoint(0f,0f).x-kotlin.math.max((v.width-880*density)/2,margin*density))<3},"880dp paper width fits narrow viewports")
         ui{activity.showLibrary()};waitForIdleSync();click("설정");click("완료");click("신규");click("닫기")
         result.putString("classicUi","PASS: page/outline/audio sidebar; highlighter overflow; pen settings; color sheet; library/settings/new-note; original paper width")
     }
@@ -191,7 +196,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
             request.onupgradeneeded=()=>{for(const name of ['documents','assets','settings'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:name==='settings'?'key':'id'});};
             const db=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)});
             const tx=db.transaction(['documents','assets'],'readwrite');
-            tx.objectStore('documents').put({id:'$id',title:'이전 테스트',folderId:'root',version:4,lastPageId:'legacy_page',outline:[{pageId:'legacy_page'}],pages:[{id:'legacy_page',template:'grid',backgroundAssetId:'legacy_bg',objects:[{id:'legacy_ink',type:'stroke',brush:'fountain',width:4,points:[{x:10,y:20,p:.5},{x:50,y:60,p:.6}]},{id:'legacy_image',type:'image',src:'data:image/png;base64,$encoded',x:100,y:100,w:8,h:8}]}],audio:[{id:'old_audio',pageId:'legacy_page',src:'data:audio/mp4;base64,AQIDBA=='}]});
+            tx.objectStore('documents').put({id:'$id',title:'data: migration title',tags:['asset: allocation','data: tag'],folderId:'root',version:4,settings:{pageMode:'single'},lastPageId:'legacy_page',outline:[{pageId:'legacy_page'}],pages:[{id:'legacy_page',title:'Chapter',template:'grid',backgroundAssetId:'legacy_bg',objects:[{id:'legacy_ink',type:'stroke',brush:'fountain',width:4,points:[{x:10,y:20,p:.5},{x:50,y:60,p:.6}]},{id:'legacy_image',type:'image',src:'data:image/png;base64,$encoded',x:100,y:100,w:8,h:8},{id:'heading',type:'text',fontSize:30,text:'data: heading',x:20,y:90},{id:'old_tape',type:'tape',x1:420,y1:620,x2:770,y2:674}]}],audio:[{id:'old_audio',pageId:'legacy_page',src:'data:audio/mp4;base64,AQIDBA=='}]});
             const raw=Uint8Array.from(atob('$encoded'),c=>c.charCodeAt(0));tx.objectStore('assets').put({id:'legacy_bg',blob:new Blob([raw],{type:'image/png'})});
             await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});db.close();window.fixtureReady=true;
           })().catch(e=>window.fixtureError=String(e));
@@ -210,7 +215,11 @@ class NativeSmokeInstrumentation:Instrumentation(){
         }
         migrate()
         val imported=requireNotNull(repository.document(id));val pages=repository.pageIds(id);check(pages.size==1,"Legacy page count")
-        val page=requireNotNull(repository.page(pages.first()));check(page.objects.size==2,"Legacy ink and image retained")
+        val page=requireNotNull(repository.page(pages.first()));check(page.objects.size==4,"Legacy ink, image, heading and tape retained")
+        check(imported.title=="data: migration title"&&imported.data.array("tags").getString(0)=="asset: allocation","IndexedDB literal prefixes retained")
+        check(page.objects[2].getString("text")=="data: heading"&&!imported.continuous(true),"Legacy heading and document mode")
+        check(InkGeometry.bounds(page.objects[3])==InkBounds(420f,620f,770f,674f),"IndexedDB tape endpoints")
+        check(imported.outlineEntries(sequenceOf(page)).any{it.optString("title")=="data: heading"},"Computed legacy outline")
         check(imported.data.getString("lastPageId")==page.id&&imported.data.array("outline").getJSONObject(0).getString("pageId")==page.id&&imported.data.array("audio").getJSONObject(0).getString("pageId")==page.id,"IndexedDB page links remapped")
         val background=repository.asset(page.meta.getString("backgroundImage").removePrefix("asset:"));check(background.readBytes().contentEquals(bytes),"Legacy Blob background bytes")
         val audio=repository.asset(imported.data.array("audio").getJSONObject(0).getString("src").removePrefix("asset:"));check(audio.readBytes().contentEquals(byteArrayOf(1,2,3,4)),"Legacy base64 audio bytes")

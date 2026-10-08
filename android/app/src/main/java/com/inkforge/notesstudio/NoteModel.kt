@@ -11,6 +11,9 @@ fun JSONObject.array(key: String) = optJSONArray(key) ?: JSONArray()
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 fun json(vararg pairs: Pair<String, Any?>) = JSONObject().apply { pairs.forEach { put(it.first, it.second) } }
 
+/** Binary references belong to these schema fields, never arbitrary note text. */
+fun isAssetField(key: String) = key in setOf("src", "backgroundImage", "pdfSource", "dataUrl")
+
 /** Remap links when imported pages receive globally unique database IDs. */
 fun rewritePageReferences(value: Any?, pageIds: Map<String, String>) {
     when (value) {
@@ -29,6 +32,26 @@ data class DocumentInfo(val id: String, val data: JSONObject) {
     val folder get() = data.optString("folderId", "root")
     val favorite get() = data.optBoolean("favorite")
     val trashed get() = data.optBoolean("trashed")
+    fun continuous(default: Boolean) = when (data.optJSONObject("settings")?.optString("pageMode")) {
+        "single" -> false
+        "continuous" -> true
+        else -> default
+    }
+    fun outlineEntries(pages: Sequence<NotePage>): List<JSONObject> {
+        val entries = (data.optJSONArray("outlines") ?: data.array("outline")).objects().toMutableList()
+        pages.forEachIndexed { index, page ->
+            fun add(title: String, objectId: String = "") {
+                if (title.isBlank()) return
+                if (entries.any { it.optString("pageId") == page.id &&
+                        it.optString("title", it.optString("text")) == title }) return
+                entries += json("title" to title, "pageId" to page.id, "pageIndex" to index, "objectId" to objectId)
+            }
+            add(page.meta.optString("title"))
+            page.objects.filter { it.optString("type") == "text" && it.f("fontSize") >= 30f }
+                .forEach { add(it.optString("text").substringBefore('\n').take(60), it.optString("id")) }
+        }
+        return entries
+    }
 }
 
 data class NotePage(val id: String, val meta: JSONObject, val objects: MutableList<JSONObject>) {

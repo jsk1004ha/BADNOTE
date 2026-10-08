@@ -35,6 +35,25 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
     }
     fun draw(canvas: Canvas,obj: JSONObject) {
         if(obj.optBoolean("hidden")||obj.optString("type")=="ocrIndex")return
+        withRotation(canvas, obj) { drawUnrotated(canvas, obj) }
+    }
+    private fun withRotation(canvas: Canvas, obj: JSONObject, draw: () -> Unit) {
+        val saved = canvas.save()
+        try {
+            val b = InkGeometry.unrotatedBounds(obj)
+            canvas.rotate(Math.toDegrees(obj.f("rotation").toDouble()).toFloat(), (b.left+b.right)/2, (b.top+b.bottom)/2)
+            draw()
+        } finally { canvas.restoreToCount(saved) }
+    }
+    fun drawImage(canvas: Canvas, obj: JSONObject, bitmap: Bitmap) {
+        withRotation(canvas, obj) {
+            val b = InkGeometry.unrotatedBounds(obj)
+            paint.reset(); paint.isAntiAlias=true
+            paint.alpha=(obj.f("opacity",1f)*255).roundToInt().coerceIn(0,255)
+            canvas.drawBitmap(bitmap,null,RectF(b.left,b.top,b.right,b.bottom),paint)
+        }
+    }
+    private fun drawUnrotated(canvas: Canvas,obj: JSONObject) {
         paint.reset();paint.isAntiAlias=true;paint.color=color(obj.optString("color","#172033"));paint.alpha=(obj.f("opacity",1f)*255).toInt().coerceIn(0,255)
         val type=obj.optString("type")
         when(type) {
@@ -42,7 +61,7 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
             "shape" -> shape(canvas,obj)
             "image" -> image(obj.optString("src"))?.let{canvas.drawBitmap(it,null,RectF(obj.f("x"),obj.f("y"),obj.f("x")+obj.f("w"),obj.f("y")+obj.f("h")),paint)}
             "tape" -> {
-                val b=InkGeometry.bounds(obj);paint.color=color(obj.optString("color","#4c91dd"));paint.alpha=if(obj.optBoolean("revealed"))32 else 255
+                val b=InkGeometry.unrotatedBounds(obj);paint.color=color(obj.optString("color","#4c91dd"));paint.alpha=if(obj.optBoolean("revealed"))32 else 255
                 canvas.drawRoundRect(b.left,b.top,b.right,b.bottom,7f,7f,paint)
                 if(!obj.optBoolean("revealed")){paint.color=0x30ffffff;var x=b.left+8;while(x<b.right){canvas.drawRect(x,b.top+2,min(x+5,b.right),b.bottom-2,paint);x+=23}}
             }
