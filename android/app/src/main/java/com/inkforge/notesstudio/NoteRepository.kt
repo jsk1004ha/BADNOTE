@@ -241,22 +241,24 @@ class NoteRepository(context: Context) : SQLiteOpenHelper(context, "badnote-nati
         }
         fun collectAssets(value: Any?, into: MutableSet<String>) {
             when (value) {
-                is JSONObject -> value.keys().forEach { collectAssets(value.opt(it), into) }
+                is JSONObject -> value.keys().forEach { key ->
+                    val child = value.opt(key)
+                    if (isAssetField(key) && child is String && child.startsWith("asset:")) into += child.removePrefix("asset:")
+                    else if (child !is String) collectAssets(child, into)
+                }
                 is JSONArray -> (0 until value.length()).forEach { collectAssets(value.opt(it), into) }
-                is String -> if (value.startsWith("asset:")) into += value.removePrefix("asset:")
             }
         }
         fun rewriteAssets(value: Any?, map: Map<String, String>) {
             when (value) {
                 is JSONObject -> value.keys().asSequence().toList().forEach { key ->
                     val v = value.opt(key)
-                    if (v is String && v.startsWith("asset:")) value.put(key, "asset:" + requireNotNull(map[v.removePrefix("asset:")]) { "자산 참조가 누락되었습니다." })
+                    if (isAssetField(key) && v is String && v.startsWith("asset:")) value.put(key, "asset:" + requireNotNull(map[v.removePrefix("asset:")]) { "자산 참조가 누락되었습니다." })
                     else rewriteAssets(v, map)
                 }
                 is JSONArray -> (0 until value.length()).forEach { i ->
                     val v = value.opt(i)
-                    if (v is String && v.startsWith("asset:")) value.put(i, "asset:" + requireNotNull(map[v.removePrefix("asset:")]))
-                    else rewriteAssets(v, map)
+                    rewriteAssets(v, map)
                 }
             }
         }

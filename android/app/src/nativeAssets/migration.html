@@ -25,11 +25,11 @@
     }
     native.endAsset(); return ref;
   }
-  async function externalize(value) {
-    if (typeof value === 'string' && value.startsWith('data:')) return assetString(value);
+  async function externalize(value, key = '') {
+    if (['src', 'backgroundImage', 'pdfSource', 'dataUrl'].includes(key) && typeof value === 'string' && value.startsWith('data:')) return assetString(value);
     if (Array.isArray(value)) { const output = []; for (const item of value) output.push(await externalize(item)); return output; }
     if (value && typeof value === 'object') {
-      const output = {}; for (const key of Object.keys(value)) output[key] = await externalize(value[key]); return output;
+      const output = {}; for (const key of Object.keys(value)) output[key] = await externalize(value[key], key); return output;
     }
     return value;
   }

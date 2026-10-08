@@ -19,15 +19,35 @@ data class InkBounds(val left: Float, val top: Float, val right: Float, val bott
 
 object InkGeometry {
     fun points(obj: JSONObject) = obj.array("points").objects().map(InkPoint::from)
-    fun bounds(obj: JSONObject): InkBounds {
+    fun pagePoints(obj: JSONObject): List<InkPoint> {
+        val points = points(obj); val angle = obj.f("rotation").toDouble()
+        if (angle == 0.0) return points
+        val b = unrotatedBounds(obj); val cx = (b.left+b.right)/2; val cy = (b.top+b.bottom)/2
+        return points.map { p -> val x=p.x-cx; val y=p.y-cy
+            p.copy(x=(cx+x*cos(angle)-y*sin(angle)).toFloat(),y=(cy+x*sin(angle)+y*cos(angle)).toFloat()) }
+    }
+    fun unrotatedBounds(obj: JSONObject): InkBounds {
         if (obj.optString("type") == "stroke") {
             val p = points(obj)
             if (p.isEmpty()) return InkBounds(0f,0f,0f,0f)
             val r = obj.f("width",4f) / 2
             return InkBounds(p.minOf{it.x}-r,p.minOf{it.y}-r,p.maxOf{it.x}+r,p.maxOf{it.y}+r)
         }
-        if (obj.optString("type") == "shape") return InkBounds(min(obj.f("x1"),obj.f("x2")), min(obj.f("y1"),obj.f("y2")), max(obj.f("x1"),obj.f("x2")), max(obj.f("y1"),obj.f("y2"))).expanded(obj.f("width",3f))
+        if (obj.optString("type") == "shape" || (obj.optString("type") == "tape" && obj.has("x1") && obj.has("x2")))
+            return InkBounds(min(obj.f("x1"),obj.f("x2")), min(obj.f("y1"),obj.f("y2")), max(obj.f("x1"),obj.f("x2")), max(obj.f("y1"),obj.f("y2"))).let {
+                if (obj.optString("type") == "shape") it.expanded(obj.f("width",3f)) else it
+            }
         return InkBounds(obj.f("x"),obj.f("y"),obj.f("x")+obj.f("w",300f),obj.f("y")+obj.f("h",80f))
+    }
+    fun bounds(obj: JSONObject): InkBounds {
+        val b = unrotatedBounds(obj)
+        val angle = obj.f("rotation").toDouble()
+        if (angle == 0.0) return b
+        val halfW = b.width / 2; val halfH = b.height / 2
+        val c = abs(cos(angle)).toFloat(); val s = abs(sin(angle)).toFloat()
+        val x = (b.left + b.right) / 2; val y = (b.top + b.bottom) / 2
+        val w = halfW * c + halfH * s; val h = halfW * s + halfH * c
+        return InkBounds(x-w,y-h,x+w,y+h)
     }
     fun distance(a: InkPoint,b: InkPoint) = hypot(a.x-b.x,a.y-b.y)
     fun segmentDistance(p: InkPoint,a: InkPoint,b: InkPoint): Float {
@@ -37,16 +57,22 @@ object InkGeometry {
     }
     fun hit(obj: JSONObject,p: InkPoint,radius: Float): Boolean {
         if(obj.optBoolean("locked") || obj.optBoolean("hidden") || !bounds(obj).expanded(radius).contains(p.x,p.y)) return false
-        if(obj.optString("type")!="stroke") return true
+        val angle = obj.f("rotation").toDouble()
+        val point = if (angle == 0.0) p else {
+            val b = unrotatedBounds(obj); val cx = (b.left+b.right)/2; val cy = (b.top+b.bottom)/2
+            val dx = p.x-cx; val dy = p.y-cy
+            p.copy(x=(cx+dx*cos(angle)+dy*sin(angle)).toFloat(),y=(cy-dx*sin(angle)+dy*cos(angle)).toFloat())
+        }
+        if(obj.optString("type")!="stroke") return unrotatedBounds(obj).expanded(radius).contains(point.x,point.y)
         val points=points(obj); val r=radius+obj.f("width",4f)/2
-        return points.any{distance(it,p)<=r} || points.zipWithNext().any{segmentDistance(p,it.first,it.second)<=r}
+        return points.any{distance(it,point)<=r} || points.zipWithNext().any{segmentDistance(point,it.first,it.second)<=r}
     }
     private fun lerp(a: InkPoint,b: InkPoint,t: Float) = InkPoint(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,
         a.pressure+(b.pressure-a.pressure)*t, a.time+((b.time-a.time)*t).toLong(),a.tilt+(b.tilt-a.tilt)*t,a.orientation+(b.orientation-a.orientation)*t)
 
     /** Analytic segment/circle intersections preserve thin strokes with sparsely sampled points. */
     fun eraseParts(obj: JSONObject,center: InkPoint,radius: Float): List<JSONObject> {
-        val points=points(obj)
+        val points=pagePoints(obj)
         if(points.size<2) return if(points.any{distance(it,center)<=radius+obj.f("width",4f)/2}) emptyList() else listOf(obj)
         val r=radius+obj.f("width",4f)/2
         val fragments=mutableListOf<MutableList<InkPoint>>()
@@ -72,6 +98,7 @@ object InkGeometry {
         }
         flush()
         return fragments.mapIndexed{index,fragment->obj.copyJson().put("id",if(index==0)obj.getString("id") else uid("stroke"))
+            .put("rotation",0)
             .put("points",JSONArray(fragment.map{it.json()}))}
     }
     fun inside(point: InkPoint,polygon: List<InkPoint>): Boolean {
@@ -87,8 +114,9 @@ object InkGeometry {
         fun ty(y: Float)=(y-cy)*scale+cy+dy
         when(optString("type")) {
             "stroke" -> { put("points",JSONArray(points(this).map{it.copy(x=tx(it.x),y=ty(it.y)).json()})); put("width",f("width",4f)*scale) }
-            "shape" -> { put("x1",tx(f("x1")));put("y1",ty(f("y1")));put("x2",tx(f("x2")));put("y2",ty(f("y2")))
+            "shape", "tape" -> if(optString("type")=="shape" || (has("x1") && has("x2"))) { put("x1",tx(f("x1")));put("y1",ty(f("y1")));put("x2",tx(f("x2")));put("y2",ty(f("y2")))
                 if(has("cx")){put("cx",tx(f("cx")));put("cy",ty(f("cy")))} }
+                else { put("x",tx(f("x")));put("y",ty(f("y")));put("w",f("w",300f)*scale);put("h",f("h",80f)*scale) }
             else -> { put("x",tx(f("x")));put("y",ty(f("y")));put("w",f("w",300f)*scale);put("h",f("h",80f)*scale)
                 if(has("fontSize"))put("fontSize",f("fontSize")*scale) }
         }
@@ -166,7 +194,7 @@ object InkGeometry {
         return objects.filter { obj ->
             if(obj.optString("type")!="stroke"||obj.optString("brush")=="highlighter"||obj.optBoolean("locked")||obj.optBoolean("hidden")||!bounds(obj).overlaps(box))false
             else {
-                val ink=InkGeometry.points(obj);var hits=0
+                val ink=pagePoints(obj);var hits=0
                 sweeps.any{range->pathsMeet(ink,points.subList(range.first,range.last+1),hitRadius+obj.f("width",4f)*.28f)&&++hits>=3}
             }
         }

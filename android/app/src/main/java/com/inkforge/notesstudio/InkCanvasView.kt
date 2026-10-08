@@ -166,7 +166,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                     is Layer.Commands->canvas.drawPicture(layer.picture)
                     is Layer.Image->{val obj=layer.objectData;val b=InkGeometry.bounds(obj)
                         if(b.overlaps(visibleRect))background.image(obj.optString("src"),(max(b.width,b.height)*scale).roundToInt())?.let{bitmap->
-                            paint.alpha=(obj.f("opacity",1f)*255).roundToInt().coerceIn(0,255);canvas.drawBitmap(bitmap,null,RectF(b.left,b.top,b.right,b.bottom),paint);paint.alpha=255
+                            renderer.drawImage(canvas,obj,bitmap)
                         }}
                 }
                 if(contactPage?.id==id){

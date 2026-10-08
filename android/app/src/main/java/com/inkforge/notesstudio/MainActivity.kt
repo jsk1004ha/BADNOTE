@@ -19,6 +19,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.view.*
 import android.widget.*
+import androidx.core.view.WindowCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -83,6 +84,10 @@ class MainActivity:Activity(){
 
     override fun onCreate(savedInstanceState:Bundle?){
         super.onCreate(savedInstanceState)
+        WindowCompat.enableEdgeToEdge(window)
+        WindowCompat.getInsetsController(window,window.decorView).apply{
+            isAppearanceLightStatusBars=false;isAppearanceLightNavigationBars=false
+        }
         if(Build.VERSION.SDK_INT>=33)onBackInvokedDispatcher.registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT){navigateBack()}
         repository=NoteRepository(this)
@@ -101,10 +106,7 @@ class MainActivity:Activity(){
     }
     private fun makeRoot(){
         root=FrameLayout(this).apply{setBackgroundColor(0xff181818.toInt())}
-        root.setOnApplyWindowInsetsListener{view,insets->
-            if(Build.VERSION.SDK_INT>=30){val cutout=insets.getInsets(WindowInsets.Type.displayCutout());val ime=insets.getInsets(WindowInsets.Type.ime());view.setPadding(cutout.left,cutout.top,cutout.right,ime.bottom)}
-            insets
-        }
+        RootSafeArea.install(root)
         body=column();root.addView(body,FrameLayout.LayoutParams(-1,-1))
         status=text("bad note · 4.0",12,0xff607185.toInt()).apply{setPadding(dp(16),dp(5),dp(16),dp(5))}
         blocker=column().apply{gravity=Gravity.CENTER;setBackgroundColor(0xeef5f7fa.toInt());isClickable=true;visibility=View.GONE}
@@ -232,7 +234,7 @@ class MainActivity:Activity(){
             path.forEach{item->crumbs.addView(ui.text("/",15f,ui.color("#757b86"),true).apply{setPadding(dp(9),0,dp(9),0)});crumbs.addView(ui.text(item.optString("title"),15f,Color.WHITE,true).apply{setOnClickListener{folder=item.getString("id");filter("all")}})}
         }
         commands.addView(horizontal(crumbs),LinearLayout.LayoutParams(0,-2,1f))
-        val create=ui.button(if(narrow)"" else "신규",ui.accent,Color.WHITE,40,19f,"plus"){newNote()}.apply{setPadding(dp(12),0,dp(12),0);elevation=dp(4).toFloat()}
+        val create=ui.button(if(narrow)"" else "신규",ui.accent,Color.WHITE,40,19f,"plus"){newNote()}.apply{contentDescription=t("신규");setPadding(dp(12),0,dp(12),0);elevation=dp(4).toFloat()}
         if(!narrow){create.addView(ui.icon("chevron-down",Color.WHITE,18),LinearLayout.LayoutParams(dp(18),dp(18)).apply{leftMargin=dp(10)})}
         commands.addView(create);commands.addView(ui.divider(ui.color("#14ffffff"),28))
         commands.addView(ui.iconButton("folderPlus","폴더 생성",Color.WHITE){newFolder()})
@@ -453,7 +455,7 @@ class MainActivity:Activity(){
         icon(right,"page-plus","새 페이지"){addPage()};if(!narrow)icon(right,"share","공유와 내보내기"){exportMenu(document?:return@icon,true)}
         if(!narrow)icon(right,"ocr","손글씨 인식"){recognize(false,false)}
         icon(right,"more","더 보기"){editorMenu()}
-        if(narrow){bar.addView(left);bar.addView(horizontal(center),LinearLayout.LayoutParams(0,-1,1f));bar.addView(right)}
+        if(narrow){bar.addView(left);bar.addView(horizontal(center).apply{getChildAt(0).layoutParams=FrameLayout.LayoutParams(-2,-1)},LinearLayout.LayoutParams(0,-1,1f));bar.addView(right)}
         else {bar.addView(left,LinearLayout.LayoutParams(0,-1,1f));bar.addView(center);bar.addView(right,LinearLayout.LayoutParams(0,-1,1f))}
     }
     private fun updateUndoPill(){
@@ -467,13 +469,16 @@ class MainActivity:Activity(){
         val narrow=resources.configuration.screenWidthDp<=840
         val dock=ui.row().apply{gravity=Gravity.CENTER;clipChildren=false;clipToPadding=false};activeDock=dock
         val menu=ui.row().apply{gravity=Gravity.CENTER_VERTICAL;setPadding(dp(if(narrow)7 else 10),dp(6),dp(if(narrow)7 else 10),dp(6));background=ui.rounded(ui.color("#f7171717"),if(narrow)18f else 21f);elevation=0f}
-        fun add(item:View,width:Int?=null,height:Int=45){menu.addView(item,LinearLayout.LayoutParams(if(width==null)-2 else dp(width),dp(height)).apply{if(menu.childCount>0)leftMargin=dp(7)})}
-        fun divider(){add(ui.divider().apply{setPadding(0,0,0,0)},7,36);(menu.getChildAt(menu.childCount-1) as View).background=ui.rounded(Color.TRANSPARENT);val last=menu.getChildAt(menu.childCount-1);last.setBackgroundColor(0x21ffffff);last.scaleX=1f/7f}
+        fun add(item:View,width:Int?=null,height:Int=45){menu.addView(item,LinearLayout.LayoutParams(if(width==null)item.layoutParams?.width?:-2 else dp(width),dp(height)).apply{if(menu.childCount>0)leftMargin=dp(7)})}
+        fun divider(){if(narrow)return;add(ui.divider().apply{setPadding(0,0,0,0)},7,36);(menu.getChildAt(menu.childCount-1) as View).background=ui.rounded(Color.TRANSPARENT);val last=menu.getChildAt(menu.childCount-1);last.setBackgroundColor(0x21ffffff);last.scaleX=1f/7f}
         fun icon(name:String,label:String,selected:Boolean=false,action:()->Unit){add(ui.iconButton(name,label,ui.color("#f4f4f4"),45,45,25,selected,ui.color("#327c92"),Color.WHITE,action),45)}
         fun named(name:String,label:String,selected:Boolean=false,arrow:Boolean=false,action:()->Unit){
             val item=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(10),0,dp(10),0);background=ui.rounded(if(selected)ui.color("#30ffffff")else ui.color("#12ffffff"),14f);setOnClickListener{action()};contentDescription=t(label)}
-            item.addView(ui.icon(name,Color.WHITE,24));item.addView(ui.text(label,13f,Color.WHITE,true).apply{gravity=Gravity.CENTER;maxLines=2},LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(7)})
-            if(arrow)item.addView(ui.icon("chevron-down",Color.WHITE,18));add(item,if(narrow)82 else 98,44)
+            val nameLabel=ui.text(label,13f,Color.WHITE,true).apply{gravity=Gravity.CENTER;setSingleLine();ellipsize=android.text.TextUtils.TruncateAt.END}
+            item.addView(ui.icon(name,Color.WHITE,24));item.addView(nameLabel,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(7)})
+            if(arrow)item.addView(ui.icon("chevron-down",Color.WHITE,18))
+            val nameWidth=ceil(nameLabel.paint.measureText(nameLabel.text.toString())/ui.density).toInt()+24+27+if(arrow)18 else 0
+            add(item,max(112,nameWidth),44)
         }
         fun label(value:String){add(ui.text(value,12f,ui.color("#b5b5b5"),true).apply{gravity=Gravity.CENTER;maxLines=2},110)}
         fun width(value:Float){val item=FrameLayout(this).apply{background=ui.rounded(if(abs(value-currentWidth())<.2f)ui.color("#17ffffff")else Color.TRANSPARENT,13f);setOnClickListener{setCurrentWidth(value);saveSettings();renderActiveDock()};contentDescription="굵기 $value"}
@@ -502,6 +507,26 @@ class MainActivity:Activity(){
             InkCanvasView.Tool.IMAGE->{named("image","이미지 선택",true){insertObject(InkCanvasView.Tool.IMAGE,100f,150f)};divider();label("사진을 페이지에 삽입")}
         }
         val position=settings.optString("dock","top")
+        if(narrow){
+            // Wrap complete controls into rows, rather than showing half of a horizontal menu.
+            val available=((if(surface.width>0)surface.width else resources.displayMetrics.widthPixels-root.paddingLeft-root.paddingRight)-dp(24)).coerceAtLeast(dp(160))
+            val rowWidth=available-menu.paddingLeft-menu.paddingRight
+            val children=(0 until menu.childCount).map{menu.getChildAt(it)};menu.removeAllViews();menu.orientation=LinearLayout.VERTICAL;menu.gravity=Gravity.CENTER_HORIZONTAL
+            var row=ui.row().apply{gravity=Gravity.CENTER};var used=0
+            fun flush(){if(row.childCount>0){menu.addView(row,LinearLayout.LayoutParams(-1,-2).apply{if(menu.childCount>0)topMargin=dp(6)});row=ui.row().apply{gravity=Gravity.CENTER};used=0}}
+            children.forEach{child->val params=child.layoutParams as LinearLayout.LayoutParams
+                child.measure(View.MeasureSpec.makeMeasureSpec(max(0,params.width),if(params.width>0)View.MeasureSpec.EXACTLY else View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(params.height,View.MeasureSpec.EXACTLY))
+                val childWidth=child.measuredWidth;val gap=if(row.childCount>0)dp(7)else 0
+                if(used+gap+childWidth>rowWidth)flush()
+                params.leftMargin=if(row.childCount>0)dp(7)else 0;used+=params.leftMargin+childWidth;row.addView(child,params)}
+            flush();menu.measure(View.MeasureSpec.makeMeasureSpec(available,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+            val height=min(menu.measuredHeight,dp(min(220,resources.configuration.screenHeightDp/3).coerceAtLeast(100)))
+            val scroll=ScrollView(this).apply{isVerticalScrollBarEnabled=true;clipToOutline=true;background=ui.rounded(ui.color("#f7171717"),18f);addView(menu,ViewGroup.LayoutParams(-1,-2))}
+            dock.addView(scroll,LinearLayout.LayoutParams(-1,-1))
+            surface.addView(dock,FrameLayout.LayoutParams(-1,height,if(position=="bottom")Gravity.BOTTOM else Gravity.TOP).apply{leftMargin=dp(12);rightMargin=dp(12);topMargin=dp(8);bottomMargin=dp(18)})
+            undoPill?.layoutParams=(undoPill?.layoutParams as? FrameLayout.LayoutParams)?.apply{gravity=Gravity.BOTTOM or Gravity.LEFT;topMargin=0;bottomMargin=dp(12)}
+            return
+        }
         fun grip():View=FrameLayout(this).apply{
             contentDescription="활성 도구 메뉴 위치 변경";alpha=.55f;isClickable=true
             listOf(7,14).forEach{x->addView(View(this@MainActivity).apply{background=ui.rounded(ui.color("#53565c"),3f)},FrameLayout.LayoutParams(dp(4),dp(22),Gravity.CENTER_VERTICAL or Gravity.LEFT).apply{leftMargin=dp(x)})}
@@ -521,7 +546,7 @@ class MainActivity:Activity(){
             return
         }
         val maxWidth=dp(min(960,resources.configuration.screenWidthDp-64));menu.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(dp(60),View.MeasureSpec.EXACTLY))
-        val scroll=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=false;clipToPadding=false;background=ui.rounded(ui.color("#f7171717"),21f);elevation=dp(8).toFloat();addView(menu,ViewGroup.LayoutParams(-2,dp(60)))}
+        val scroll=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=true;clipToOutline=true;background=ui.rounded(ui.color("#f7171717"),21f);elevation=dp(8).toFloat();addView(menu,ViewGroup.LayoutParams(-2,dp(60)))}
         dock.addView(scroll,LinearLayout.LayoutParams(if(narrow)dp(resources.configuration.screenWidthDp-54)else min(menu.measuredWidth,maxWidth),dp(60)))
         if(!narrow)dock.addView(grip(),LinearLayout.LayoutParams(dp(24),dp(44)).apply{leftMargin=dp(7)})
         val gravity=when(position){"bottom"->Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL;"left"->Gravity.CENTER_VERTICAL or Gravity.LEFT;"right"->Gravity.CENTER_VERTICAL or Gravity.RIGHT;else->Gravity.TOP or Gravity.CENTER_HORIZONTAL}
@@ -536,7 +561,7 @@ class MainActivity:Activity(){
     private fun clearPage(){confirm("페이지 지우기","현재 페이지의 모든 필기를 지울까요?"){inkView?.let{v->v.currentPage?.objects?.filter{!it.optBoolean("locked")}?.let{v.changeObjects(it,emptyList())}}}}
     private fun applySettings(view:InkCanvasView){
         view.stylusOnly=settings.optBoolean("stylusOnly",true);view.scribbleErase=settings.optBoolean("scribbleErase",true);view.drawHold=settings.optBoolean("drawHold",true)
-        view.continuous=settings.optBoolean("continuous",true);view.brush=settings.optString("brush","fountain");view.inkColor=settings.optString("inkColor","#111827");view.inkWidth=settings.f("inkWidth",4.2f)
+        view.continuous=document?.continuous(settings.optBoolean("continuous",true))?:settings.optBoolean("continuous",true);view.brush=settings.optString("brush","fountain");view.inkColor=settings.optString("inkColor","#111827");view.inkWidth=settings.f("inkWidth",4.2f)
         view.eraserRadius=settings.f("eraserRadius",22f);view.highlighterWidth=settings.f("highlighterWidth",22f);view.penSettings=settings.optJSONObject("penSettings")?:defaultPenSettings(view.brush);view.preciseEraser=settings.optBoolean("preciseEraser",false)
         status.alpha=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f)
     }
@@ -560,12 +585,20 @@ class MainActivity:Activity(){
         menuItem(content,"앞으로 이동","arrow-up"){move(-1)};menuItem(content,"뒤로 이동","arrow-down"){move(1)}
         menuItem(content,"페이지 삭제","trash"){confirm("페이지 삭제","현재 페이지를 삭제할까요?"){work("페이지 삭제 중…",{repository.removePage(doc.id,pageId)}){refreshPages(current)}}}
     }
-    private fun outlineMenu(){val doc=document?:return;val entries=(doc.data.optJSONArray("outlines")?:doc.data.array("outline")).objects()
-        choose("목차",listOf("현재 페이지를 목차에 추가")+entries.map{it.optString("title")}){index->
+    private fun loadOutline(complete:(List<JSONObject>)->Unit){val doc=document?:return
+        work("목차를 읽는 중…",{doc.outlineEntries(repository.pageIds(doc.id).asSequence().mapNotNull{repository.page(it)})}){entries->
+            if(document?.id==doc.id)complete(entries)}
+    }
+    private fun outlineMenu(){val doc=document?:return;loadOutline{entries->
+        choose("목차",listOf("현재 페이지를 목차에 추가")+entries.map{it.optString("title",it.optString("text"))}){index->
             if(index==0)prompt("목차 제목",""){title->val data=doc.data.copyJson();val list=data.optJSONArray("outlines")?:data.array("outline");list.put(json("id" to uid("outline"),"title" to title,"pageId" to ids[inkView?.currentIndex?:0],"pageIndex" to (inkView?.currentIndex?:0)));data.put("outlines",list);document=DocumentInfo(doc.id,data)
                 enqueueSave({repository.document(doc.id)?.let{it.data.put("outlines",list);repository.putDocument(it)}})}
             else{val entry=entries[index-1];val byId=ids.indexOf(entry.optString("pageId"));inkView?.goTo(if(byId>=0)byId else entry.optInt("pageIndex"))}
-        }
+        }}
+    }
+    private fun changePageMode(continuous:Boolean){
+        inkView?.changePageMode(continuous)
+        document?.let{doc->mutateDocument(doc){put("settings",(optJSONObject("settings")?:JSONObject()).copyJson().put("pageMode",if(continuous)"continuous"else"single"))}}
     }
     private fun toolMenu(){
         val content=showSheet("도구막대","추가 도구")
@@ -658,7 +691,7 @@ class MainActivity:Activity(){
         menuItem(content,"페이지 번호로 이동","arrow","페이지 창에서 원하는 페이지 번호를 입력합니다."){if(pageSidebar==null)togglePages()}
         menuItem(content,"손글씨 수식 계산","math","현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다."){recognize(true,false)}
         menuItem(content,if(view.readOnly)"편집 모드로 전환"else"읽기 모드",if(view.readOnly)"eye-off"else"read","실수로 필기되지 않도록 편집을 잠급니다."){view.readOnly=!view.readOnly;if(view.readOnly)view.tool=InkCanvasView.Tool.HAND}
-        menuItem(content,if(view.continuous)"한 페이지 보기"else"연속 페이지 보기","sidebar"){view.changePageMode(!view.continuous);settings.put("continuous",view.continuous);saveSettings()}
+        menuItem(content,if(view.continuous)"한 페이지 보기"else"연속 페이지 보기","sidebar"){changePageMode(!view.continuous)}
         menuItem(content,"페이지 맞춤","fit"){view.resetZoom()}
         menuItem(content,"노트 가져오기","import",".ifnote 파일을 추가합니다."){pick("note")}
         menuItem(content,"PDF 가져오기","page-plus","PDF 각 페이지를 노트 배경으로 추가하고 텍스트를 검색합니다."){pick("appendPdf")}
@@ -798,7 +831,7 @@ class MainActivity:Activity(){
         }
         fun toggle(label:String,description:String,key:String,default:Boolean){
             val check=CheckBox(this).apply{isChecked=settings.optBoolean(key,default);buttonTintList=android.content.res.ColorStateList.valueOf(ui.accent);contentDescription=t(label)
-                setOnCheckedChangeListener{_,checked->settings.put(key,checked);inkView?.let{applySettings(it);if(key=="continuous")it.changePageMode(checked)};saveSettings()}}
+                setOnCheckedChangeListener{_,checked->settings.put(key,checked);inkView?.let{applySettings(it);if(key=="continuous")changePageMode(checked)};saveSettings()}}
             setting(label,description,check)
         }
         val languages=listOf("ko","en","ja","zh","pt");val names=listOf("한국어","English","日本語","中文","Português")
@@ -874,9 +907,10 @@ class MainActivity:Activity(){
             content.addView(ui.button("새 페이지",icon="plus"){addPage()})
         }else if(sidebarTab=="outline"){
             menuItem(content,"현재 페이지를 목차에 추가","plus"){outlineMenu()}
-            val entries=document?.data?.let{(it.optJSONArray("outlines")?:it.array("outline")).objects()}.orEmpty()
+            loadOutline{entries->if(pageSidebar!==sidebar||sidebarTab!="outline")return@loadOutline
             entries.forEach{entry->menuItem(content,entry.optString("title",entry.optString("text")),"bookmark","${entry.optInt("pageIndex")+1}페이지"){val index=ids.indexOf(entry.optString("pageId"));inkView?.goTo(if(index>=0)index else entry.optInt("pageIndex"))}}
             if(entries.isEmpty())content.addView(ui.text("목차가 없습니다.",13f,ui.muted))
+            }
         }else{
             menuItem(content,if(audio.recording)"녹음 중지"else"녹음 시작","mic"){toggleRecording();renderSidebar()}
             val clips=document?.data?.array("audio")?.objects().orEmpty()
