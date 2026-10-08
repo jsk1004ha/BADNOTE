@@ -50,6 +50,7 @@ def main() -> None:
     with zipfile.ZipFile(apk) as archive:
         crc_failure = archive.testzip()
         assets = sorted(name for name in archive.namelist() if name.startswith("assets/public/"))
+        native_assets = sorted(name for name in archive.namelist() if name.startswith("assets/locales/") or name in ("assets/migration.html", "assets/icons.json"))
 
     badging = command([str(tool(tools, "aapt2")), "dump", "badging", str(apk)])
     signing = command([str(tool(tools, "apksigner")), "verify", "--verbose", "--print-certs", str(apk)])
@@ -73,6 +74,8 @@ def main() -> None:
         "version_code": package_match.group(2) if package_match else None,
         "version_name": package_match.group(3) if package_match else None,
         "web_assets": assets,
+        "native_assets": native_assets,
+        "native_editor": not assets and "assets/migration.html" in native_assets,
         "errors": {
             "aapt2": badging.stderr.strip() if badging.returncode else "",
             "apksigner": signing.stderr.strip() if signing.returncode else "",
