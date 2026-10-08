@@ -1,0 +1,71 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>기존 노트 이전</title>
+<body><p>기존 노트를 안전하게 이전하고 있습니다. 원본 데이터는 유지됩니다.</p>
+<script>
+'use strict';
+(async () => {
+  const native = window.NativeMigration;
+  const request = r => new Promise((resolve, reject) => { r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+  const db = await request(indexedDB.open('inkforge-notes-studio'));
+  const get = (store, id) => request(db.transaction(store, 'readonly').objectStore(store).get(id));
+  const has = name => db.objectStoreNames.contains(name);
+  async function assetString(source) {
+    const comma = source.indexOf(',');
+    if (comma < 0 || !source.slice(0, comma).endsWith(';base64')) throw Error('잘못된 이미지/녹음 데이터');
+    const ref = native.beginAsset(source.slice(5, comma).split(';')[0]);
+    // Each piece is a multiple of four: no full decoded or encoded copy of the asset.
+    for (let p = comma + 1; p < source.length; p += 65536) native.appendAsset(source.slice(p, p + 65536));
+    native.endAsset(); return ref;
+  }
+  async function assetBlob(blob) {
+    const ref = native.beginAsset(blob.type || 'application/octet-stream');
+    for (let p = 0; p < blob.size; p += 49152) {
+      const bytes = new Uint8Array(await blob.slice(p, p + 49152).arrayBuffer());
+      let binary = ''; for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      native.appendAsset(btoa(binary));
+    }
+    native.endAsset(); return ref;
+  }
+  async function externalize(value) {
+    if (typeof value === 'string' && value.startsWith('data:')) return assetString(value);
+    if (Array.isArray(value)) { const output = []; for (const item of value) output.push(await externalize(item)); return output; }
+    if (value && typeof value === 'object') {
+      const output = {}; for (const key of Object.keys(value)) output[key] = await externalize(value[key]); return output;
+    }
+    return value;
+  }
+  function text(value, page) {
+    const data = JSON.stringify(value); native.beginText(page);
+    for (let p = 0; p < data.length; p += 32768) native.appendText(data.slice(p, p + 32768));
+    native.endText();
+  }
+  const ids = has('documents') ? await request(db.transaction('documents','readonly').objectStore('documents').getAllKeys()) : [];
+  const fallback = ids.length ? [] : JSON.parse(localStorage.getItem('inkforge_documents') || '[]');
+  for (const id of ids.length ? ids : fallback.map(d => d.id)) {
+    if (!native.beginDocument(String(id))) continue;
+    const doc = ids.length ? await get('documents', id) : fallback.find(d => d.id === id);
+    const { pages, ...metadata } = doc;
+    text(await externalize(metadata), false);
+    const assets = new Map();
+    for (const original of pages || []) {
+      const page = await externalize(original);
+      if (page.backgroundAssetId && !page.backgroundImage) {
+        if (!assets.has(page.backgroundAssetId)) {
+          const asset = has('assets') ? await get('assets', page.backgroundAssetId)
+            : JSON.parse(localStorage.getItem('inkforge_asset_' + page.backgroundAssetId) || 'null');
+          if (!asset) throw Error('PDF 배경 자산이 없습니다: ' + page.backgroundAssetId);
+          assets.set(page.backgroundAssetId, asset.blob instanceof Blob ? await assetBlob(asset.blob) : await assetString(asset.dataUrl));
+        }
+        page.backgroundImage = assets.get(page.backgroundAssetId);
+      }
+      delete page.backgroundAssetId;
+      text(page, true);
+    }
+    native.endDocument();
+  }
+  for (const key of ['folders','preferences','appSettings']) {
+    const value = has('settings') ? (await get('settings', key))?.value : JSON.parse(localStorage.getItem('inkforge_setting_' + key) || 'null');
+    if (value != null) native.setting(key, JSON.stringify(value));
+  }
+  db.close(); native.done('');
+})().catch(error => window.NativeMigration.done(String(error?.message || error)));
+</script></body></html>

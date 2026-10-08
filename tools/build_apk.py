@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,8 @@ def run(command: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant", choices=("update", "sideBySide", "both"), default="both")
-    parser.add_argument("--gradle", default=os.environ.get("GRADLE", "gradle"))
+    wrapper = ANDROID / ("gradlew.bat" if os.name == "nt" else "gradlew")
+    parser.add_argument("--gradle", default=os.environ.get("GRADLE", str(wrapper) if wrapper.exists() else "gradle"))
     parser.add_argument("--offline", action="store_true")
     args = parser.parse_args()
 
@@ -47,7 +49,12 @@ def main() -> None:
     }
     for name, path in outputs.items():
         if args.variant in (name, "both") and path.exists():
-            print(f"{name}: {path}")
+            version = re.search(r"versionName\s+'([^']+)'", (ANDROID / "app/build.gradle").read_text(encoding="utf-8")).group(1)
+            suffix = "Update" if name == "update" else "SideBySide"
+            destination = ROOT / "build/apk" / f"bad-note-Android-{version}-{suffix}.apk"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
+            print(f"{name}: {destination}")
 
 
 if __name__ == "__main__":
