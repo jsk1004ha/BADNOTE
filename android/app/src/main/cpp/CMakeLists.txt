@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(badnote_pdfium LANGUAGES CXX)
+
+set(PDFIUM_ABI_ROOT "${PDFIUM_ROOT}/${ANDROID_ABI}")
+add_library(pdfium SHARED IMPORTED)
+set_target_properties(pdfium PROPERTIES IMPORTED_LOCATION "${PDFIUM_ABI_ROOT}/lib/libpdfium.so")
+add_library(badnote_pdfium SHARED pdf_text_jni.cpp)
+target_compile_features(badnote_pdfium PRIVATE cxx_std_17)
+target_include_directories(badnote_pdfium PRIVATE "${PDFIUM_ABI_ROOT}/include")
+target_link_libraries(badnote_pdfium PRIVATE pdfium)

@@ -5,9 +5,25 @@ import org.json.JSONObject
 import kotlin.math.*
 
 data class InkPoint(val x: Float, val y: Float, val pressure: Float = .5f, val time: Long = 0,
-                    val tilt: Float = 0f, val orientation: Float = 0f) {
-    fun json() = json("x" to x, "y" to y, "p" to pressure, "t" to time, "tilt" to tilt, "orientation" to orientation)
-    companion object { fun from(p: JSONObject) = InkPoint(p.f("x"), p.f("y"), p.f("p", .5f), p.optLong("t"), p.f("tilt"), p.f("orientation")) }
+                    val tilt: Float = 0f, val orientation: Float = 0f, val pointerId: Int = -1,
+                    val azimuth: Float? = null, val tx: Float? = null, val ty: Float? = null,
+                    val original: JSONObject? = null) {
+    fun json(): JSONObject {
+        // Imported points retain null vs missing fields and every unknown extension field.
+        val value = original?.copyJson() ?: json("p" to pressure, "t" to time,
+            "tilt" to tilt, "orientation" to orientation, "pointerId" to pointerId)
+        value.put("x", x).put("y", y)
+        if (original == null) {
+            azimuth?.let { value.put("azimuth", it) }
+            tx?.let { value.put("tx", it) };ty?.let { value.put("ty", it) }
+        }
+        return value
+    }
+    companion object { fun from(p: JSONObject) = InkPoint(p.f("x"), p.f("y"), p.f("p", .5f),
+        p.optLong("t"), p.f("tilt"), p.f("orientation"), p.optInt("pointerId", -1),
+        p.f("azimuth").takeIf { p.has("azimuth") && !p.isNull("azimuth") },
+        p.f("tx").takeIf { p.has("tx") && !p.isNull("tx") },
+        p.f("ty").takeIf { p.has("ty") && !p.isNull("ty") }, p.copyJson()) }
 }
 data class InkBounds(val left: Float, val top: Float, val right: Float, val bottom: Float) {
     val width get() = right - left
@@ -33,10 +49,19 @@ object InkGeometry {
             val r = obj.f("width",4f) / 2
             return InkBounds(p.minOf{it.x}-r,p.minOf{it.y}-r,p.maxOf{it.x}+r,p.maxOf{it.y}+r)
         }
-        if (obj.optString("type") == "shape" || (obj.optString("type") == "tape" && obj.has("x1") && obj.has("x2")))
-            return InkBounds(min(obj.f("x1"),obj.f("x2")), min(obj.f("y1"),obj.f("y2")), max(obj.f("x1"),obj.f("x2")), max(obj.f("y1"),obj.f("y2"))).let {
-                if (obj.optString("type") == "shape") it.expanded(obj.f("width",3f)) else it
+        if (obj.optString("type") == "shape" || (obj.optString("type") == "tape" && obj.has("x1") && obj.has("x2"))) {
+            val x1=obj.f("x1");val y1=obj.f("y1");val x2=obj.f("x2");val y2=obj.f("y2")
+            if(obj.optString("type")!="shape")return InkBounds(min(x1,x2),min(y1,y2),max(x1,x2),max(y1,y2))
+            val shape=obj.optString("shape","line");val width=obj.f("width",3f)
+            var box=InkBounds(min(x1,x2),min(y1,y2),max(x1,x2),max(y1,y2))
+            if(shape=="curve"||shape=="arc"){
+                val cx=obj.f("cx",(x1+x2)/2);val cy=obj.f("cy",min(y1,y2)-abs(x2-x1)*.3f)
+                box=InkBounds(min(box.left,cx),min(box.top,cy),max(box.right,cx),max(box.bottom,cy))
             }
+            if(shape=="cloudshape")box=InkBounds(box.left-box.width*.02f,box.top-box.height*.04f,
+                box.right+box.width*.11f,box.bottom)
+            return box.expanded(if(shape=="arrow"||shape=="double-arrow")max(14f,width*4) else width)
+        }
         return InkBounds(obj.f("x"),obj.f("y"),obj.f("x")+obj.f("w",300f),obj.f("y")+obj.f("h",80f))
     }
     fun bounds(obj: JSONObject): InkBounds {
@@ -63,12 +88,123 @@ object InkGeometry {
             val dx = p.x-cx; val dy = p.y-cy
             p.copy(x=(cx+dx*cos(angle)+dy*sin(angle)).toFloat(),y=(cy-dx*sin(angle)+dy*cos(angle)).toFloat())
         }
+        if(obj.optString("type")=="shape") return shapeHit(obj,point,radius)
         if(obj.optString("type")!="stroke") return unrotatedBounds(obj).expanded(radius).contains(point.x,point.y)
         val points=points(obj); val r=radius+obj.f("width",4f)/2
         return points.any{distance(it,point)<=r} || points.zipWithNext().any{segmentDistance(point,it.first,it.second)<=r}
     }
-    private fun lerp(a: InkPoint,b: InkPoint,t: Float) = InkPoint(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,
-        a.pressure+(b.pressure-a.pressure)*t, a.time+((b.time-a.time)*t).toLong(),a.tilt+(b.tilt-a.tilt)*t,a.orientation+(b.orientation-a.orientation)*t)
+    private fun shapeHit(obj:JSONObject,point:InkPoint,radius:Float):Boolean {
+        val x1=obj.f("x1");val y1=obj.f("y1");val x2=obj.f("x2");val y2=obj.f("y2")
+        val left=min(x1,x2);val top=min(y1,y2);val right=max(x1,x2);val bottom=max(y1,y2)
+        val w=max(1f,right-left);val h=max(1f,bottom-top)
+        val r=radius+obj.f("width",3f)/2
+        val shape=obj.optString("shape","line")
+        fun vertex(x:Float,y:Float)=InkPoint(x,y)
+        fun polygon(vertices:List<InkPoint>) =
+            (vertices+vertices.first()).zipWithNext().any{
+                segmentDistance(point,it.first,it.second)<=r }
+        if(shape in setOf("line","arrow","double-arrow")) {
+            val a=vertex(x1,y1);val b=vertex(x2,y2)
+            if(segmentDistance(point,a,b)<=r)return true
+            if(shape=="line")return false
+            fun arrow(from:InkPoint,to:InkPoint):Boolean {
+                val angle=atan2(to.y-from.y,to.x-from.x)
+                val size=max(14f,obj.f("width",3f)*4)
+                return listOf(-.5f,.5f).any{sign->segmentDistance(point,to,
+                    vertex(to.x-cos(angle+sign)*size,to.y-sin(angle+sign)*size))<=r}
+            }
+            return arrow(a,b) || shape=="double-arrow"&&arrow(b,a)
+        }
+        if(shape=="ellipse"||shape=="circle") {
+            val cx=(left+right)/2;val cy=(top+bottom)/2
+            val rx=w/2;val ry=h/2
+            val count=128
+            val start=0.0;val end=PI*2
+            var prior=vertex(cx+cos(start).toFloat()*rx,cy+sin(start).toFloat()*ry)
+            for(i in 1..count){val angle=start+(end-start)*i/count
+                val next=vertex(cx+cos(angle).toFloat()*rx,cy+sin(angle).toFloat()*ry)
+                if(segmentDistance(point,prior,next)<=r)return true
+                prior=next
+            }
+            return false
+        }
+        if(shape=="curve"||shape=="arc") {
+            val cx=obj.f("cx",(x1+x2)/2);val cy=obj.f("cy",min(y1,y2)-abs(x2-x1)*.3f)
+            var prior=vertex(x1,y1)
+            for(i in 1..64){val t=i/64f;val inv=1-t
+                val next=vertex(inv*inv*x1+2*inv*t*cx+t*t*x2,inv*inv*y1+2*inv*t*cy+t*t*y2)
+                if(segmentDistance(point,prior,next)<=r)return true
+                prior=next
+            }
+            return false
+        }
+        if(shape=="heartshape"||shape=="cloudshape"||shape=="speech"||shape=="rounded-rectangle") {
+            val outline=mutableListOf<Pair<Double,Double>>()
+            var current=0.0 to 0.0
+            fun move(x:Double,y:Double){current=x to y;outline+=current}
+            fun line(x:Double,y:Double){current=x to y;outline+=current}
+            fun quad(cx:Double,cy:Double,x:Double,y:Double){val (sx,sy)=current
+                for(i in 1..16){val t=i/16.0;val a=1-t
+                    outline+=(a*a*sx+2*a*t*cx+t*t*x) to (a*a*sy+2*a*t*cy+t*t*y)}
+                current=x to y
+            }
+            fun cubic(ax:Double,ay:Double,bx:Double,by:Double,x:Double,y:Double){val (sx,sy)=current
+                for(i in 1..16){val t=i/16.0;val a=1-t
+                    outline+=(a*a*a*sx+3*a*a*t*ax+3*a*t*t*bx+t*t*t*x) to
+                        (a*a*a*sy+3*a*a*t*ay+3*a*t*t*by+t*t*t*y)}
+                current=x to y
+            }
+            when(shape){
+                "heartshape"->{move(50.0,92.0);cubic(10.0,63.0,0.0,40.0,6.0,21.0)
+                    cubic(13.0,0.0,39.0,2.0,50.0,23.0);cubic(61.0,2.0,87.0,0.0,94.0,21.0)
+                    cubic(100.0,40.0,90.0,63.0,50.0,92.0)}
+                "cloudshape"->{move(20.0,80.0);cubic(0.0,83.0,-2.0,55.0,14.0,48.0)
+                    cubic(0.0,27.0,23.0,10.0,36.0,22.0);cubic(40.0,-4.0,72.0,0.0,76.0,20.0)
+                    cubic(99.0,14.0,111.0,45.0,89.0,56.0);cubic(105.0,79.0,73.0,96.0,59.0,79.0)
+                    cubic(49.0,97.0,28.0,95.0,20.0,80.0)}
+                "speech"->{move(12.0,5.0);line(88.0,5.0);quad(98.0,5.0,98.0,15.0)
+                    line(98.0,65.0);quad(98.0,75.0,88.0,75.0);line(40.0,75.0)
+                    line(17.0,98.0);line(22.0,75.0);line(12.0,75.0)
+                    quad(2.0,75.0,2.0,65.0);line(2.0,15.0);quad(2.0,5.0,12.0,5.0)}
+                else->{val corner=min(w,h)*.12f;val rx=corner/w*100;val ry=corner/h*100
+                    move(rx.toDouble(),0.0);line(100-rx.toDouble(),0.0)
+                    quad(100.0,0.0,100.0,ry.toDouble());line(100.0,100-ry.toDouble())
+                    quad(100.0,100.0,100-rx.toDouble(),100.0);line(rx.toDouble(),100.0)
+                    quad(0.0,100.0,0.0,100-ry.toDouble());line(0.0,ry.toDouble())
+                    quad(0.0,0.0,rx.toDouble(),0.0)}
+            }
+            return polygon(outline.map{(x,y)->vertex((left+x*w/100).toFloat(),(top+y*h/100).toFloat())})
+        }
+        val normalized:List<Pair<Float,Float>> = when(shape) {
+            "triangle" -> (0 until 3).map { i -> val angle=-PI/2+2*PI*i/3
+                (.5+cos(angle)*.5).toFloat() to (.5+sin(angle)*.5).toFloat() }
+            "diamond" -> listOf(.5f to 0f,1f to .5f,.5f to 1f,0f to .5f)
+            "pentagon","hexagon" -> { val n=if(shape=="pentagon")5 else 6
+                (0 until n).map { i -> val angle=-PI/2+2*PI*i/n
+                    (.5+cos(angle)*.5).toFloat() to (.5+sin(angle)*.5).toFloat() } }
+            "starshape" -> (0 until 10).map { i -> val angle=-PI/2+i*PI/5;val size=if(i%2==0).5 else .22
+                (.5+cos(angle)*size).toFloat() to (.5+sin(angle)*size).toFloat() }
+            "trapezoid" -> listOf(.2f to 0f,.8f to 0f,1f to 1f,0f to 1f)
+            "parallelogram" -> listOf(.22f to 0f,1f to 0f,.78f to 1f,0f to 1f)
+            else -> listOf(0f to 0f,1f to 0f,1f to 1f,0f to 1f)
+        }
+        return polygon(normalized.map{(x,y)->vertex(left+x*w,top+y*h)})
+    }
+    private fun lerp(a: InkPoint,b: InkPoint,t: Float): InkPoint {
+        if(t<=0f)return a
+        if(t>=1f)return b
+        val pressure=a.pressure+(b.pressure-a.pressure)*t
+        val time=a.time+((b.time-a.time)*t).toLong()
+        val tilt=a.tilt+(b.tilt-a.tilt)*t
+        val orientation=a.orientation+(b.orientation-a.orientation)*t
+        fun optional(first: Float?, second: Float?) = if(first!=null&&second!=null)first+(second-first)*t else first?:second
+        val azimuth=optional(a.azimuth,b.azimuth);val tx=optional(a.tx,b.tx);val ty=optional(a.ty,b.ty)
+        val original=(a.original?.copyJson() ?: JSONObject()).put("p",pressure).put("t",time)
+            .put("tilt",tilt).put("orientation",orientation).put("pointerId",a.pointerId)
+        azimuth?.let{original.put("azimuth",it)};tx?.let{original.put("tx",it)};ty?.let{original.put("ty",it)}
+        return InkPoint(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,pressure,time,tilt,orientation,
+            a.pointerId,azimuth,tx,ty,original)
+    }
 
     /** Analytic segment/circle intersections preserve thin strokes with sparsely sampled points. */
     fun eraseParts(obj: JSONObject,center: InkPoint,radius: Float): List<JSONObject> {
@@ -98,6 +234,8 @@ object InkGeometry {
         }
         flush()
         return fragments.mapIndexed{index,fragment->obj.copyJson().put("id",if(index==0)obj.getString("id") else uid("stroke"))
+            .put("sourceStrokeId",obj.optString("sourceStrokeId",obj.getString("id"))).put("fragmentOrder",index)
+            .put("revision",obj.optLong("revision",0)+1)
             .put("rotation",0)
             .put("points",JSONArray(fragment.map{it.json()}))}
     }

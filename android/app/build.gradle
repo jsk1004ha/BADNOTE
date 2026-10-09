@@ -3,6 +3,8 @@ import java.util.Properties
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'com.google.devtools.ksp'
 }
 
 def signingProperties = new Properties()
@@ -13,15 +15,21 @@ android {
     namespace 'com.inkforge.notesstudio'
     compileSdk 36
     buildToolsVersion '36.1.0'
+    ndkVersion '28.2.13676358'
 
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 401
-        versionName '4.0.1'
+        versionCode 411
+        versionName '4.1.1-beta.1'
         testInstrumentationRunner 'com.inkforge.notesstudio.NativeSmokeInstrumentation'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments "-DPDFIUM_ROOT=${rootProject.file('../build/dependencies/pdfium-8086').absolutePath.replace('\\', '/')}"
+            }
         }
     }
 
@@ -67,11 +75,19 @@ android {
     }
 
     compileOptions {
+        coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = '17' }
-    buildFeatures { buildConfig true }
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+            buildStagingDirectory rootProject.file('../build/native-cmake-staging')
+        }
+    }
+    buildFeatures { buildConfig true; compose true }
     testOptions {
         unitTests.all { maxHeapSize = '96m' }
     }
@@ -87,14 +103,41 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    implementation 'androidx.room:room-runtime:2.8.5'
+    ksp 'androidx.room:room-compiler:2.8.5'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.11.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
     implementation 'androidx.core:core:1.17.0'
     implementation 'androidx.webkit:webkit:1.14.0'
+    implementation 'androidx.graphics:graphics-core:1.0.4'
+    implementation platform('androidx.compose:compose-bom:2026.06.01')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.activity:activity-compose:1.12.4'
     implementation 'com.google.mlkit:digital-ink-recognition:19.0.0'
     implementation 'com.google.mlkit:text-recognition:16.0.1'
     implementation 'com.google.mlkit:text-recognition-korean:16.0.1'
 }
 
 // The old WebView editor is no longer shipped. Only the bounded migration page is needed.
-android.sourceSets.main.assets.srcDirs = ['src/nativeAssets']
+android.sourceSets.main.assets.srcDirs = ['src/nativeAssets', layout.buildDirectory.dir('generated/pdfium-assets').get().asFile]
+
+def preparedPdfium = rootProject.file('../build/dependencies/pdfium-8086')
+def preparePdfium = tasks.register('preparePdfium') {
+    doLast {
+        def python = System.getenv('BADNOTE_PYTHON') ?: (System.getProperty('os.name').startsWith('Windows') ? 'python' : 'python3')
+        project.exec { commandLine python, rootProject.file('../tools/prepare_pdfium.py').absolutePath }
+        copy {
+            from new File(preparedPdfium, 'pdfium-notices.txt')
+            into layout.buildDirectory.dir('generated/pdfium-assets').get().asFile
+        }
+    }
+}
+tasks.configureEach {
+    if (name.startsWith('configureCMake') || name == 'preBuild' || (name.startsWith('merge') && name.endsWith('Assets')))
+        dependsOn preparePdfium
+}

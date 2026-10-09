@@ -18,8 +18,8 @@ class AppUpdater(private val activity:Activity){
         try{
             val data=connection.inputStream.bufferedReader().use{JSONObject(it.readText())}
             val version=data.optString("tag_name").removePrefix("v")
-            fun versionCode(s:String)=s.split('.','-').take(3).map{it.toIntOrNull()?:0}.fold(0L){a,n->a*1000+n}
-            if(versionCode(version)<=versionCode(BuildConfig.VERSION_NAME))return null
+            if(!shouldOfferRelease(version,BuildConfig.VERSION_NAME,
+                    data.optBoolean("prerelease"),data.optBoolean("draft")))return null
             val suffix=if(activity.packageName.startsWith("com.inkforge.note5"))"SideBySide.apk"else"Update.apk"
             val asset=data.array("assets").objects().firstOrNull{it.optString("name").endsWith(suffix)}?:return null
             return Release(version,asset.getString("name"),asset.getString("browser_download_url"),asset.optLong("size"))
@@ -42,5 +42,22 @@ class AppUpdater(private val activity:Activity){
         }
         val uri=FileProvider.getUriForFile(activity,"${activity.packageName}.fileprovider",file)
         activity.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+    }
+    companion object {
+        private val stableVersion = Regex("(?:v)?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)")
+        private val installedVersion = Regex("(?:v)?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*))?")
+
+        internal fun shouldOfferRelease(remote: String, installed: String, prerelease: Boolean, draft: Boolean): Boolean {
+            if (prerelease || draft) return false
+            val target = stableVersion.matchEntire(remote) ?: return false
+            val current = installedVersion.matchEntire(installed) ?: return false
+            for (index in 1..3) {
+                val next = target.groupValues[index].toLongOrNull() ?: return false
+                val existing = current.groupValues[index].toLongOrNull() ?: return false
+                if (next != existing) return next > existing
+            }
+            // A beta can move to the stable release of the same displayed version.
+            return current.groupValues[4].isNotEmpty()
+        }
     }
 }

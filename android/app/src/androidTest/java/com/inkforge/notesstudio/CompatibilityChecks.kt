@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.view.View
 import android.widget.TextView
 import androidx.core.graphics.Insets
+import androidx.core.view.DisplayCutoutCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONArray
@@ -32,20 +33,46 @@ object CompatibilityChecks {
             error("Timeout: $label")
         }
         ui {
-            val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+            // An attached view's API 29 cutout comes from its actual root window.
+            // Keep synthetic window values on an unattached root; real layout is checked below.
+            val root = android.widget.FrameLayout(activity)
+            RootSafeArea.install(root)
             val extra = (8*root.resources.displayMetrics.density).roundToInt()
-            fun insets(bars: Insets, cutout: Insets = Insets.NONE, keyboard: Insets = Insets.NONE) =
-                WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.systemBars(),bars)
+            fun insets(bars: Insets, cutout: Insets = Insets.NONE, keyboard: Insets = Insets.NONE): WindowInsetsCompat {
+                val builder = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.systemBars(),bars)
                     .setInsets(WindowInsetsCompat.Type.displayCutout(),cutout)
-                    .setInsets(WindowInsetsCompat.Type.ime(),keyboard).build()
+                    .setInsets(WindowInsetsCompat.Type.ime(),keyboard)
+                // ViewCompat round-trips through platform WindowInsets on these APIs.
+                if (android.os.Build.VERSION.SDK_INT < 30) builder.setSystemWindowInsets(bars)
+                // API 29 reads cutouts from the platform object, not setInsets overrides.
+                if (android.os.Build.VERSION.SDK_INT >= 29 && cutout != Insets.NONE)
+                    builder.setDisplayCutout(DisplayCutoutCompat(
+                        android.graphics.Rect(cutout.left,cutout.top,cutout.right,cutout.bottom), emptyList()))
+                return builder.build()
+            }
+            val types=WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
             val normal = insets(Insets.of(12,24,18,36),Insets.of(20,42,0,0))
+            val normalSafe=normal.getInsets(types)
+            check(normalSafe.left>=12 && normalSafe.top>=24 && normalSafe.right>=18 && normalSafe.bottom>=36)
+            if(android.os.Build.VERSION.SDK_INT>=29)check(normalSafe.left==20 && normalSafe.top==42)
             repeat(2) {
                 val consumed = ViewCompat.dispatchApplyWindowInsets(root,normal)
                 check(consumed.isConsumed)
-                check(root.paddingLeft==20 && root.paddingTop==42+extra && root.paddingRight==18 && root.paddingBottom==36+extra)
+                check(root.paddingLeft==normalSafe.left && root.paddingTop==normalSafe.top+extra &&
+                    root.paddingRight==normalSafe.right && root.paddingBottom==normalSafe.bottom+extra) {
+                    "Inset dispatch changed fixture: api=${android.os.Build.VERSION.SDK_INT}, expected=$normalSafe+$extra, actual=${root.paddingLeft},${root.paddingTop},${root.paddingRight},${root.paddingBottom}"
+                }
             }
-            ViewCompat.dispatchApplyWindowInsets(root,insets(Insets.of(12,24,18,36),Insets.of(20,42,0,0),Insets.of(0,0,0,260)))
-            check(root.paddingBottom==260+extra)
+            val withKeyboard=if(android.os.Build.VERSION.SDK_INT<30)
+                WindowInsetsCompat.Builder().setSystemWindowInsets(Insets.of(12,24,18,260)).build()
+            else insets(Insets.of(12,24,18,36),Insets.of(20,42,0,0),Insets.of(0,0,0,260))
+            val keyboardSafe=withKeyboard.getInsets(types)
+            check(keyboardSafe.bottom==260) { "Keyboard inset fixture unsupported: api=${android.os.Build.VERSION.SDK_INT}, safe=$keyboardSafe" }
+            ViewCompat.dispatchApplyWindowInsets(root,withKeyboard)
+            check(root.paddingBottom==keyboardSafe.bottom+extra) {
+                "Keyboard inset lost during dispatch: api=${android.os.Build.VERSION.SDK_INT}, expected=${keyboardSafe.bottom+extra}, actual=${root.paddingBottom}"
+            }
+            result.putString("safeAreaSynthetic", "api=${android.os.Build.VERSION.SDK_INT};normal=$normalSafe;keyboard=$keyboardSafe")
             ViewCompat.dispatchApplyWindowInsets(root,insets(Insets.of(80,0,30,0)))
             check(root.paddingLeft==80 && root.paddingRight==30 && root.paddingTop==extra && root.paddingBottom==extra)
             ViewCompat.requestApplyInsets(root)
@@ -75,6 +102,163 @@ object CompatibilityChecks {
             }
         }
         val repository = activity.repository
+        val assetBaseline=repository.assetDirectory.list()?.toSet().orEmpty()
+        val createdAssets=mutableListOf<String>()
+        try {
+            val opaque=byteArrayOf(0,1,2,3,127,-1)
+            val opaqueId=opaque.inputStream().use{repository.storeAsset(it,"bin")}
+            createdAssets+=opaqueId
+            check(repository.asset(opaqueId).readBytes().contentEquals(opaque)) { "Opaque asset bytes changed" }
+            val picture=Bitmap.createBitmap(16,12,Bitmap.Config.ARGB_8888)
+            val png=java.io.ByteArrayOutputStream().use{output->
+                try{check(picture.compress(Bitmap.CompressFormat.PNG,100,output));output.toByteArray()}
+                finally{picture.recycle()}
+            }
+            val pngId=png.inputStream().use{repository.storeAsset(it,"png") {pending->
+                check(pending.name.endsWith(".pending")&&!repository.asset(pending.name.removeSuffix(".pending")).exists()) {
+                    "Image validation ran after finalization"
+                }
+                NoteRepository.checkedImageSize(pending);Unit
+            }}
+            createdAssets+=pngId
+            check(repository.asset(pngId).readBytes().contentEquals(png)) { "Image asset bytes changed" }
+            check(runCatching{png.copyOf(png.size-12).inputStream().use{repository.storeAsset(it,"png") {pending->NoteRepository.checkedImageSize(pending)}}}.isFailure) {
+                "Truncated PNG was finalized"
+            }
+            val corruptPng=png.copyOf().apply{this[0]=0}
+            check(runCatching{corruptPng.inputStream().use{repository.storeAsset(it,"png") {pending->NoteRepository.checkedImageSize(pending)}}}.isFailure) {
+                "Corrupt PNG was finalized"
+            }
+            check(runCatching{ByteArray(0).inputStream().use{repository.storeAsset(it,"png") {pending->NoteRepository.checkedImageSize(pending)}}}.isFailure) {
+                "Empty image was finalized"
+            }
+            val rejected=uid("rejected")+".bin"
+            check(runCatching{opaque.inputStream().use{repository.storeAssetAtId(it,rejected){throw IllegalArgumentException("reject")}}}.isFailure)
+            check(!repository.asset(rejected).exists()&&!repository.asset("$rejected.pending").exists())
+            val wrongDigest=uid("checksum")+".bin"
+            repository.asset("$wrongDigest.pending").writeBytes(opaque)
+            check(runCatching{repository.finalizePendingAsset(wrongDigest,opaque.size.toLong(),ByteArray(32))}.isFailure)
+            check(!repository.asset(wrongDigest).exists()&&!repository.asset("$wrongDigest.pending").exists()) {
+                "Checksum failure left an asset"
+            }
+            val missingBeforeRename=uid("rename-failure")+".bin"
+            check(runCatching { opaque.inputStream().use { repository.storeAssetAtId(it,missingBeforeRename) { source ->
+                check(source.delete()) // Force rename to fail after this writer reserves the final name.
+            } } }.isFailure)
+            check(!repository.asset(missingBeforeRename).exists()&&!repository.asset("$missingBeforeRename.pending").exists()) {
+                "Failed rename left an empty final-name reservation"
+            }
+            val failing=object:java.io.InputStream(){var reads=0
+                override fun read():Int=throw java.io.IOException("injected read failure")
+                override fun read(bytes:ByteArray,offset:Int,length:Int):Int {
+                    if(reads++==0){bytes[offset]=42;return 1}
+                    throw java.io.IOException("injected read failure")
+                }
+            }
+            val beforeFailure=repository.assetDirectory.list()?.toSet().orEmpty()
+            check(runCatching{failing.use{repository.storeAsset(it,"bin")}}.isFailure)
+            check(repository.assetDirectory.list()?.toSet().orEmpty()==beforeFailure) { "Failed read left an asset" }
+            val collision=uid("collision")+".bin"
+            val original=byteArrayOf(9,8,7)
+            repository.asset(collision).writeBytes(original)
+            try{check(runCatching{opaque.inputStream().use{repository.storeAssetAtId(it,collision)}}.isFailure)
+                check(repository.asset(collision).readBytes().contentEquals(original)) { "ID collision replaced an asset" }}
+            finally{repository.asset(collision).delete()}
+            val interruptedReservation=uid("interrupted")+".bin"
+            check(repository.asset(interruptedReservation).createNewFile())
+            try {
+                val documentsBefore=repository.documents().map { it.id }.toSet()
+                check(runCatching{opaque.inputStream().use{repository.storeAssetAtId(it,interruptedReservation)}}.isFailure)
+                check(repository.asset(interruptedReservation).length()==0L &&
+                    !repository.asset("$interruptedReservation.pending").exists() &&
+                    repository.documents().map { it.id }.toSet()==documentsBefore) {
+                    "Interrupted reservation was adopted or attached to a document"
+                }
+            } finally { repository.asset(interruptedReservation).delete() }
+            val finalizationRace=uid("race")+".bin"
+            try{check(runCatching{opaque.inputStream().use{repository.storeAssetAtId(it,finalizationRace){
+                repository.asset(finalizationRace).writeBytes(original)
+            }}}.isFailure)
+                check(repository.asset(finalizationRace).readBytes().contentEquals(original)) { "Finalization replaced an asset" }
+                check(!repository.asset("$finalizationRace.pending").exists())}
+            finally{repository.asset(finalizationRace).delete()}
+            fun legacy(mime:String, bytes:ByteArray, invalidPage:Boolean=false):ByteArray {
+                val source="data:$mime;base64,${android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)}"
+                val page=json("id" to "legacy-page", "objects" to JSONArray().put(json("id" to "legacy-image", "type" to "image", "src" to source)))
+                if(invalidPage)page.put("backgroundAssetId","missing-pdf")
+                return json("title" to "Legacy asset", "pages" to JSONArray().put(page)).toString().toByteArray(Charsets.UTF_8)
+            }
+            fun acceptedLegacy(mime:String, bytes:ByteArray) {
+                val imported=repository.importLegacy(legacy(mime,bytes).inputStream())
+                val referenced=mutableSetOf<String>()
+                try {
+                    val importedPage=requireNotNull(repository.page(repository.pageIds(imported.id).single()))
+                    NoteRepository.collectAssets(importedPage.json(),referenced)
+                    val id=importedPage.objects.single().getString("src").removePrefix("asset:")
+                    check(repository.asset(id).readBytes().contentEquals(bytes)) { "Legacy asset bytes changed: $mime" }
+                    check(id.endsWith(".${NoteRepository.extension(mime)}")) { "Legacy asset MIME extension changed: $mime" }
+                    check(referenced==setOf(id)) { "Legacy asset reference was not remapped" }
+                } finally {
+                    repository.pageIds(imported.id).forEach { pageId ->
+                        repository.page(pageId)?.let { NoteRepository.collectAssets(it.json(),referenced) }
+                    }
+                    repository.deleteDocument(imported.id)
+                    referenced.forEach { repository.asset(it).delete() }
+                }
+            }
+            acceptedLegacy("image/png",png)
+            acceptedLegacy("application/x-legacy-opaque",opaque)
+            acceptedLegacy("audio/ogg",opaque) // Historical audio bytes remain importable for later playback/error handling.
+            val protectedId=uid("legacy-protected")+".bin"
+            repository.asset(protectedId).writeBytes(original)
+            try {
+                fun rejectedLegacy(bytes:ByteArray,label:String) {
+                    val docsBefore=repository.documents().map { it.id }.toSet()
+                    val assetsBefore=repository.assetDirectory.list()?.toSet().orEmpty()
+                    check(runCatching { repository.importLegacy(bytes.inputStream()) }.isFailure) { "$label legacy asset was imported" }
+                    check(repository.documents().map { it.id }.toSet()==docsBefore &&
+                        repository.assetDirectory.list()?.toSet().orEmpty()==assetsBefore &&
+                        repository.asset(protectedId).readBytes().contentEquals(original)) {
+                        "$label legacy import left a document/asset or changed another asset"
+                    }
+                }
+                rejectedLegacy(legacy("image/png",ByteArray(0)),"empty raster")
+                rejectedLegacy(legacy("image/png",png.copyOf(png.size-12)),"truncated raster")
+                rejectedLegacy(legacy("image/png",png.copyOf().apply { this[0]=0 }),"corrupt raster")
+                rejectedLegacy(legacy("image/png",png,true),"post-finalization page failure")
+                rejectedLegacy("""{"src":"data:image/png;base64,@@@","pages":[{"id":"p"}]}""".toByteArray(),"invalid base64")
+                rejectedLegacy("""{"src":"data:image/png;base64,${android.util.Base64.encodeToString(png,android.util.Base64.NO_WRAP)}","pages":[]}""".toByteArray(),"no pages")
+                rejectedLegacy("""{"src":"data:image/png;base64,${android.util.Base64.encodeToString(png,android.util.Base64.NO_WRAP)}","pages":[""".toByteArray(),"parser failure")
+            } finally { repository.asset(protectedId).delete() }
+            check(repository.assetDirectory.list()?.toSet().orEmpty()==assetBaseline+createdAssets) { "Asset validation left a pending file" }
+        }finally{createdAssets.forEach{repository.asset(it).delete()}}
+        val recordingDoc=repository.create("Invalid recording status", "root", "blank")
+        val invalidRecordingId=uid("invalid-recording")+".m4a"
+        repository.asset("$invalidRecordingId.pending").writeBytes(byteArrayOf(1,2,3))
+        try {
+            val enqueue=MainActivity::class.java.getDeclaredMethod("enqueueStoppedRecording",
+                AudioController.PendingRecording::class.java,String::class.java).apply{isAccessible=true}
+            val savingField=MainActivity::class.java.getDeclaredField("saving").apply{isAccessible=true}
+            val savesField=MainActivity::class.java.getDeclaredField("saves").apply{isAccessible=true}
+            val statusField=MainActivity::class.java.getDeclaredField("status").apply{isAccessible=true}
+            val failedField=MainActivity::class.java.getDeclaredField("saveFailed").apply{isAccessible=true}
+            ui { enqueue.invoke(activity,AudioController.PendingRecording(invalidRecordingId,"",0,1000,1000),recordingDoc.id) }
+            await("invalid recording save queue") { ui {
+                !savingField.getBoolean(activity) && (savesField.get(activity) as Collection<*>).isEmpty()
+            } }
+            test.waitForIdleSync()
+            check(ui { (statusField.get(activity) as TextView).text.toString().startsWith("녹음 저장 실패:") &&
+                !failedField.getBoolean(activity) }) { "Invalid AAC failure was replaced by generic saved status or blocked further edits" }
+            check(!repository.asset(invalidRecordingId).exists()&&!repository.asset("$invalidRecordingId.pending").exists()) {
+                "Invalid AAC recording left a final or pending file"
+            }
+            check(repository.document(recordingDoc.id)?.data?.array("audio")?.length()==0) {
+                "Invalid AAC recording inserted a document reference"
+            }
+        } finally {
+            repository.asset("$invalidRecordingId.pending").delete()
+            repository.deleteDocument(recordingDoc.id)
+        }
         val doc = repository.create("asset: allocation","root","blank")
         doc.data.put("settings",json("pageMode" to "single"))
         repository.putDocument(doc)
@@ -127,7 +311,7 @@ object CompatibilityChecks {
         check(imported.title==doc.title)
         check(repository.page(repository.pageIds(imported.id).first())!!.objects.last().optString("text")=="data: experiment results")
         result.putString("compatibility","PASS: literal-prefix archive; rotated editor image, PNG/PDF pixels; document mode persisted and reopened")
-        result.putString("safeArea","PASS: system bars, cutout, side bars, IME, repeat dispatch, 8dp breathing room, consumed child insets")
+        result.putString("safeArea","PASS: supported system bars/cutout/IME, side bars, repeat dispatch, 8dp breathing room, consumed child insets")
         result.putString("toolbarLayout","PASS: aligned icon centers; single-line pen name; full visible narrow dock controls; actual system-bar bounds")
     }
 }

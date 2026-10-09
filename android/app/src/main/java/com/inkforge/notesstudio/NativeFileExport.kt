@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
 import java.util.Locale
@@ -30,15 +31,31 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
         // Retain shared files for recipients that read asynchronously. Expire after seven days.
         directory.listFiles()?.filter{System.currentTimeMillis()-it.lastModified()>7L*86400000}?.forEach{it.delete()}
         val name=doc.title.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"),"_").take(80).ifBlank{"노트"}
-        val file=File(directory,"$name-${System.currentTimeMillis()}.$format")
+        val file=File(directory,"$name-${System.currentTimeMillis()}${if(format=="legacy")"-3x.ifnote"else".$format"}")
         repository.executor.execute{
             try{
                 when(format){
                     "ifnote"->repository.export(doc.id,file,{cancelled.get()})
+                    "legacy"->repository.exportLegacy(doc.id,file,{cancelled.get()})
                     "pdf"->StreamingPdf.write(repository,doc.id,file,{cancelled.get()})
                     "png"->StreamingPdf.render(repository,requireNotNull(repository.page(requireNotNull(currentPage))),1800).let{bmp->
                         try{file.outputStream().use{require(bmp.compress(Bitmap.CompressFormat.PNG,100,it))}}finally{bmp.recycle()}}
                     "xfdf"->XfdfExport.write(repository,doc.id,file)
+                    "json"->{
+                        val page=requireNotNull(repository.page(requireNotNull(currentPage))){"현재 페이지가 없습니다."}
+                        val result=requireNotNull(repository.ocrResult(page.id)){"먼저 현재 페이지의 손글씨 OCR을 실행해 주세요."}
+                        require(result.optString("documentId")==doc.id){"OCR 결과의 문서가 다릅니다."}
+                        val sessions=page.objects.mapNotNull{it.optString("captureSessionId").takeIf(String::isNotBlank)}.toSet()
+                        val diagnostic=json("schemaVersion" to 1,"sampleId" to java.util.UUID.randomUUID().toString(),
+                            "documentId" to doc.id,"pageId" to page.id,"pageDigest" to result.getString("pageDigest"),
+                            "provenance" to json("kind" to "real","writerId" to "",
+                                "sessionId" to sessions.singleOrNull().orEmpty(),"deviceId" to "",
+                                "language" to result.optString("policy")),
+                            "truthRegions" to JSONArray(),"result" to result,
+                            "measurements" to (result.optJSONObject("measurements")?:JSONObject()),
+                            "sourcePage" to page.json())
+                        FileOutputStream(file).use{out->out.write(diagnostic.toString().toByteArray(Charsets.UTF_8));out.fd.sync()}
+                    }
                     else->error("지원하지 않는 파일 형식")
                 }
                 if(cancelled.get())throw InterruptedIOException("내보내기를 취소했습니다.")
@@ -48,7 +65,7 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
                     if(share) share(file) else {
                         pending=file
                         try{activity.startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                            .setType(mime(file)).putExtra(Intent.EXTRA_TITLE,"$name.$format"),REQUEST_SAVE)}
+                            .setType(mime(file)).putExtra(Intent.EXTRA_TITLE,if(format=="legacy")"$name-3x.ifnote"else"$name.$format"),REQUEST_SAVE)}
                         catch(e:Exception){pending=null;file.delete();message(e.message?:"저장 창을 열 수 없습니다.")}
                     }
                 }
@@ -86,7 +103,7 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
             return Intent(Intent.ACTION_SEND).setType(mime(file)).putExtra(Intent.EXTRA_STREAM,uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply{clipData=ClipData.newRawUri(file.name,uri)}
         }
-        fun mime(file:File)=when(file.extension){"pdf"->"application/pdf";"png"->"image/png";"xfdf"->"application/vnd.adobe.xfdf";else->"application/octet-stream"}
+        fun mime(file:File)=when(file.extension){"pdf"->"application/pdf";"png"->"image/png";"xfdf"->"application/vnd.adobe.xfdf";"json"->"application/json";else->"application/octet-stream"}
     }
 }
 

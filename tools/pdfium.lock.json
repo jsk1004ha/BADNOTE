@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "project": "bblanchon/pdfium-binaries",
+  "release": "chromium/8086",
+  "pdfiumVersion": "157.0.8086.0",
+  "releaseUrl": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8086",
+  "minAndroidApi": 23,
+  "archives": [
+    {
+      "abi": "arm64-v8a",
+      "filename": "pdfium-android-arm64.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8086/pdfium-android-arm64.tgz",
+      "sha256": "f6ea29495d64795b9af61e41768030795b45f82a21415498ee4ab2c61e135756",
+      "size": 3431236
+    },
+    {
+      "abi": "armeabi-v7a",
+      "filename": "pdfium-android-arm.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8086/pdfium-android-arm.tgz",
+      "sha256": "fdf3a2b329759f5ba8a9997329ae79dad3570b1d90ecde60b5a56f1a9ff6a98c",
+      "size": 2851537
+    },
+    {
+      "abi": "x86_64",
+      "filename": "pdfium-android-x64.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8086/pdfium-android-x64.tgz",
+      "sha256": "772870e7ed846097d779aa0163f8abfd08a13257e16edf0e1cd1a364f11c8c3c",
+      "size": 3571009
+    }
+  ]
+}

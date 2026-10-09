@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -19,6 +20,12 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.view.*
 import android.widget.*
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.WindowCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,17 +33,24 @@ import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.*
 
-class MainActivity:Activity(){
+class MainActivity:ComponentActivity(){
     lateinit var repository:NoteRepository;private set
     var inkView:InkCanvasView?=null;private set
+    private var inkFrontBuffer:View?=null
     private lateinit var root:FrameLayout
     private lateinit var body:LinearLayout
     private lateinit var status:TextView
+    private var ocrStatusRow:LinearLayout?=null
+    private var ocrStatusText:TextView?=null
+    private var ocrCancelButton:View?=null
+    private var manualOcrPageId:String?=null
+    private var ocrUiToken=0L
     private lateinit var blocker:LinearLayout
     private lateinit var blockerLabel:TextView
     private lateinit var fileExport:NativeFileExport
     private lateinit var audio:AudioController
-    private val recognition=RecognitionService()
+    private val recognition by lazy { RecognitionService((getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass<=128) }
+    private lateinit var pageOcr:PageOcrCoordinator
     private val network=Executors.newSingleThreadExecutor()
     private val handler=Handler(Looper.getMainLooper())
     private var migration:LegacyMigration?=null
@@ -57,10 +71,12 @@ class MainActivity:Activity(){
     private var importMode="note"
     private var previousReadOnly=false
     private var ocrTask:Runnable?=null
+    private val pageEditEpoch=HashMap<String,Long>()
     @Volatile private var recognitionBusy=false
     private val openTabs=linkedSetOf<String>()
-    private data class Save(val block:()->Unit,val complete:()->Unit)
+    private data class Save(val block:()->Unit,val complete:()->Unit,val reportSaved:()->Boolean={true})
     private val saves=ArrayDeque<Save>()
+    private val pendingRecordings=mutableSetOf<AudioController.PendingRecording>()
     private var saving=false
     private var saveFailed=false
     private var libraryGeneration=0
@@ -88,10 +104,17 @@ class MainActivity:Activity(){
         WindowCompat.getInsetsController(window,window.decorView).apply{
             isAppearanceLightStatusBars=false;isAppearanceLightNavigationBars=false
         }
-        if(Build.VERSION.SDK_INT>=33)onBackInvokedDispatcher.registerOnBackInvokedCallback(
-            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT){navigateBack()}
+        onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true){
+            override fun handleOnBackPressed(){navigateBack()}
+        })
         repository=NoteRepository(this)
+        pageOcr=PageOcrCoordinator(repository,recognition)
+        recognition.onModelState={tag,state->runOnUiThread{if(manualOcrPageId!=null&&editorNavbar!=null)
+            showOcrStatus("인식 모델 $tag · ${when(state){
+                "checking"->"설치 상태 확인 중";"notDownloaded"->"기기에 없음";"downloading"->"다운로드 중";"ready"->"준비됨";else->"준비 실패"}}",true)}}
+        repository.executor.execute{repository.migrateLegacyOcr();PdfImporter.resumePending(repository)}
         audio=AudioController(this,repository)
+        audio.onPlaybackError=::message
         makeRoot()
         fileExport=NativeFileExport(this,repository,::message){value->setBusy(value,"내보낼 파일을 준비하고 있습니다.")}
         fileExport.restore(savedInstanceState?.getString("pendingExport"))
@@ -138,6 +161,17 @@ class MainActivity:Activity(){
         root.addView(toast,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(24);leftMargin=dp(16);rightMargin=dp(16)})
         handler.postDelayed({root.removeView(toast)},2400)
     }
+    private fun showOcrStatus(value:String,cancellable:Boolean=false){
+        ocrStatusText?.text=t(value)
+        ocrStatusRow?.visibility=View.VISIBLE
+        ocrCancelButton?.visibility=if(cancellable)View.VISIBLE else View.GONE
+    }
+    private fun cancelManualOcr(label:String){
+        val pageId=manualOcrPageId?:return
+        manualOcrPageId=null;ocrUiToken++
+        pageOcr.cancel(pageId)
+        showOcrStatus(label)
+    }
     private fun setBusy(value:Boolean,label:String="처리 중…"){
         busy=value;blockerLabel.text=t(label);blocker.visibility=if(value)View.VISIBLE else View.GONE
         if(value){previousReadOnly=inkView?.readOnly?:false;inkView?.finishContact();inkView?.readOnly=true}else inkView?.readOnly=previousReadOnly||saveFailed
@@ -150,7 +184,11 @@ class MainActivity:Activity(){
         loadDictionary()
     }
     private fun loadDictionary(){
-        dictionary=try{assets.open("locales/${settings.optString("language","ko")}.json").bufferedReader().use{JSONObject(it.readText())}}catch(_:Exception){JSONObject()}
+        val language=settings.optString("language","ko")
+        dictionary=try{assets.open("locales/$language.json").bufferedReader().use{JSONObject(it.readText())}}catch(_:Exception){JSONObject()}
+        val additions=runCatching{assets.open("locales/native-extra.json").bufferedReader().use{
+            JSONObject(it.readText()).optJSONObject(language)}}.getOrNull()
+        additions?.keys()?.forEach{key->if(!dictionary.has(key))dictionary.put(key,additions.getString(key))}
     }
     private fun saveSettings(){val copy=settings.toString();enqueueSave({repository.setting("preferences",copy,true)})}
     private fun startMigration(){
@@ -163,29 +201,32 @@ class MainActivity:Activity(){
         }
         val web=requireNotNull(migration).start();root.addView(web,0,FrameLayout.LayoutParams(1,1))
     }
-    private fun enqueueSave(block:()->Unit,complete:()->Unit={}){saves.addLast(Save(block,complete));drainSaves()}
+    private fun enqueueSave(block:()->Unit,complete:()->Unit={}){enqueueSave(Save(block,complete))}
+    private fun enqueueSave(work:Save){saves.addLast(work);drainSaves()}
     private fun drainSaves(){
         if(saving||saveFailed||saves.isEmpty())return
         saving=true;status.text=t("저장 중…")
         val work=saves.first()
         repository.executor.execute{
-            try{work.block();runOnUiThread{saving=false;saves.removeFirst();work.complete();if(saves.isEmpty())status.text=t("저장됨");drainSaves()}}
+            try{work.block();runOnUiThread{saving=false;saves.removeFirst();work.complete();if(saves.isEmpty()&&work.reportSaved())status.text=t("저장됨");drainSaves()}}
             catch(e:Exception){runOnUiThread{saving=false;saveFailed=true;inkView?.readOnly=true;status.text="저장 실패: ${e.message}"
                 AlertDialog.Builder(this).setTitle("저장하지 못했습니다.").setMessage("화면의 필기는 유지됩니다. 저장 공간을 확인한 뒤 다시 시도해 주세요.\n${e.message}")
                     .setPositiveButton("다시 저장"){_,_->saveFailed=false;inkView?.readOnly=false;drainSaves()}.setCancelable(false).show()}}
         }
     }
     private fun afterSaved(action:()->Unit){if(saves.isEmpty()&&!saving&&!saveFailed)action()else enqueueSave({},action)}
-    private fun <T> work(label:String,operation:()->T,complete:(T)->Unit){
+    private fun <T> work(label:String,operation:()->T,abandoned:(T)->Unit={},complete:(T)->Unit){
         setBusy(true,label)
         afterSaved{repository.executor.execute{
-            try{val result=operation();runOnUiThread{setBusy(false);if(!isFinishing&&!isDestroyed)complete(result)}}
+            try{val result=operation();runOnUiThread{setBusy(false);if(!isFinishing&&!isDestroyed)complete(result)else abandoned(result)}}
             catch(e:Exception){runOnUiThread{setBusy(false);message(e.message?:"작업 실패")}}
         }}
     }
     private fun clearScreen(){
+        cancelManualOcr("손글씨 인식을 취소했습니다.")
+        ocrStatusRow=null;ocrStatusText=null;ocrCancelButton=null
         closeSheet();editorSurface=null;editorNavbar=null;activeDock=null;undoPill=null;pageSidebar=null;searchDrawer=null;zoomLabel=null;pageLabel=null;selectionBar=null
-        ocrTask?.let{handler.removeCallbacks(it)};inkView?.finishContact();inkView?.close();inkView=null;body.removeAllViews()
+        ocrTask?.let{handler.removeCallbacks(it)};inkView?.finishContact();inkView?.close();inkView=null;inkFrontBuffer=null;body.removeAllViews()
         (status.parent as? ViewGroup)?.removeView(status)
     }
     private fun titleRow(title:String,back:(()->Unit)?=null):LinearLayout{
@@ -196,6 +237,70 @@ class MainActivity:Activity(){
     }
 
     fun showLibrary(){
+        if(audio.recording)stopRecording()
+        clearScreen();document=null;ids=emptyList();metas=emptyList()
+        enqueueSave({repository.setting("last-open-document","",true)})
+        body.setBackgroundColor(ui.color("#181818"))
+        val generation=++libraryGeneration
+        val narrow=resources.configuration.screenWidthDp<=840
+        val allFolders=folders.objects().map { item ->
+            val id=item.optString("id")
+            LibraryFolderUi(id,if(id in setOf("root","study","work"))t(item.optString("title")) else item.optString("title"),item.optString("parentId","root"),
+                ComposeColor(runCatching { ui.color(item.optString("color","#67c8ff")) }.getOrDefault(ui.accent)),0)
+        }
+        val path=mutableListOf<LibraryFolderUi>()
+        var node=allFolders.firstOrNull{it.id==folder}
+        val visited=mutableSetOf<String>()
+        while(node!=null&&node.id!="root"&&visited.add(node.id)){
+            path.add(0,node);node=allFolders.firstOrNull{it.id==node.parentId}
+        }
+        val active=allFolders.firstOrNull{it.id==folder}
+        val title=if(libraryFilter=="all"&&folder!="root")active?.title?:t("문서")
+            else t(mapOf("all" to "문서","favorite" to "즐겨찾기","shared" to "공유됨",
+                "templates" to "템플릿","trash" to "휴지통")[libraryFilter]?:"문서")
+        val state=mutableStateOf(LibraryUiState(title,folder,libraryFilter,query,allFolders,path,
+            settings.optBoolean("listMode"),settings.optString("librarySort") == "title",
+            selectionMode,selectedDocuments.toSet(),narrow,globalSearchOpen))
+        val documentState=mutableStateOf<List<LibraryDocumentUi>>(emptyList())
+        val compose=ComposeView(this).apply{
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setContent { NativeLibraryScreen(state.value,documentState.value,
+                {id,cover->thumbnail(id,null).apply{coverColor=cover}},
+                {name,tint,size->ui.icon(name,tint,size)},::t,
+                onQuery={query=it},
+                onSearch={globalSearchOpen=!globalSearchOpen;showLibrary()},
+                onFilter={libraryFilter=it;selectionMode=false;selectedDocuments.clear();showLibrary()},
+                onFolder={folder=it;libraryFilter="all";showLibrary()},
+                onFolderMenu={id->folders.objects().firstOrNull{it.optString("id")==id}?.let(::folderMenu)},
+                onNewFolder={newFolder()},onNewNote={newNote(it)},
+                onDocument={id->if(selectionMode){if(!selectedDocuments.add(id))selectedDocuments.remove(id);showLibrary()}
+                    else openDocument(id)},
+                onDocumentMenu={id->documentState.value.firstOrNull{it.document.id==id}?.let{documentMenu(it.document)}},
+                onFavorite={id->documentState.value.firstOrNull{it.document.id==id}?.let{item->
+                    mutateDocument(item.document){put("favorite",!item.document.favorite)}}},
+                onSelect={id->if(!selectedDocuments.add(id))selectedDocuments.remove(id);showLibrary()},
+                onSelectionMode={selectionMode=!selectionMode;selectedDocuments.clear();showLibrary()},
+                onSelectedTrash={val selected=selectedDocuments.toSet();confirm("휴지통으로 이동","${selected.size}개 문서를 이동할까요?"){
+                    work("문서를 이동하는 중…",{repository.documents().filter{it.id in selected}.forEach{
+                        repository.putDocument(DocumentInfo(it.id,it.data.put("trashed",true)))
+                    }}){selectedDocuments.clear();selectionMode=false;showLibrary()}}},
+                onSort={settings.put("librarySort",if(settings.optString("librarySort")=="title")"date" else "title");saveSettings();showLibrary()},
+                onListMode={settings.put("listMode",!settings.optBoolean("listMode"));saveSettings();showLibrary()},
+                onSettings={showSettings()},onGuide={gestureGuide()}) }
+        }
+        body.addView(compose,LinearLayout.LayoutParams(-1,0,1f))
+        repository.executor.execute{
+            val docs=repository.documents()
+            val counts=docs.filter{!it.trashed}.groupingBy{it.folder}.eachCount()
+            val rows=docs.map{LibraryDocumentUi(it,formatDocumentDate(it.data),repository.pageIds(it.id).size)}
+            runOnUiThread{if(generation==libraryGeneration&&document==null){
+                documentState.value=rows
+                state.value=state.value.copy(folders=allFolders.map{it.copy(count=counts[it.id]?:0)})
+            }}
+        }
+    }
+
+    private fun showLibraryLegacy(){
         if(audio.recording)stopRecording()
         clearScreen();document=null;ids=emptyList();metas=emptyList()
         enqueueSave({repository.setting("last-open-document","",true)})
@@ -224,7 +329,7 @@ class MainActivity:Activity(){
         top.addView(ui.iconButton("search","노트 검색",Color.WHITE){globalSearchOpen=!globalSearchOpen;showLibrary()})
         top.addView(ui.iconButton("settings","설정",Color.WHITE){showSettings()},LinearLayout.LayoutParams(dp(44),dp(44)).apply{leftMargin=dp(6)})
         main.addView(top,LinearLayout.LayoutParams(-1,dp(if(narrow)48 else 54)));main.addView(ui.line(ui.color("#11ffffff")))
-        val search=ui.field(query,"제목, 손글씨 OCR, 텍스트, 수식 검색",50).apply{setTextColor(Color.WHITE);background=ui.rounded(ui.color("#262626"),14f,ui.color("#14ffffff"));visibility=if(globalSearchOpen||query.isNotBlank())View.VISIBLE else View.GONE}
+        val search=ui.field(query,"노트 검색",50).apply{setTextColor(Color.WHITE);background=ui.rounded(ui.color("#262626"),14f,ui.color("#14ffffff"));visibility=if(globalSearchOpen||query.isNotBlank())View.VISIBLE else View.GONE}
         main.addView(search,LinearLayout.LayoutParams(-1,dp(50)).apply{if(search.visibility==View.VISIBLE)topMargin=dp(12)})
         val commands=ui.row();val crumbs=ui.row()
         crumbs.addView(ui.text("문서",15f,ui.color("#f0f0f0"),true).apply{setOnClickListener{folder="root";filter("all")}})
@@ -404,14 +509,27 @@ class MainActivity:Activity(){
         }
         val navbar=ui.row().apply{setPadding(dp(if(narrow)4 else 12),0,dp(if(narrow)4 else 12),0);setBackgroundColor(ui.blue)}
         editorNavbar=navbar;body.addView(navbar,LinearLayout.LayoutParams(-1,dp(if(narrow)58 else 62)))
+        val ocrRow=ui.row().apply{setBackgroundColor(ui.color("#edf3f8"));visibility=View.GONE}
+        ocrStatusRow=ocrRow
+        val ocrLabel=ui.text("",12f,ui.ink).apply{setPadding(dp(16),dp(5),dp(4),dp(5));
+            gravity=Gravity.CENTER_VERTICAL;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}
+        ocrStatusText=ocrLabel
+        ocrRow.addView(ocrLabel,LinearLayout.LayoutParams(0,dp(34),1f))
+        ocrCancelButton=ui.iconButton("close","손글씨 인식 취소",ui.ink,30,30,16){
+            cancelManualOcr("손글씨 인식을 취소했습니다.")
+        }.also{it.visibility=View.GONE;ocrRow.addView(it,LinearLayout.LayoutParams(dp(30),dp(30)).apply{rightMargin=dp(8)})}
+        body.addView(ocrRow,LinearLayout.LayoutParams(-1,dp(34)))
         val surface=FrameLayout(this);editorSurface=surface;body.addView(surface,LinearLayout.LayoutParams(-1,0,1f))
         val canvas=InkCanvasView(this,repository);inkView=canvas
         applySettings(canvas)
         canvas.tool=runCatching{InkCanvasView.Tool.valueOf(settings.optString("activeTool","LASSO"))}.getOrDefault(InkCanvasView.Tool.LASSO)
         if(canvas.tool==InkCanvasView.Tool.HIGHLIGHTER)canvas.inkColor=settings.optString("highlighterColor","#f5df39")
         if(canvas.tool==InkCanvasView.Tool.TAPE)canvas.inkColor=settings.optString("tapeColor","#4c91dd")
-        canvas.onPageChanged={position->updatePageLabel();rememberPosition(position);scheduleOcr()}
+        canvas.onPageChanged={position->if(manualOcrPageId!=null&&canvas.currentPage?.id!=manualOcrPageId)
+            cancelManualOcr("다른 페이지로 이동해 인식을 취소했습니다.")
+            updatePageLabel();rememberPosition(position);scheduleOcr()}
         canvas.onEdit={pageId,change,positions->
+            invalidateOcr(pageId)
             val documentId=doc.id;enqueueSave({repository.commit(documentId,pageId,change,positions)})
             thumbnailCache.remove(pageId);thumbnailCache.remove("doc:$documentId");scheduleOcr();updateUndoPill()
         }
@@ -426,6 +544,12 @@ class MainActivity:Activity(){
             renderEditorToolbar();renderActiveDock();settings.put("activeTool",canvas.tool.name);saveSettings()
         }
         canvas.onViewportChanged={updatePageLabel()}
+        if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S){
+            val front=InkFrontBuffer(this,{canvas.frontBufferPresented(it)},{canvas.frontBufferRecreated()})
+            inkFrontBuffer=front
+            canvas.attachFrontBuffer(front)
+            surface.addView(front,FrameLayout.LayoutParams(-1,-1))
+        }
         surface.addView(canvas,FrameLayout.LayoutParams(-1,-1))
         val pill=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(4),0,dp(4),0);background=ui.rounded(ui.color("#bf575758"),20f);elevation=dp(8).toFloat()};undoPill=pill
         surface.addView(pill,FrameLayout.LayoutParams(dp(if(narrow)102 else 146),dp(if(narrow)48 else 68),if(narrow)Gravity.BOTTOM or Gravity.LEFT else Gravity.TOP or Gravity.LEFT).apply{leftMargin=dp(if(narrow)8 else 13);if(narrow)bottomMargin=dp(12)else topMargin=dp(18)})
@@ -579,8 +703,17 @@ class MainActivity:Activity(){
         val content=showSheet("페이지 레이아웃","${current+1}페이지")
         menuItem(content,"이 페이지로 이동","eye"){inkView?.goTo(current)}
         menuItem(content,if(metas[current].optBoolean("bookmarked"))"북마크 해제"else"북마크","bookmark"){
-            val meta=metas[current].copyJson().put("bookmarked",!metas[current].optBoolean("bookmarked"));enqueueSave({repository.putPageMeta(pageId,meta)}){metas=metas.toMutableList().apply{set(current,meta)};inkView?.currentPage?.takeIf{it.id==pageId}?.meta?.put("bookmarked",meta.optBoolean("bookmarked"));renderSidebar()}}
-        menuItem(content,"페이지 복제","duplicate"){work("페이지 복제 중…",{val source=requireNotNull(repository.page(pageId));repository.addPage(doc.id,NotePage(uid("page"),source.meta.copyJson(),source.objects.map{it.copyJson().put("id",uid("obj"))}.toMutableList()),current+1)}){refreshPages(current+1)}}
+            val bookmarked=!metas[current].optBoolean("bookmarked")
+            var committed:JSONObject?=null
+            invalidateOcr(pageId)
+            enqueueSave({committed=repository.setPageBookmark(pageId,bookmarked)}){
+                committed?.let{meta->val position=ids.indexOf(pageId)
+                    if(position>=0)metas=metas.toMutableList().apply{set(position,meta)}
+                    inkView?.currentPage?.takeIf{it.id==pageId}?.meta?.put("bookmarked",meta.optBoolean("bookmarked"))
+                    renderSidebar()
+                }
+            }}
+        menuItem(content,"페이지 복제","duplicate"){work("페이지 복제 중…",{repository.duplicatePage(doc.id,pageId,current+1)}){refreshPages(current+1)}}
         fun move(delta:Int){val next=(current+delta).coerceIn(0,ids.lastIndex);if(next!=current){val order=ids.toMutableList().apply{add(next,removeAt(current))};work("페이지 이동 중…",{repository.reorder(doc.id,order)}){refreshPages(next)}}}
         menuItem(content,"앞으로 이동","arrow-up"){move(-1)};menuItem(content,"뒤로 이동","arrow-down"){move(1)}
         menuItem(content,"페이지 삭제","trash"){confirm("페이지 삭제","현재 페이지를 삭제할까요?"){work("페이지 삭제 중…",{repository.removePage(doc.id,pageId)}){refreshPages(current)}}}
@@ -687,6 +820,7 @@ class MainActivity:Activity(){
         val doc=document?:return;val view=inkView?:return;val content=showSheet(doc.title,"문서 옵션")
         menuItem(content,"파일 내보내기","export","노트 파일 또는 PDF로 저장합니다."){exportMenu(doc,false)}
         menuItem(content,"문서 검색","search","입력한 텍스트, 수식, 제목을 찾습니다."){searchDocument()}
+        menuItem(content,"손글씨 OCR","ocr","현재 페이지 필기를 영역별로 인식하고 교정할 수 있습니다."){recognize(false,false)}
         menuItem(content,if(doc.favorite)"파일 즐겨찾기 해제"else"파일 즐겨찾기","star","라이브러리 즐겨찾기와 목록 상단에 고정합니다."){mutateDocument(doc){put("favorite",!doc.favorite)}}
         menuItem(content,"페이지 번호로 이동","arrow","페이지 창에서 원하는 페이지 번호를 입력합니다."){if(pageSidebar==null)togglePages()}
         menuItem(content,"손글씨 수식 계산","math","현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다."){recognize(true,false)}
@@ -701,6 +835,7 @@ class MainActivity:Activity(){
         val content=showSheet("Export","공유 및 내보내기")
         fun export(format:String,toShare:Boolean=false){inkView?.finishContact();afterSaved{fileExport.prepare(doc,format,toShare,ids.getOrNull(inkView?.currentIndex?:0))}}
         menuItem(content,"노트 파일 (.ifnote)","export","필기·이미지·PDF 배경·녹음을 보존합니다. 다시 가져와 편집할 수 있습니다."){export("ifnote")}
+        menuItem(content,"이전 버전 JSON (.ifnote)","export","3.x 형식으로 내보냅니다. PDF 배경은 페이지별 이미지로 포함됩니다."){export("legacy")}
         menuItem(content,"PDF 파일 (.pdf)","page-plus","모든 페이지를 필기와 배경이 포함된 PDF로 저장합니다."){export("pdf")}
         menuItem(content,"기기 공유","share","지원되는 앱으로 편집 가능한 노트를 공유합니다."){export("ifnote",true)}
         menuItem(content,"PDF 주석 내보내기","bookmark","필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다."){export("xfdf")}
@@ -715,15 +850,41 @@ class MainActivity:Activity(){
     private fun importUri(uri:Uri,mode:String){
         val name=uriName(uri)
         val target=document;val index=(inkView?.currentIndex?:0)+1
+        val owner=java.lang.ref.WeakReference(this)
         if(mode=="image"){
-            work("이미지를 가져오는 중…",{val mime=contentResolver.getType(uri)?:"image/png";val id=requireNotNull(contentResolver.openInputStream(uri)).use{repository.storeAsset(it,NoteRepository.extension(mime))}
-                val options=android.graphics.BitmapFactory.Options().apply{inJustDecodeBounds=true};android.graphics.BitmapFactory.decodeFile(repository.asset(id).path,options);require(options.outWidth>0){"이미지를 읽지 못했습니다."};Triple(id,options.outWidth,options.outHeight)
-            }){(id,w,h)->val p=pendingInsert;val scale=min(650f/w,720f/h).coerceAtMost(1f);inkView?.add(json("id" to uid("image"),"type" to "image","src" to "asset:$id","x" to (p?.second?:100f),"y" to (p?.third?:150f),"w" to w*scale,"h" to h*scale));pendingInsert=null}
+            val pageId=inkView?.currentPage?.id
+            val position=pendingInsert
+            work("이미지를 가져오는 중…",{val mime=contentResolver.getType(uri)?:"image/png";var size:Pair<Int,Int>?=null
+                val id=requireNotNull(contentResolver.openInputStream(uri)){"이미지를 열 수 없습니다."}.use{input->
+                    repository.storeAsset(input,NoteRepository.extension(mime)){pending->size=NoteRepository.checkedImageSize(pending)}}
+                Triple(id,requireNotNull(size).first,requireNotNull(size).second)
+            },{(id,_,_)->repository.asset(id).delete()}){(id,w,h)->
+                val view=inkView
+                if(target?.id!=document?.id||pageId==null||view==null||view.currentPage?.id!=pageId||view.readOnly){repository.asset(id).delete()}
+                else {val scale=min(650f/w,720f/h).coerceAtMost(1f)
+                    val image=json("id" to uid("image"),"type" to "image","src" to "asset:$id","x" to (position?.second?:100f),
+                        "y" to (position?.third?:150f),"w" to w*scale,"h" to h*scale)
+                    try{view.add(image)}catch(error:Exception){
+                        if(view.currentPage?.objects?.none{it.optString("id")==image.getString("id")}!=false)repository.asset(id).delete()
+                        throw error
+                    }
+                }
+                if(pendingInsert===position)pendingInsert=null
+            }
         }else work("파일을 가져오는 중…",{
             val input=requireNotNull(contentResolver.openInputStream(uri)){"파일을 열 수 없습니다."}
-            input.use{if(mode=="pdf"||mode=="appendPdf"||name.endsWith(".pdf",true))PdfImporter.import(repository,it,name.removeSuffix(".pdf"),folder,if(mode=="appendPdf")target?.id else null,index)
+            input.use{if(mode=="pdf"||mode=="appendPdf"||name.endsWith(".pdf",true))PdfImporter.import(repository,it,name.removeSuffix(".pdf"),folder,if(mode=="appendPdf")target?.id else null,index){id,changed,error->
+                    owner.get()?.let{activity->activity.runOnUiThread{if(!activity.isFinishing&&!activity.isDestroyed)activity.pdfImportChanged(id,changed,error)}}}
                 else repository.importNote(it,folder)}
         }){doc->openDocument(doc.id,if(mode=="appendPdf")index else 0)}
+    }
+    private fun pdfImportChanged(documentId:String,pagesChanged:Boolean,error:String?){
+        if(error!=null){message(when(error){"pdfImportCancelled"->"PDF 가져오기를 중단했습니다.";"pdfTextTooLarge"->"PDF 원문 텍스트가 너무 큽니다.";
+            else->"PDF 가져오기 또는 원문 색인에 실패했습니다: $error"});return}
+        if(pagesChanged&&document?.id==documentId){
+            repository.executor.execute{val pageIds=repository.pageIds(documentId);val metadata=pageIds.mapNotNull{repository.pageMeta(it)}
+                runOnUiThread{if(document?.id==documentId&&pageIds.size==metadata.size){ids=pageIds;metas=metadata;inkView?.refreshPageList(ids,metas);updatePageLabel();renderSidebar()}}}
+        }
     }
     @Deprecated("Uses platform result contracts for API 23 compatibility")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data)
@@ -748,7 +909,7 @@ class MainActivity:Activity(){
         var generation=0
         input.addTextChangedListener(object:TextWatcher{override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){};override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){
             val search=s.toString();val request=++generation;results.removeAllViews();if(search.isBlank())return
-            repository.executor.execute{val matches=repository.pageIds(doc.id).mapIndexedNotNull{index,id->val page=repository.page(id)?:return@mapIndexedNotNull null;val text=page.meta.optString("pdfText")+" "+page.meta.optString("ocrText")+" "+page.objects.joinToString(" "){it.optString("text")+" "+it.optString("expression")};val at=text.indexOf(search,ignoreCase=true);if(at>=0)index to text.substring(max(0,at-20),min(text.length,at+80))else null}
+            repository.executor.execute{val matches=repository.pageIds(doc.id).mapIndexedNotNull{index,id->val page=repository.page(id)?:return@mapIndexedNotNull null;val text=page.meta.optString("pdfText")+" "+repository.ocrText(id)+" "+page.objects.joinToString(" "){it.optString("text")+" "+it.optString("expression")};val at=text.indexOf(search,ignoreCase=true);if(at>=0)index to text.substring(max(0,at-20),min(text.length,at+80))else null}
                 runOnUiThread{if(generation!=request||searchDrawer!==drawer)return@runOnUiThread;results.removeAllViews();if(matches.isEmpty())results.addView(ui.text("검색 결과가 없습니다.",13f,ui.muted));matches.forEach{(index,snippet)->menuItem(results,"${index+1}페이지","search",snippet){inkView?.goTo(index)}}}}
         };override fun afterTextChanged(s:Editable?){} })
         surface.addView(drawer,FrameLayout.LayoutParams(dp(min(420,(resources.configuration.screenWidthDp*.92f).toInt())),-1,Gravity.RIGHT))
@@ -756,51 +917,165 @@ class MainActivity:Activity(){
     private fun scheduleOcr(){
         ocrTask?.let{handler.removeCallbacks(it)}
         if(!settings.optBoolean("autoOcr",true)&&!settings.optBoolean("autoMath",false))return
-        ocrTask=Runnable{recognize(false,true)}.also{handler.postDelayed(it,5000)}
+        ocrTask=Runnable{recognize(false,true)}.also{handler.postDelayed(it,2000)}
     }
+    private fun ocrPolicy()=settings.optString("ocrLanguagePolicy").ifBlank{when(settings.optString("language","ko")){
+        "en"->"en-primary";"ja"->"ja";"zh"->"zh";"pt"->"pt";else->"ko-primary"}}
+    private fun invalidateOcr(pageId:String){pageEditEpoch[pageId]=(pageEditEpoch[pageId]?:0)+1
+        if(manualOcrPageId==pageId)cancelManualOcr("페이지가 변경되어 인식을 취소했습니다.")else pageOcr.cancel(pageId)}
     private fun recognize(math:Boolean,automatic:Boolean){
-        if(recognitionBusy){if(!automatic)message("필기 인식이 진행 중입니다.");return}
         val view=inkView?:return;val page=view.currentPage?:return;val doc=document?:return
-        val selected=view.selected();val objects=(if(selected.isNotEmpty()&&!automatic)selected else page.objects).map{it.copyJson()}
-        if(automatic&&objects.none{it.optString("type")=="stroke"})return
-        val signature=objects.filter{it.optString("type")=="stroke"}.joinToString{it.optString("id")+":"+it.array("points").length()}.hashCode()
-        if(automatic&&page.meta.optInt("ocrSignature",Int.MIN_VALUE)==signature)return
-        recognitionBusy=true
-        if(!automatic)status.text=t("필기를 인식하고 있습니다. 첫 사용에는 모델 다운로드가 필요합니다.")
-        recognition.executor.execute{
-            try{
-                val strokes=objects.filter{it.optString("type")=="stroke"}
-                val recognized=if(strokes.isNotEmpty())recognition.handwriting(objects,page.width,page.height,settings.optString("language","ko"),math)
-                    else{val bitmap=StreamingPdf.render(repository,page,1400);try{recognition.image(bitmap,settings.optString("language","ko"))}finally{bitmap.recycle()}}
-                runOnUiThread{
+        if(math){
+            if(recognitionBusy)return
+            recognitionBusy=true
+            val pageId=page.id
+            afterSaved{recognition.executor.execute{
+                try{val saved=requireNotNull(repository.page(pageId));val result=recognition.handwriting(saved.objects,saved.width,saved.height,
+                    settings.optString("language","ko"),true)
+                    runOnUiThread{if(document?.id==doc.id&&inkView?.currentPage?.id==pageId)calculatePrompt(result.replace('\n',' '))}}
+                catch(e:Exception){runOnUiThread{message(e.message?:"수식 인식 실패")}}
+                finally{recognitionBusy=false}
+            }}
+            return
+        }
+        val policy=ocrPolicy()
+        val startEpoch=pageEditEpoch[page.id]?:0
+        val requestedDigest=if(automatic)null else OcrInput.pageDigest(page,policy)
+        val uiToken=if(automatic)0L else ++ocrUiToken
+        if(!automatic){manualOcrPageId=page.id
+            showOcrStatus("필기를 인식하고 있습니다. 첫 사용에는 모델 다운로드가 필요합니다.",true)}
+        afterSaved{
+            if(document?.id!=doc.id||inkView?.currentPage?.id!=page.id||(pageEditEpoch[page.id]?:0)!=startEpoch||
+                !automatic&&(uiToken!=ocrUiToken||manualOcrPageId!=page.id))return@afterSaved
+            pageOcr.request(doc.id,page.id,policy,automatic,expectedDigest=requestedDigest,
+                progress={stage,done,total->if(!automatic)runOnUiThread{if(document?.id==doc.id&&
+                    inkView?.currentPage?.id==page.id&&uiToken==ocrUiToken&&manualOcrPageId==page.id)
+                    showOcrStatus("손글씨 OCR · ${when(stage){"recognizing"->"영역 인식";"saving"->"결과 저장";"image"->"이미지 인식";else->"준비 중"}} · $done/$total",true)}},
+                complete={receipt->runOnUiThread{
                     if(document?.id!=doc.id)return@runOnUiThread
-                    if(automatic){
-                        val meta=page.meta.copyJson().put("ocrText",recognized).put("ocrSignature",signature)
-                        enqueueSave({val current=repository.pageMeta(page.id)?:return@enqueueSave;current.put("ocrText",recognized).put("ocrSignature",signature);repository.putPageMeta(page.id,current)})
-                        if(view.currentPage?.id==page.id){
-                            view.currentPage?.meta?.put("ocrText",recognized)?.put("ocrSignature",signature)
-                            if(settings.optBoolean("autoMath",false)&&recognized.trim().endsWith("=")){
-                                try{
-                                    val expression=recognized.lineSequence().last().trim().removeSuffix("=").trim()
-                                    val result=MathEngine(degrees=settings.optBoolean("degrees")).calculate(expression)
-                                    if(view.currentPage?.objects?.none{it.optString("type")=="math"&&it.optString("expression")==expression}==true)
-                                        view.add(json("id" to uid("math"),"type" to "math","expression" to expression,"result" to result.display(),"x" to 100,"y" to min(page.height-100,(objects.lastOrNull()?.let{InkGeometry.bounds(it).bottom}?:150f)+30),"w" to 600,"h" to 92,"fontSize" to 27))
-                                }catch(_:Exception){}
-                            }
+                    if(!automatic){if(uiToken!=ocrUiToken||manualOcrPageId!=page.id||inkView?.currentPage?.id!=page.id)
+                        return@runOnUiThread
+                        manualOcrPageId=null
+                        showOcrStatus(when{
+                            receipt.applied&&receipt.result?.optString("status")=="partial"->"손글씨 OCR · 부분 결과가 저장되었습니다."
+                            receipt.applied->"손글씨 OCR · 인식 결과가 저장되었습니다."
+                            receipt.errorCode in setOf("cancelled","inactive","recognizerInactive")->"손글씨 인식을 취소했습니다."
+                            else->"손글씨 OCR · 인식 실패"
+                        })}
+                    if(receipt.applied&&receipt.result!=null){
+                        if(!automatic){val current=inkView?.currentPage
+                            if(current?.id==page.id && (pageEditEpoch[page.id]?:0)==startEpoch&&
+                                OcrInput.pageDigest(current,policy)==receipt.result.optString("pageDigest"))
+                                showOcrResult(page.id,receipt.result)
                         }
-                    }else if(math)calculatePrompt(recognized.replace('\n',' '))else{
-                        prompt("인식 결과",recognized){value->if(inkView?.currentPage?.id==page.id)inkView?.add(json("id" to uid("text"),"type" to "text","text" to value,"x" to 80,"y" to 100,"w" to 800,"h" to 140,"fontSize" to 28,"color" to "#225e9d"))}
+                        else if(settings.optBoolean("autoMath",false))maybeAutoMath(page.id,receipt.result)
+                    }else if(!automatic&&receipt.errorCode !in setOf("alreadyIndexed","cancelled","inactive","recognizerInactive"))
+                        message(when(receipt.errorCode){"noInk"->"인식할 필기가 없습니다.";"inputTooLarge"->"필기가 너무 커서 이 영역을 인식할 수 없습니다.";
+                            "stalePage"->"인식 중 페이지가 바뀌어 결과를 적용하지 않았습니다.";
+                            "recognizerTimeout","recognizerCircuitOpen"->"인식 시간이 초과되었습니다. 앱을 다시 열어 재시도해 주세요.";
+                            "unsupportedLanguage"->"이 언어의 인식 모델을 사용할 수 없습니다.";else->"손글씨 인식에 실패했습니다."})
+                }}
+            )
+        }
+    }
+    private fun maybeAutoMath(pageId:String,result:JSONObject){
+        val page=inkView?.currentPage?.takeIf{it.id==pageId}?:return
+        val recognized=result.array("regions").objects().joinToString("\n"){it.optString("selectedText")}
+        if(!recognized.trim().endsWith("="))return
+        try{val expression=recognized.lineSequence().last().trim().removeSuffix("=").trim()
+            val answer=MathEngine(degrees=settings.optBoolean("degrees")).calculate(expression)
+            if(page.objects.none{it.optString("type")=="math"&&it.optString("expression")==expression})
+                inkView?.add(json("id" to uid("math"),"type" to "math","expression" to expression,"result" to answer.display(),
+                    "x" to 100,"y" to min(page.height-100,(page.objects.lastOrNull()?.let{InkGeometry.bounds(it).bottom}?:150f)+30),
+                    "w" to 600,"h" to 92,"fontSize" to 27))
+        }catch(_:Exception){}
+    }
+    private fun showOcrResult(pageId:String,result:JSONObject){
+        val regions=result.array("regions").objects()
+        val content=showSheet("손글씨 OCR","인식 결과")
+        val visible=regions.filter{it.optString("status") in setOf("complete","cached")}
+        val combined=visible.joinToString("\n"){it.optString("correctedText",it.optString("selectedText"))}
+        content.addView(ui.text(if(result.optString("status")=="complete")"인식 완료"else"부분 결과 · 원본 필기 유지",13f,ui.muted))
+        regions.forEach{region->
+            val id=region.optString("id");val status=region.optString("status")
+            val raw=region.optString("correctedText",region.optString("selectedText"))
+            val alternate=region.optJSONObject("alternateLanguage")?.array("candidates")?.objects()?.firstOrNull()?.optString("text")
+            val label=if(status=="complete"||status=="cached")raw.ifBlank{"(빈 결과)"}else "$id · ${when(status){"unresolved"->"영역 구분 필요";"failed"->"인식 실패";else->"검토 필요"}}"
+            menuItem(content,label,"ocr",buildString{val reasons=region.array("reviewReasons")
+                append((0 until reasons.length()).joinToString(" · "){index->when(reasons.optString(index)){
+                "legacyOrder"->"이전 필기의 획 순서 확인 필요";"timeBasisUnknown"->"필기 시간 정보 없음";
+                "marginalia"->"여백 필기";"languageDisagreement"->"언어별 결과가 다름";
+                "layoutAmbiguous"->"영역 구분 확인 필요";else->"검토 필요"}})
+                val options=region.array("candidates").objects().map{it.optString("text")}
+                if(options.isNotEmpty())append(" · 후보: ").append(options.joinToString(" / "))
+                if(alternate!=null)append(" · 다른 언어 후보: ").append(alternate)}) {
+                if(status=="complete"||status=="cached"){
+                    val options=region.array("candidates").objects().map{it.optString("text")}+
+                        listOfNotNull(alternate).filter{it !in region.array("candidates").objects().map{candidate->candidate.optString("text")}}
+                    choose("인식 후보",options+"직접 수정"){selected->
+                        val expectedInputDigest=region.optString("inputDigest")
+                        val expectedPageDigest=result.optString("pageDigest")
+                        val saveCorrection:(String)->Unit={value->work("교정을 저장하고 있습니다.",{
+                            val applied=repository.correctOcrRegion(pageId,id,value,expectedInputDigest,expectedPageDigest)
+                            applied to repository.ocrResult(pageId)
+                        }){(applied,updated)->if(!applied)message("인식 결과가 변경되었습니다. 새 결과에서 다시 교정해 주세요.")
+                            else if(updated!=null&&inkView?.currentPage?.id==pageId)showOcrResult(pageId,updated)
+                            else message("교정을 저장했습니다.")}}
+                        options.getOrNull(selected)?.let(saveCorrection)?:prompt("영역 교정",raw,saveCorrection)
                     }
                 }
-            }catch(e:Exception){if(!automatic)runOnUiThread{message(e.message?:"필기 인식 실패")}}
-            finally{recognitionBusy=false}
+            }
         }
+        menuItem(content,"OCR 진단 JSON 내보내기","export","필기와 인식 결과가 포함됩니다. 정답 영역은 내보낸 뒤 직접 표시합니다."){
+            val doc=document
+            if(doc!=null&&inkView?.currentPage?.id==pageId)fileExport.prepare(doc,"json",false,pageId)
+        }
+        menuItem(content,"전체 텍스트 복사","copy"){val clipboard=getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("BADNOTE OCR",combined));message("복사했습니다.")}
+        menuItem(content,"원래 위치에 텍스트 추가","text"){val current=inkView?.currentPage
+            if(current?.id==pageId){val objects=visible.mapNotNull{region->
+                val value=region.optString("correctedText",region.optString("selectedText"));val box=region.optJSONObject("bounds")
+                if(value.isEmpty()||box==null)null else ocrTextObject(value,box,current)
+            };if(objects.isNotEmpty())inkView?.changeObjects(emptyList(),objects)
+                if(objects.size<visible.count{it.optString("correctedText",it.optString("selectedText")).isNotEmpty()})
+                    message("페이지 안에 들어가지 않는 텍스트 영역은 추가하지 않았습니다.")}}
+    }
+    private fun ocrTextObject(value:String,box:JSONObject,page:NotePage):JSONObject?{
+        val left=box.optDouble("left");val top=box.optDouble("top")
+        val right=box.optDouble("right");val bottom=box.optDouble("bottom")
+        if(listOf(left,top,right,bottom).any{!it.isFinite()}||page.width<=0||page.height<=0)return null
+        val pageWidth=page.width.toDouble();val pageHeight=page.height.toDouble()
+        val paint=Paint().apply{textSize=28f;typeface=Typeface.create("sans-serif",Typeface.NORMAL)}
+        fun heightFor(width:Double):Double{
+            if(width<=0)return Double.POSITIVE_INFINITY
+            var lines=1;var lineWidth=0f
+            value.forEach{ch->if(ch=='\n'){lines++;lineWidth=0f}else{
+                val advance=paint.measureText(ch.toString())
+                if(lineWidth>0&&lineWidth+advance>width-4){lines++;lineWidth=0f}
+                lineWidth+=advance
+            }}
+            return -paint.fontMetrics.top+paint.fontMetrics.bottom+(lines-1)*paint.textSize*1.36
+        }
+        var x=left.coerceIn(0.0,max(0.0,pageWidth-24.0))
+        var width=max(80.0,right-left).coerceAtMost(pageWidth-x)
+        var textHeight=heightFor(width)
+        if(textHeight>pageHeight){width=pageWidth-x;textHeight=heightFor(width)}
+        if(textHeight>pageHeight){x=0.0;width=pageWidth;textHeight=heightFor(width)}
+        if(textHeight>pageHeight||width<24)return null
+        val y=top.coerceIn(0.0,max(0.0,pageHeight-textHeight))
+        return json("id" to uid("text"),"type" to "text","text" to value,"x" to x,"y" to y,
+            "w" to width,"h" to max(40.0,min(pageHeight-y,max(bottom-top,textHeight))),
+            "fontSize" to 28,"color" to "#225e9d")
     }
     private fun mathMenu(){choose("수식",listOf("손글씨 수식 계산","수식 직접 입력","각도 단위 변경")){i->when(i){0->recognize(true,false);1->calculatePrompt("");2->{settings.put("degrees",!settings.optBoolean("degrees"));saveSettings();message(if(settings.optBoolean("degrees"))"도 단위"else"라디안 단위")}}}}
     private fun calculatePrompt(expression:String){prompt("수식 확인",expression){value->
         val doc=document?:return@prompt;val variables=doc.data.optJSONObject("variables")?:JSONObject();val map=variables.keys().asSequence().associateWith{variables.optDouble(it)}
         val result=MathEngine(map,settings.optBoolean("degrees")).calculate(value)
-        result.variable?.let{variables.put(it,result.value);doc.data.put("variables",variables);val copy=doc.data.copyJson();enqueueSave({repository.putDocument(DocumentInfo(doc.id,copy))})}
+        result.variable?.let{name->val value=result.value
+            val current=document?.takeIf{it.id==doc.id}?:doc
+            val visibleVariables=current.data.optJSONObject("variables")?.copyJson()?:JSONObject()
+            visibleVariables.put(name,value);current.data.put("variables",visibleVariables)
+            enqueueSave({saveCalculatedVariable(repository,doc.id,name,value)})}
         inkView?.add(json("id" to uid("math"),"type" to "math","expression" to value,"result" to result.display(),"x" to 100,"y" to 180,"w" to 600,"h" to 92,"fontSize" to 27,"color" to "#225e9d"))
     }}
     private fun toggleRecording(){
@@ -808,20 +1083,69 @@ class MainActivity:Activity(){
         if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),REQUEST_AUDIO);return}
         audio.start();status.text=t("● 녹음 중")
     }
-    private fun stopRecording(){val doc=document?:return;try{
-        val clip=audio.stop(ids.getOrNull(inkView?.currentIndex?:0)?:"",inkView?.currentIndex?:0)?:return
-        val data=doc.data.copyJson();val clips=data.array("audio");clips.put(clip);data.put("audio",clips);document=DocumentInfo(doc.id,data)
-        enqueueSave({repository.putDocument(DocumentInfo(doc.id,data))}){message("녹음을 저장했습니다.")}
-    }catch(e:Exception){message("녹음 저장 실패: ${e.message}")}}
+    private fun stopRecording(){
+        val index=inkView?.currentIndex?:0
+        val documentId=document?.id
+        val recording=try{audio.stop(ids.getOrNull(index)?:"",index)?:return}
+            catch(error:Exception){message("녹음 저장 실패: ${error.message}");return}
+        if(documentId==null){audio.discardPending(recording);message("녹음 저장 실패: 저장할 노트가 없습니다.");return}
+        enqueueStoppedRecording(recording,documentId)
+    }
+    private fun enqueueStoppedRecording(recording:AudioController.PendingRecording,documentId:String){
+        pendingRecordings+=recording
+        var saved:JSONObject?=null
+        var failure:String?=null
+        enqueueSave(Save({try{saved=audio.persistRecording(recording,documentId)
+            if(saved==null)failure="저장할 노트가 없습니다."
+        }catch(error:Exception){audio.discardPending(recording);failure=error.message?:"녹음 파일을 저장하지 못했습니다."}}, {
+            pendingRecordings.remove(recording)
+            if(!isFinishing&&!isDestroyed){
+                saved?.let{clip->document?.takeIf{it.id==documentId}?.let{current->
+                    val data=current.data.copyJson();val clips=data.array("audio")
+                    if(clips.objects().none{it.optString("id")==clip.optString("id")})clips.put(clip)
+                    data.put("audio",clips)
+                    document=DocumentInfo(current.id,data)
+                }}
+                message(failure?.let{"녹음 저장 실패: $it"}?:"녹음을 저장했습니다.")
+            }
+        }, { failure==null && saved!=null }))
+    }
     private fun audioMenu(){val doc=document?:return;val clips=doc.data.array("audio").objects();if(clips.isEmpty()){message("녹음이 없습니다.");return}
         choose("녹음",clips.map{"${it.optString("title","녹음")} · ${it.optDouble("duration").roundToInt()}초"}){i->val clip=clips[i];choose("녹음",listOf("재생","녹음한 페이지로 이동","삭제")){n->when(n){
             0->audio.play(clip);1->{val byId=ids.indexOf(clip.optString("pageId"));inkView?.goTo(if(byId>=0)byId else clip.optInt("pageIndex"))}
-            2->{val data=doc.data.copyJson().put("audio",JSONArray(clips.filter{it.optString("id")!=clip.optString("id")}));document=DocumentInfo(doc.id,data);enqueueSave({repository.putDocument(DocumentInfo(doc.id,data))})}
+            2->{val clipId=clip.optString("id")
+                document?.takeIf{it.id==doc.id}?.let{current->val data=current.data.copyJson()
+                    data.put("audio",withoutAudioClip(data.array("audio"),clipId));document=DocumentInfo(current.id,data)}
+                enqueueSave({removeAudioClip(repository,doc.id,clipId)})}
         }}}
     }
-    override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<out String>,grantResults:IntArray){super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+    override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<String>,grantResults:IntArray){super.onRequestPermissionsResult(requestCode,permissions,grantResults)
         if(requestCode==REQUEST_AUDIO){if(grantResults.firstOrNull()==PackageManager.PERMISSION_GRANTED&&document!=null)toggleRecording()else message("녹음 권한이 필요합니다.")}}
     private fun showSettings(){
+        val content=showSheet("bad note","설정",680)
+        val compose=ComposeView(this).apply{
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setContent { NativeSettingsScreen(settings.copyJson(),::t,
+                onToggle={key,value->settings.put(key,value);inkView?.let{applySettings(it)
+                    if(key=="continuous")changePageMode(value)};saveSettings()},
+                onOpacity={value->settings.put("hudTextOpacity",value);applyHudOpacity();saveSettings()},
+                onLanguage={val languages=listOf("ko","en","ja","zh","pt")
+                    val names=listOf("한국어","English","日本語","中文","Português")
+                    choose("언어",names){index->settings.put("language",languages[index]);loadDictionary();saveSettings()
+                        val page=inkView?.currentIndex?:0;if(document==null)showLibrary()else showEditor(page);showSettings()}},
+                onOcrPolicy={val policies=listOf("ko-primary","en-primary","mixed-review","ja","zh","pt")
+                    val names=listOf("한국어 우선","English first","한·영 검토","日本語","中文","Português")
+                    choose("손글씨 OCR 언어",names){index->settings.put("ocrLanguagePolicy",policies[index]);saveSettings();scheduleOcr();showSettings()}},
+                onUpdate={closeSheet();checkUpdates()},
+                onNotices={val notices=assets.open("pdfium-notices.txt").bufferedReader(Charsets.UTF_8).use{it.readText()}
+                    val viewer=showSheet("Open Source","PDFium 라이선스",680)
+                    viewer.addView(ui.text(notices,11f,ui.ink).apply{setTextIsSelectable(true)})},
+                onClose={closeSheet()}) }
+        }
+        content.addView(compose,LinearLayout.LayoutParams(-1,-2))
+    }
+
+    private fun showSettingsLegacy(){
         val content=showSheet("bad note","설정",680)
         fun setting(label:String,description:String,control:View){
             val line=ui.row().apply{setPadding(dp(12),dp(10),dp(12),dp(10));minimumHeight=dp(68);background=ui.rounded(ui.color("#f4f6f8"),13f)}
@@ -836,6 +1160,12 @@ class MainActivity:Activity(){
         }
         val languages=listOf("ko","en","ja","zh","pt");val names=listOf("한국어","English","日本語","中文","Português")
         setting("언어","앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.",ui.button(names[languages.indexOf(settings.optString("language","ko")).coerceAtLeast(0)],height=38){choose("언어",names){i->settings.put("language",languages[i]);loadDictionary();saveSettings();val index=inkView?.currentIndex?:0;if(document==null)showLibrary()else showEditor(index);showSettings()}})
+        val ocrPolicies=listOf("ko-primary","en-primary","mixed-review","ja","zh","pt")
+        val ocrNames=listOf("한국어 우선","English first","한·영 검토","日本語","中文","Português")
+        setting("손글씨 OCR 언어","혼합 검토는 두 모델 후보가 다르면 검토 사유로 표시합니다.",
+            ui.button(ocrNames[ocrPolicies.indexOf(ocrPolicy()).coerceAtLeast(0)],height=38){
+                choose("손글씨 OCR 언어",ocrNames){i->settings.put("ocrLanguagePolicy",ocrPolicies[i]);saveSettings();scheduleOcr();showSettings()}
+            })
         toggle("스타일러스 전용 필기","손바닥과 손가락 입력을 필기에서 제외합니다.","stylusOnly",true)
         toggle("낙서해서 지우기","같은 영역을 여러 번 왕복해 덮은 펜 획을 지웁니다.","scribbleErase",true)
         toggle("그려서 도형 만들기","직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.","drawHold",true)
@@ -847,9 +1177,14 @@ class MainActivity:Activity(){
         toggle("손글씨 OCR 자동 등록","필기를 인식해 문서 검색에 등록합니다.","autoOcr",true)
         toggle("손글씨 수식 자동 계산","등호로 끝나는 수식을 인식해 계산합니다.","autoMath",false)
         menuItem(content,"업데이트 확인","download","bad note ${BuildConfig.VERSION_NAME}"){checkUpdates()}
+        menuItem(content,"PDFium 오픈소스 고지","page-plus","PDF 원문 검색 엔진의 라이선스와 포함된 고지를 읽습니다."){
+            val notices=assets.open("pdfium-notices.txt").bufferedReader(Charsets.UTF_8).use{it.readText()}
+            val viewer=showSheet("Open Source","PDFium 라이선스",680)
+            viewer.addView(ui.text(notices,11f,ui.ink).apply{setTextIsSelectable(true)})
+        }
         sheetActions(content,"완료","check",false){closeSheet()}
     }
-    private fun applyHudOpacity(){val opacity=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f);pageLabel?.alpha=opacity;zoomLabel?.alpha=opacity;status.alpha=opacity;inkView?.telemetry=settings.optBoolean("telemetry");inkView?.hudOpacity=opacity}
+    private fun applyHudOpacity(){val opacity=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f);pageLabel?.alpha=opacity;zoomLabel?.alpha=opacity;status.alpha=opacity;ocrStatusText?.alpha=opacity;inkView?.telemetry=settings.optBoolean("telemetry");inkView?.hudOpacity=opacity}
     private fun range(value:Int,minimum:Int=0,maximum:Int=100,changed:(Int)->Unit)=SeekBar(this).apply{
         max=maximum-minimum;progress=(value-minimum).coerceIn(0,max);setPadding(dp(4),0,dp(4),0)
         progressTintList=android.content.res.ColorStateList.valueOf(ui.accent);thumbTintList=android.content.res.ColorStateList.valueOf(ui.accent)
@@ -878,7 +1213,9 @@ class MainActivity:Activity(){
     }
     private fun resizeForSidebar(){
         val narrow=resources.configuration.screenWidthDp<=840
-        inkView?.let{it.layoutParams=(it.layoutParams as FrameLayout.LayoutParams).apply{leftMargin=if(!narrow&&pageSidebar!=null)dp(420)else 0}}
+        val inset=if(!narrow&&pageSidebar!=null)dp(420)else 0
+        inkView?.let{it.layoutParams=(it.layoutParams as FrameLayout.LayoutParams).apply{leftMargin=inset}}
+        inkFrontBuffer?.let{it.layoutParams=(it.layoutParams as FrameLayout.LayoutParams).apply{leftMargin=inset}}
     }
     private fun renderSidebar(){
         val sidebar=pageSidebar?:return;sidebar.removeAllViews()
@@ -1009,10 +1346,6 @@ class MainActivity:Activity(){
         sheetActions(content){closeSheet();action(selected);renderActiveDock()}
     }
     private fun navigateBack(){if(modal!=null){closeSheet();return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
-    // API 33+ uses the native callback registered in onCreate; this is the legacy path.
-    @android.annotation.SuppressLint("GestureBackNavigation")
-    @Deprecated("Legacy back callback for Android 12 and older")
-    override fun onBackPressed(){navigateBack()}
     override fun onKeyDown(keyCode:Int,event:KeyEvent):Boolean{
         if(event.isCtrlPressed){when(keyCode){KeyEvent.KEYCODE_Z->{if(event.isShiftPressed)inkView?.redo()else inkView?.undo();return true};KeyEvent.KEYCODE_Y->{inkView?.redo();return true};KeyEvent.KEYCODE_S->{inkView?.finishContact();return true}}}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(true);return true}
@@ -1024,8 +1357,36 @@ class MainActivity:Activity(){
         return super.onKeyUp(keyCode,event)
     }
     override fun onSaveInstanceState(outState:Bundle){inkView?.finishContact();outState.putString("documentId",document?.id);outState.putString("pendingExport",fileExport.pendingPath());super.onSaveInstanceState(outState)}
-    override fun onPause(){inkView?.finishContact();if(audio.recording)stopRecording();super.onPause()}
+    override fun onResume(){super.onResume();if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}}
+    override fun onPause(){ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
+        if(::pageOcr.isInitialized){pageOcr.setActive(false);recognition.setActive(false)}
+        inkView?.finishContact();if(audio.recording)stopRecording();super.onPause()}
     override fun onConfigurationChanged(newConfig:Configuration){super.onConfigurationChanged(newConfig);val index=inkView?.currentIndex?:0;afterSaved{if(document==null)showLibrary()else showEditor(index)}}
-    override fun onDestroy(){ocrTask?.let{handler.removeCallbacks(it)};inkView?.close();migration?.close();audio.close();recognition.close();network.shutdown();super.onDestroy()}
-    companion object{const val REQUEST_IMPORT=4180;const val REQUEST_AUDIO=4181}
+    override fun onTrimMemory(level:Int){super.onTrimMemory(level);if(level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW){
+        if(::repository.isInitialized)repository.clearOcrMemoryCache()
+        recognition.releaseIdle()
+    }}
+    override fun onDestroy(){ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
+        if(saveFailed){pendingRecordings.forEach(audio::discardPending);pendingRecordings.clear()}
+        audio.close();recognition.close();network.shutdown();super.onDestroy()}
+    companion object{
+        const val REQUEST_IMPORT=4180;const val REQUEST_AUDIO=4181
+        internal fun saveCalculatedVariable(repository:NoteRepository,documentId:String,name:String,value:Double){
+            val latest=repository.document(documentId)?:return
+            val variables=latest.data.optJSONObject("variables")?.copyJson()?:JSONObject()
+            variables.put(name,value);latest.data.put("variables",variables);repository.putDocument(latest)
+        }
+        internal fun withoutAudioClip(clips:JSONArray,clipId:String)=JSONArray().apply{
+            for(index in 0 until clips.length()){
+                val item=clips.opt(index)
+                if(item !is JSONObject||item.optString("id")!=clipId)put(item)
+            }
+        }
+        internal fun removeAudioClip(repository:NoteRepository,documentId:String,clipId:String){
+            val latest=repository.document(documentId)?:return
+            val clips=latest.data.optJSONArray("audio")?:return
+            val remaining=withoutAudioClip(clips,clipId)
+            if(remaining.length()!=clips.length()){latest.data.put("audio",remaining);repository.putDocument(latest)}
+        }
+    }
 }

@@ -6,6 +6,7 @@ import kotlin.math.*
 
 class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
+    private val legacyBrush=LegacyCanvasBrush()
     fun color(value: String,default: Int=Color.BLACK)=try{Color.parseColor(value)}catch(_:Exception){default}
     fun template(canvas: Canvas,page: NotePage) {
         canvas.drawColor(Color.WHITE)
@@ -33,9 +34,14 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
             }
         }
     }
-    fun draw(canvas: Canvas,obj: JSONObject) {
+    private fun canvasScale(canvas: Canvas): Double {
+        val matrix=Matrix();canvas.getMatrix(matrix)
+        val values=FloatArray(9);matrix.getValues(values)
+        return hypot(values[Matrix.MSCALE_X].toDouble(),values[Matrix.MSKEW_Y].toDouble())
+    }
+    fun draw(canvas: Canvas,obj: JSONObject,renderScale:Double=canvasScale(canvas)) {
         if(obj.optBoolean("hidden")||obj.optString("type")=="ocrIndex")return
-        withRotation(canvas, obj) { drawUnrotated(canvas, obj) }
+        withRotation(canvas, obj) { drawUnrotated(canvas, obj,renderScale) }
     }
     private fun withRotation(canvas: Canvas, obj: JSONObject, draw: () -> Unit) {
         val saved = canvas.save()
@@ -53,11 +59,11 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
             canvas.drawBitmap(bitmap,null,RectF(b.left,b.top,b.right,b.bottom),paint)
         }
     }
-    private fun drawUnrotated(canvas: Canvas,obj: JSONObject) {
+    private fun drawUnrotated(canvas: Canvas,obj: JSONObject,renderScale:Double) {
         paint.reset();paint.isAntiAlias=true;paint.color=color(obj.optString("color","#172033"));paint.alpha=(obj.f("opacity",1f)*255).toInt().coerceIn(0,255)
         val type=obj.optString("type")
         when(type) {
-            "stroke" -> stroke(canvas,obj,InkGeometry.points(obj))
+            "stroke" -> legacyBrush.draw(canvas,obj,renderScale)
             "shape" -> shape(canvas,obj)
             "image" -> image(obj.optString("src"))?.let{canvas.drawBitmap(it,null,RectF(obj.f("x"),obj.f("y"),obj.f("x")+obj.f("w"),obj.f("y")+obj.f("h")),paint)}
             "tape" -> {
@@ -86,48 +92,10 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
             }
         }
     }
-    fun stroke(canvas: Canvas,obj: JSONObject,rawPoints: List<InkPoint>) {
+    fun stroke(canvas: Canvas,obj: JSONObject,rawPoints: List<InkPoint>,renderScale:Double=canvasScale(canvas)) {
         if(rawPoints.isEmpty())return
-        val settings=obj.optJSONObject("settings")
-        val smoothing=settings?.f("smoothing",0f)?.coerceIn(0f,.9f)?:0f
-        val points=if(smoothing>0&&rawPoints.size>2)rawPoints.mapIndexed{i,p->
-            if(i==0||i==rawPoints.lastIndex)p else p.copy(x=p.x*(1-smoothing)+(rawPoints[i-1].x+rawPoints[i+1].x)*smoothing/2,y=p.y*(1-smoothing)+(rawPoints[i-1].y+rawPoints[i+1].y)*smoothing/2)
-        }else rawPoints
-        paint.reset();paint.isAntiAlias=true;paint.color=color(obj.optString("color","#172033"))
-        val brush=obj.optString("brush","fountain");val width=obj.f("width",4f)
-        paint.alpha=(obj.f("opacity",if(brush=="highlighter").32f else 1f)*(settings?.f("opacity",1f)?:1f)*255).toInt().coerceIn(0,255)
-        if(brush=="pencil")paint.alpha=(paint.alpha*(.55f+(settings?.f("hardness",.58f)?:.58f)*.36f)).toInt()
-        val response=obj.optJSONObject("settings")?.f("pressure",when(brush){"ballpoint","fineliner"->.05f;"gel"->.16f;"brush"->.95f;"highlighter","marker"->0f;else->.7f})
-            ?: when(brush){"ballpoint","fineliner"->.05f;"gel"->.16f;"brush"->.95f;"highlighter","marker"->0f;else->.7f}
-        fun radius(p:InkPoint):Float {
-            val pressure=p.pressure.coerceIn(.03f,1.5f)
-            var r=width*.5f*((1-response)+response*(.2f+pressure*1.6f))
-            if(brush=="pencil")r*=1+abs(sin(p.tilt))*(settings?.f("tiltShade",.82f)?:.82f)
-            if(brush=="calligraphy")r*=.5f+abs(cos(p.orientation))
-            if(brush=="fountain")r*=1-(settings?.f("sharpness",0f)?:0f)*.2f*abs(sin(p.orientation))
-            return r.coerceAtLeast(.2f)
-        }
-        if(points.size==1){canvas.drawCircle(points[0].x,points[0].y,radius(points[0]),paint);return}
-        // One filled outline avoids darker self-overlap at every pressure sample.
-        val left=ArrayList<PointF>(points.size);val right=ArrayList<PointF>(points.size)
-        points.forEachIndexed{i,p->val a=points[max(0,i-1)];val b=points[min(points.lastIndex,i+1)]
-            val len=hypot(b.x-a.x,b.y-a.y).coerceAtLeast(.001f)
-            val taper=settings?.f("taper",0f)?:0f;val ends=(min(i,points.lastIndex-i)/max(1f,points.lastIndex*.12f)).coerceIn(0f,1f)
-            val r=radius(p)*(1-taper*.8f*(1-ends))
-            val nx=-(b.y-a.y)/len*r;val ny=(b.x-a.x)/len*r
-            left+=PointF(p.x+nx,p.y+ny);right+=PointF(p.x-nx,p.y-ny)}
-        val path=Path();path.moveTo(left[0].x,left[0].y)
-        for(i in 1 until left.size)path.lineTo(left[i].x,left[i].y)
-        for(i in right.indices.reversed())path.lineTo(right[i].x,right[i].y)
-        path.close();canvas.drawPath(path,paint)
-        if(brush=="pencil"){
-            val grain=settings?.f("grain",0f)?:0f
-            if(grain>0){val alpha=paint.alpha;paint.color=Color.WHITE;paint.alpha=(grain*65).toInt()
-                points.forEachIndexed{i,p->if(i%2==0)canvas.drawCircle(p.x+sin(i*2.39f)*width*.2f,p.y+cos(i*1.73f)*width*.2f,max(.3f,width*.08f),paint)}
-                paint.color=color(obj.optString("color","#172033"));paint.alpha=alpha}
-        }
-        // Opaque pens can have round caps without multiplying highlighter alpha.
-        if(brush!="highlighter"){canvas.drawCircle(points.first().x,points.first().y,radius(points.first()),paint);canvas.drawCircle(points.last().x,points.last().y,radius(points.last()),paint)}
+        val live=obj.copyJson().put("points",org.json.JSONArray(rawPoints.map{it.json()}))
+        legacyBrush.draw(canvas,live,renderScale)
     }
     private fun shape(canvas:Canvas,obj:JSONObject){
         val x1=obj.f("x1");val y1=obj.f("y1");val x2=obj.f("x2");val y2=obj.f("y2")

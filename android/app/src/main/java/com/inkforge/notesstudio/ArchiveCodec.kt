@@ -76,5 +76,5 @@ object ArchiveCodec {
     }
 
     private fun validName(name: String): Boolean =
-        name == "manifest.json" || Regex("(?:pages|assets)/[A-Za-z0-9_.-]{1,160}").matches(name)
+        name == "manifest.json" || Regex("(?:pages|assets|ocr)/[A-Za-z0-9_.-]{1,160}").matches(name)
 }

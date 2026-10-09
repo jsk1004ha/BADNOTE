@@ -231,8 +231,28 @@ async def run(args):
           return {hoverSafe,erasedOnDown,erasedOnMove,resumed,inkCount:ink.length,
             passed:hoverSafe&&erasedOnDown&&erasedOnMove&&resumed&&ink.length===1&&!t.api.state.drawSession};
         }""")
-        results["native_mid_contact_button_and_dom_cancel"] = await page.evaluate(r"""() => {
+        results["native_mid_contact_button_and_dom_cancel"] = await page.evaluate(r"""async () => {
           const t = inputTest; t.reset(); t.doc.pages[0].objects = [t.stroke('target',500)];
+          // Native DOWN uses elementFromPoint; send it only after the prior case's
+          // render/scroll has settled and both intended ink positions hit this canvas.
+          const viewport = document.getElementById('editorViewport');
+          const deadline = performance.now() + 3000;
+          let previous = null, stableFrames = 0;
+          while (performance.now() < deadline && stableFrames < 6) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const canvas = t.canvas(), rect = canvas?.getBoundingClientRect();
+            const signature = rect && [rect.x,rect.y,rect.width,rect.height,viewport.scrollTop].join(',');
+            const hitsCanvas = canvas && rect && [[300,350],[500,500]].every(([x,y]) => {
+              const p = t.client(x,y);
+              return document.elementFromPoint(p.clientX,p.clientY)?.closest('.page-canvas') === canvas;
+            });
+            const ready = rect?.width > 0 && rect.height > 0 && hitsCanvas &&
+              t.api.state.drawSession === null && t.api.state.nativeStylusContact === null &&
+              t.api.state.activePointers.size === 0 && t.api.state.tool === 'pen';
+            stableFrames = ready && signature === previous ? stableFrames + 1 : 0;
+            previous = signature;
+          }
+          if (stableFrames < 6) throw new Error('Native contact fixture did not become ready');
           const at = (action,x,y,buttons=0,contact=true) => {
             const p=t.client(x,y); t.native(action,buttons,{x:p.clientX,y:p.clientY,contact});
           };

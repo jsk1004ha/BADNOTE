@@ -66,10 +66,39 @@ data class NotePage(val id: String, val meta: JSONObject, val objects: MutableLi
             val objects = data.array("objects").objects().map { it.copyJson().apply {
                 if (optString("id").isEmpty()) put("id", uid("obj"))
             } }.toMutableList()
-            val meta = data.copyJson().apply { remove("objects") }
+            val meta = metadataWithoutObjects(data, true)
             meta.put("width", meta.f("width", 1000f).coerceIn(32f, 30000f))
             meta.put("height", meta.f("height", 1414f).coerceIn(32f, 30000f))
             return NotePage(data.optString("id").ifBlank { uid("page") }, meta, objects)
+        }
+
+        /** Replay owns the parsed JSON for this call and never mutates its object tree. */
+        internal fun fromBorrowed(data: JSONObject): NotePage {
+            val array = data.array("objects")
+            val objects = ArrayList<JSONObject>(array.length())
+            for (index in 0 until array.length()) {
+                val obj = requireNotNull(array.optJSONObject(index)) { "invalidReplayObject" }
+                require(obj.optString("id").isNotBlank()) { "missingReplayObjectId" }
+                objects.add(obj)
+            }
+            val meta = metadataWithoutObjects(data, false)
+            meta.put("width", meta.f("width", 1000f).coerceIn(32f, 30000f))
+            meta.put("height", meta.f("height", 1414f).coerceIn(32f, 30000f))
+            return NotePage(data.optString("id").ifBlank { uid("page") }, meta, objects)
+        }
+
+        private fun metadataWithoutObjects(data: JSONObject, copyNested: Boolean): JSONObject = JSONObject().apply {
+            val keys = data.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key == "objects") continue
+                val value = data.get(key)
+                put(key, if (copyNested) when (value) {
+                    is JSONObject -> JSONObject(value.toString())
+                    is JSONArray -> JSONArray(value.toString())
+                    else -> value
+                } else value)
+            }
         }
     }
 }

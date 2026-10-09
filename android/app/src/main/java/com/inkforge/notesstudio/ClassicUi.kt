@@ -123,7 +123,7 @@ class NotePreview(context:Context):View(context){
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     var bitmap:Bitmap?=null;set(value){field=value;invalidate()}
     override fun onDraw(canvas:Canvas){
-        super.onDraw(canvas);canvas.drawColor(Color.WHITE)
+        super.onDraw(canvas);paint.color=Color.WHITE;canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint)
         val bitmap=bitmap?:loadBitmap?.invoke()
         if(bitmap!=null)canvas.drawBitmap(bitmap,null,RectF(0f,0f,width.toFloat(),height.toFloat()),paint)
         else page?.let{p->canvas.save();canvas.scale(width/p.width,height/p.height);renderer.template(canvas,p);p.objects.forEach{renderer.draw(canvas,it)};canvas.restore()}

@@ -1,13 +1,19 @@
-# bad note 4.0.1 — Kotlin native
+# bad note 4.1.1 beta — Kotlin native
 
 갤럭시 탭·S Pen용 Android 필기 앱입니다. 라이브러리, 필기 편집기, 저장, PDF, 공유, OCR, 녹음과 설정을 Kotlin으로 전면 교체했습니다. 앱의 편집 화면에서 JavaScript나 WebView를 사용하지 않습니다. WebView는 기존 설치판의 IndexedDB를 읽는 일회성 이전에만 사용합니다.
+
+## 4.1.1 베타
+
+OCR 처리·결과 교정·검색과 Kotlin 네이티브 기능을 보완한 `4.1.1-beta.1`입니다. [베타 릴리스](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.1.1-beta.1)에서 수동 설치할 수 있습니다. 베타는 자동 업데이트 대상에서 제외하며, [정식 4.0.1](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.0.1)을 유지합니다. 베타 사용 결과를 확인한 뒤 정식 배포를 진행합니다.
+
+필기 OCR의 실제 인식률과 물리 Galaxy/S Pen 지연은 아직 측정하지 않았습니다. 구현과 검증 범위는 [네이티브 OCR 통합 기록](docs/OCR-NATIVE-IMPLEMENTATION-KO.md)에 정리했습니다.
 
 ## 설치와 데이터 이전
 
 빌드 결과는 `build/apk/`에 생성됩니다.
 
-- `bad-note-Android-4.0.1-Update.apk`: `com.inkforge.note4` 업데이트
-- `bad-note-Android-4.0.1-SideBySide.apk`: `com.inkforge.note5` 업데이트 또는 병행 설치
+- `bad-note-Android-4.1.1-beta.1-Update.apk`: `com.inkforge.note4` 업데이트
+- `bad-note-Android-4.1.1-beta.1-SideBySide.apk`: `com.inkforge.note5` 업데이트 또는 병행 설치
 
 기존 앱과 동일한 패키지·서명으로 업데이트하면 첫 실행에 노트, PDF 배경, 이미지, 녹음, 폴더와 설정을 이전합니다. 이전은 문서별 트랜잭션으로 처리하고, 완료한 문서는 재시도 시 건너뜁니다. 기존 IndexedDB는 삭제하지 않습니다. 다른 패키지의 데이터는 Android 격리 때문에 자동으로 읽을 수 없으므로 `.ifnote` 파일을 가져와야 합니다.
 
@@ -46,7 +52,7 @@ python tools/build_apk.py --variant both
 
 ```powershell
 python tools/test_native.py --device emulator-5580 --adb "C:/Users/User/AppData/Local/Android/Sdk/platform-tools/adb.exe"
-python tools/verify_apk.py build/apk/bad-note-Android-4.0.1-Update.apk --build-tools "C:/Users/User/AppData/Local/Android/Sdk/build-tools/36.1.0"
+python tools/verify_apk.py build/apk/bad-note-Android-4.1.1-beta.1-Update.apk --build-tools "C:/Users/User/AppData/Local/Android/Sdk/build-tools/36.1.0"
 ```
 
 테스트에는 96 MiB JVM에서의 100/300 MiB 자산 왕복·SHA-256 검증, 100 MiB legacy base64 가져오기, 실제 Android 저장소의 300 MiB 내보내기·가져오기, S Pen MotionEvent, 데이터 이전, 공유 URI가 포함됩니다. 물리 Galaxy/S Pen의 지연·압력 특성·펌웨어 동작은 별도 실기기 확인이 필요합니다.

@@ -1,71 +1,209 @@
 <!doctype html><html lang="ko"><meta charset="utf-8"><title>기존 노트 이전</title>
 <body><p>기존 노트를 안전하게 이전하고 있습니다. 원본 데이터는 유지됩니다.</p>
 <script>
+window.migrationFailed = false;
+window.onerror = function (message, source, line, column, error) {
+  if (window.migrationFailed) return true;
+  window.migrationFailed = true;
+  if (window.NativeMigration) window.NativeMigration.done(String((error && error.message) || message || 'JavaScript 오류'));
+  return true;
+};
+</script>
+<script>
 'use strict';
-(async () => {
-  const native = window.NativeMigration;
-  const request = r => new Promise((resolve, reject) => { r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
-  const db = await request(indexedDB.open('inkforge-notes-studio'));
-  const get = (store, id) => request(db.transaction(store, 'readonly').objectStore(store).get(id));
-  const has = name => db.objectStoreNames.contains(name);
-  async function assetString(source) {
-    const comma = source.indexOf(',');
-    if (comma < 0 || !source.slice(0, comma).endsWith(';base64')) throw Error('잘못된 이미지/녹음 데이터');
-    const ref = native.beginAsset(source.slice(5, comma).split(';')[0]);
+(function () {
+  var native = window.NativeMigration;
+  var db = null;
+  function fail(error) {
+    if (window.migrationFailed) return;
+    window.migrationFailed = true;
+    if (db) db.close();
+    native.done(String((error && error.message) || error || '이전 실패'));
+  }
+  function request(r) {
+    return new Promise(function (resolve, reject) {
+      r.onsuccess = function () { resolve(r.result); };
+      r.onerror = function () { reject(r.error || Error('IndexedDB 오류')); };
+      r.onblocked = function () { reject(Error('IndexedDB를 열 수 없습니다.')); };
+    });
+  }
+  function has(name) { return db.objectStoreNames.contains(name); }
+  function get(store, id) { return request(db.transaction(store, 'readonly').objectStore(store).get(id)); }
+  function keys(store) {
+    return new Promise(function (resolve, reject) {
+      var result = [];
+      var tx = db.transaction(store, 'readonly');
+      // Old WebView supports object-store openCursor, but not openKeyCursor.
+      var cursor = tx.objectStore(store).openCursor();
+      cursor.onsuccess = function () {
+        if (cursor.result) { result.push(cursor.result.key); cursor.result.continue(); }
+      };
+      cursor.onerror = function () { reject(cursor.error || Error('문서 목록을 읽지 못했습니다.')); };
+      tx.onerror = function () { reject(tx.error || Error('문서 목록을 읽지 못했습니다.')); };
+      tx.onabort = function () { reject(tx.error || Error('문서 목록을 읽지 못했습니다.')); };
+      tx.oncomplete = function () { resolve(result); };
+    });
+  }
+  function assetString(source, raster) {
+    var comma = source.indexOf(',');
+    if (comma < 0 || source.slice(0, comma).slice(-7) !== ';base64') throw Error('잘못된 이미지/녹음 데이터');
+    var mime = source.slice(5, comma).split(';')[0];
+    var ref = raster ? native.beginRasterAsset(mime) : native.beginAsset(mime);
+    if (!ref) throw Error('자산 이전을 시작하지 못했습니다.');
     // Each piece is a multiple of four: no full decoded or encoded copy of the asset.
-    for (let p = comma + 1; p < source.length; p += 65536) native.appendAsset(source.slice(p, p + 65536));
-    native.endAsset(); return ref;
-  }
-  async function assetBlob(blob) {
-    const ref = native.beginAsset(blob.type || 'application/octet-stream');
-    for (let p = 0; p < blob.size; p += 49152) {
-      const bytes = new Uint8Array(await blob.slice(p, p + 49152).arrayBuffer());
-      let binary = ''; for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      native.appendAsset(btoa(binary));
+    for (var p = comma + 1; p < source.length; p += 65536) {
+      if (native.appendAsset(source.slice(p, p + 65536)) !== true) throw Error('자산 청크를 쓰지 못했습니다.');
     }
-    native.endAsset(); return ref;
+    if (native.endAsset() !== true) throw Error('자산을 확정하지 못했습니다.');
+    return Promise.resolve(ref);
   }
-  async function externalize(value, key = '') {
-    if (['src', 'backgroundImage', 'pdfSource', 'dataUrl'].includes(key) && typeof value === 'string' && value.startsWith('data:')) return assetString(value);
-    if (Array.isArray(value)) { const output = []; for (const item of value) output.push(await externalize(item)); return output; }
+  function readBlobPart(blob, start, end) {
+    return new Promise(function (resolve, reject) {
+      var part = blob.slice(start, Math.min(blob.size, end));
+      var expected = Math.min(blob.size, end) - start;
+      if (part.size !== expected) { reject(Error('원본 자산 범위 크기가 일치하지 않습니다.')); return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = reader.result;
+        if (typeof result !== 'string') { reject(Error('원본 자산을 읽지 못했습니다.')); return; }
+        var comma = result.indexOf(',');
+        if (comma < 0 || result.slice(0, comma).slice(-7) !== ';base64') { reject(Error('원본 자산 인코딩이 올바르지 않습니다. (길이 ' + result.length + ', 쉼표 ' + comma + ')')); return; }
+        var chunk = result.slice(comma + 1);
+        if (atob(chunk).length !== expected) { reject(Error('원본 자산 청크 크기가 일치하지 않습니다.')); return; }
+        resolve(chunk);
+      };
+      reader.onerror = function () { reject(reader.error || Error('자산을 읽지 못했습니다.')); };
+      reader.onabort = function () { reject(Error('자산 읽기가 중단되었습니다.')); };
+      reader.readAsDataURL(part);
+    });
+  }
+  function assetBlob(blob) {
+    if (!blob || typeof blob.size !== 'number' || blob.size <= 0) throw Error('원본 자산이 비어 있습니다.');
+    var ref = native.beginRasterAsset(blob.type || 'application/octet-stream');
+    if (!ref) throw Error('자산 이전을 시작하지 못했습니다.');
+    function next(p) {
+      if (p >= blob.size) {
+        if (native.endAsset() !== true) throw Error('자산을 확정하지 못했습니다.');
+        return Promise.resolve(ref);
+      }
+      return readBlobPart(blob, p, p + 49152).then(function (chunk) {
+        if (native.appendAsset(chunk) !== true) throw Error('자산 청크를 쓰지 못했습니다.');
+        return next(p + 49152);
+      });
+    }
+    return next(0);
+  }
+  function assetField(key) {
+    return key === 'src' || key === 'backgroundImage' || key === 'pdfSource' || key === 'dataUrl';
+  }
+  function externalize(value, key, raster) {
+    if (assetField(key) && typeof value === 'string' && value.slice(0, 5) === 'data:') return assetString(value, raster || key === 'backgroundImage');
+    if (Array.isArray(value)) {
+      var output = [], index = 0;
+      function nextArray() {
+        if (index >= value.length) return Promise.resolve(output);
+        return externalize(value[index], '').then(function (item) {
+          output.push(item); index++; return nextArray();
+        });
+      }
+      return nextArray();
+    }
     if (value && typeof value === 'object') {
-      const output = {}; for (const key of Object.keys(value)) output[key] = await externalize(value[key], key); return output;
+      var copy = Object.create(null), names = Object.keys(value), position = 0;
+      function nextField() {
+        if (position >= names.length) return Promise.resolve(copy);
+        var name = names[position++];
+        return externalize(value[name], name, name === 'src' && value.type === 'image').then(function (item) {
+          copy[name] = item; return nextField();
+        });
+      }
+      return nextField();
     }
-    return value;
+    return Promise.resolve(value);
   }
   function text(value, page) {
-    const data = JSON.stringify(value); native.beginText(page);
-    for (let p = 0; p < data.length; p += 32768) native.appendText(data.slice(p, p + 32768));
-    native.endText();
-  }
-  const ids = has('documents') ? await request(db.transaction('documents','readonly').objectStore('documents').getAllKeys()) : [];
-  const fallback = ids.length ? [] : JSON.parse(localStorage.getItem('inkforge_documents') || '[]');
-  for (const id of ids.length ? ids : fallback.map(d => d.id)) {
-    if (!native.beginDocument(String(id))) continue;
-    const doc = ids.length ? await get('documents', id) : fallback.find(d => d.id === id);
-    const { pages, ...metadata } = doc;
-    text(await externalize(metadata), false);
-    const assets = new Map();
-    for (const original of pages || []) {
-      const page = await externalize(original);
-      if (page.backgroundAssetId && !page.backgroundImage) {
-        if (!assets.has(page.backgroundAssetId)) {
-          const asset = has('assets') ? await get('assets', page.backgroundAssetId)
-            : JSON.parse(localStorage.getItem('inkforge_asset_' + page.backgroundAssetId) || 'null');
-          if (!asset) throw Error('PDF 배경 자산이 없습니다: ' + page.backgroundAssetId);
-          assets.set(page.backgroundAssetId, asset.blob instanceof Blob ? await assetBlob(asset.blob) : await assetString(asset.dataUrl));
-        }
-        page.backgroundImage = assets.get(page.backgroundAssetId);
-      }
-      delete page.backgroundAssetId;
-      text(page, true);
+    var data = JSON.stringify(value);
+    if (native.beginText(page) !== true) throw Error('노트 텍스트를 열지 못했습니다.');
+    for (var p = 0; p < data.length; p += 32768) {
+      if (native.appendText(data.slice(p, p + 32768)) !== true) throw Error('노트 텍스트를 쓰지 못했습니다.');
     }
-    native.endDocument();
+    if (native.endText() !== true) throw Error('노트 텍스트를 확정하지 못했습니다.');
   }
-  for (const key of ['folders','preferences','appSettings']) {
-    const value = has('settings') ? (await get('settings', key))?.value : JSON.parse(localStorage.getItem('inkforge_setting_' + key) || 'null');
-    if (value != null) native.setting(key, JSON.stringify(value));
+  function migrateDocuments(ids) {
+    var fallback = ids.length ? [] : JSON.parse(localStorage.getItem('inkforge_documents') || '[]');
+    var documentIds = ids.slice();
+    if (!ids.length) for (var i = 0; i < fallback.length; i++) documentIds.push(fallback[i].id);
+    function documentAt(index) {
+      if (index >= documentIds.length) return Promise.resolve();
+      var id = documentIds[index];
+      var began = native.beginDocument(String(id));
+      if (began === false) return documentAt(index + 1);
+      if (began !== true) throw Error('문서 이전을 시작하지 못했습니다.');
+      var found = ids.length ? get('documents', id) : Promise.resolve(fallback[index]);
+      return found.then(function (doc) {
+        if (!doc) throw Error('원본 문서가 없습니다: ' + id);
+        var pages = doc.pages || [];
+        var metadata = Object.create(null), names = Object.keys(doc);
+        for (var n = 0; n < names.length; n++) if (names[n] !== 'pages') metadata[names[n]] = doc[names[n]];
+        return externalize(metadata, '').then(function (converted) {
+          text(converted, false);
+          var assets = Object.create(null);
+          function pageAt(position) {
+            if (position >= pages.length) {
+              if (native.endDocument() !== true) throw Error('문서를 확정하지 못했습니다.');
+              return documentAt(index + 1);
+            }
+            return externalize(pages[position], '').then(function (page) {
+              function finishPage() {
+                delete page.backgroundAssetId;
+                text(page, true);
+                return pageAt(position + 1);
+              }
+              if (page.backgroundAssetId && !page.backgroundImage) {
+                var oldId = page.backgroundAssetId;
+                if (Object.prototype.hasOwnProperty.call(assets, oldId)) {
+                  page.backgroundImage = assets[oldId];
+                  return finishPage();
+                }
+                var foundAsset = has('assets') ? get('assets', oldId)
+                  : Promise.resolve(JSON.parse(localStorage.getItem('inkforge_asset_' + oldId) || 'null'));
+                return foundAsset.then(function (asset) {
+                  if (!asset) throw Error('PDF 배경 자산이 없습니다: ' + oldId);
+                  return asset.blob instanceof Blob ? assetBlob(asset.blob) : assetString(asset.dataUrl, true);
+                }).then(function (ref) {
+                  assets[oldId] = ref; page.backgroundImage = ref; return finishPage();
+                });
+              }
+              return finishPage();
+            });
+          }
+          return pageAt(0);
+        });
+      });
+    }
+    return documentAt(0);
   }
-  db.close(); native.done('');
-})().catch(error => window.NativeMigration.done(String(error?.message || error)));
+  function migrateSettings() {
+    var names = ['folders', 'preferences', 'appSettings'];
+    function settingAt(index) {
+      if (index >= names.length) return Promise.resolve();
+      var key = names[index];
+      var found = has('settings') ? get('settings', key).then(function (row) { return row ? row.value : null; })
+        : Promise.resolve(JSON.parse(localStorage.getItem('inkforge_setting_' + key) || 'null'));
+      return found.then(function (value) {
+        if (value != null && native.setting(key, JSON.stringify(value)) !== true) throw Error('설정을 이전하지 못했습니다: ' + key);
+        return settingAt(index + 1);
+      });
+    }
+    return settingAt(0);
+  }
+  try {
+    request(indexedDB.open('inkforge-notes-studio')).then(function (opened) {
+      db = opened;
+      return has('documents') ? keys('documents') : Promise.resolve([]);
+    }).then(migrateDocuments).then(migrateSettings).then(function () {
+      db.close(); db = null; native.done('');
+    }).catch(fail);
+  } catch (error) { fail(error); }
+})();
 </script></body></html>

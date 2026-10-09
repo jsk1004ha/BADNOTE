@@ -526,7 +526,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const input = document.getElementById('pageJumpInput');
             input.value = '2';
             document.querySelector('[data-action="go-page-number"]').click();
-            await new Promise(resolve => setTimeout(resolve, 160));
+            // A smooth scroll temporarily changes the nearest-page indicator.
+            // Check the settled destination, with a bounded wait for failure.
+            const viewport = document.getElementById('editorViewport');
+            const deadline = performance.now() + 3000;
+            let previousTop = viewport.scrollTop;
+            let stableFrames = 0;
+            while (performance.now() < deadline && stableFrames < 6) {
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              const top = viewport.scrollTop;
+              stableFrames = api.state.currentPageIndex === 1 && Math.abs(top - previousTop) < .1
+                ? stableFrames + 1 : 0;
+              previousTop = top;
+            }
             return {
               railMissing,
               sidebarOpen: sidebar.classList.contains('is-open'),
@@ -720,7 +732,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
               clientY: y
             }));
             const anchor = point();
+            // Measure the new lock's scheduled interval independently of render/RAF delay.
+            api.state.zoomDragLockUntil = 0;
+            const beforeZoom = performance.now();
             api.setZoom(api.state.zoom * 1.04, { clientX: anchor.x, clientY: anchor.y });
+            const scheduledLockMs = api.state.zoomDragLockUntil - beforeZoom;
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             const start = viewport.scrollTop;
             const locked = api.state.zoomDragLockUntil - performance.now();
@@ -740,13 +756,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             const lockedDelta = Math.abs(afterLockedDrag - start);
             const unlockedDelta = Math.abs(afterUnlockedDrag - afterLockedDrag);
             return {
+              scheduledLockMs,
               lockedMsRemaining: locked,
               start,
               afterLockedDrag,
               afterUnlockedDrag,
               lockedDelta,
               unlockedDelta,
-              passed: locked > 650 && lockedDelta <= 2 && unlockedDelta >= 40
+              passed: scheduledLockMs > 650 && locked > 0 && lockedDelta <= 2 && unlockedDelta >= 40
             };
           }
         """)
