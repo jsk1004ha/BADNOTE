@@ -115,7 +115,7 @@ class BackgroundLoader(context: Context, private val repository: NoteRepository,
         return pdf
     }
 
-    fun draw(canvas: Canvas, page: NotePage, visible: RectF, scale: Float) {
+    fun draw(canvas: Canvas, page: NotePage, visible: RectF, scale: Float, darkPdf: Boolean = false) {
         framePages += page.id
         val reference = page.meta.optString("pdfSource")
         if (!reference.startsWith("asset:")) {
@@ -143,7 +143,7 @@ class BackgroundLoader(context: Context, private val repository: NoteRepository,
             val height = min(tileLogical, page.height - top)
             val key = "$reference:$index:$bucket:${page.width}:${page.height}:$x:$y"
             val bitmap = cache.get(key)
-            if (bitmap != null) canvas.drawBitmap(bitmap, null, RectF(left, top, left + width, top + height), null)
+            if (bitmap != null) canvas.drawBitmap(bitmap, null, RectF(left, top, left + width, top + height), PdfDisplayColors.paint(darkPdf))
             else missing += Tile(key, left, top, width, height,
                 (((x - centerX).pow(2) + (y - centerY).pow(2)) * 100).toInt())
         }

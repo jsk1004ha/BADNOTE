@@ -621,6 +621,32 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             throw error
         }
     }
+    /** Incremental backup key without loading strokes or assets. Called on the shared writer. */
+    internal fun backupStamp(id: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        fun field(value: String) {
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.size).array())
+            digest.update(bytes)
+        }
+        val metadata = requireNotNull(document(id)).data.copyJson()
+        metadata.remove("lastPageId"); metadata.remove("lastPageIndex")
+        field(metadata.toString())
+        readableDatabase.rawQuery("SELECT p.id,p.position,p.body,COALESCE(g.generation,0) FROM pages p " +
+            "LEFT JOIN page_generation g ON g.page_id=p.id WHERE p.document_id=? ORDER BY p.position,p.id", arrayOf(id)).use { pages ->
+            while (pages.moveToNext()) {
+                val pageId = pages.getString(0)
+                field(pageId); field(pages.getInt(1).toString()); field(pages.getString(2)); field(pages.getLong(3).toString())
+                for ((table, order) in listOf("ocr_page_state" to "page_id", "ocr_regions" to "region_id", "ocr_corrections" to "region_id")) {
+                    field(table)
+                    readableDatabase.rawQuery("SELECT body FROM $table WHERE page_id=? ORDER BY $order", arrayOf(pageId)).use { rows ->
+                        while (rows.moveToNext()) field(rows.getString(0))
+                    }
+                }
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
     fun export(id: String, target: File, cancelled: () -> Boolean = { false }, progress: (Int, Long) -> Unit = { _, _ -> }) {
         // Caller uses the repository executor: edits cannot race with this consistent snapshot.
         val doc = requireNotNull(document(id))

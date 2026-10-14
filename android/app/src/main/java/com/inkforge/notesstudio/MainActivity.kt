@@ -52,6 +52,9 @@ class MainActivity:ComponentActivity(){
     private val recognition by lazy { RecognitionService((getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass<=128) }
     private lateinit var pageOcr:PageOcrCoordinator
     private val network=Executors.newSingleThreadExecutor()
+    private val backupWorker=Executors.newSingleThreadExecutor()
+    private var backupCancel:java.util.concurrent.atomic.AtomicBoolean?=null
+    private val app get()=application as NoteApplication
     private val handler=Handler(Looper.getMainLooper())
     private var migration:LegacyMigration?=null
     private var document:DocumentInfo?=null
@@ -61,6 +64,7 @@ class MainActivity:ComponentActivity(){
     private var libraryFilter="all"
     private var query=""
     private var settings=JSONObject()
+    private var settingsBaseline=JSONObject()
     private var folders=JSONArray()
     private var dictionary=JSONObject()
     private var pageLabel:TextView?=null
@@ -107,7 +111,7 @@ class MainActivity:ComponentActivity(){
         onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true){
             override fun handleOnBackPressed(){navigateBack()}
         })
-        repository=NoteRepository(this)
+        repository=app.repository
         pageOcr=PageOcrCoordinator(repository,recognition)
         recognition.onModelState={tag,state->runOnUiThread{if(manualOcrPageId!=null&&editorNavbar!=null)
             showOcrStatus("인식 모델 $tag · ${when(state){
@@ -119,12 +123,14 @@ class MainActivity:ComponentActivity(){
         fileExport=NativeFileExport(this,repository,::message){value->setBusy(value,"내보낼 파일을 준비하고 있습니다.")}
         fileExport.restore(savedInstanceState?.getString("pendingExport"))
         loadSettings()
+        savedInstanceState?.getString("activeTool")?.let{settings.put("activeTool",it)}
         if(repository.setting("legacy-migration-complete")!="true")startMigration()
         else{
-            val restore=savedInstanceState?.getString("documentId")?:repository.setting("last-open-document")
+            val restore=if(savedInstanceState!=null)savedInstanceState.getString("documentId").orEmpty()
+                else DocumentWindows.documentId(intent)?:repository.setting("last-open-document")
             showLibrary()
-            if(restore.isNotBlank())openDocument(restore)
-            handleIncoming(intent)
+            if(restore.isNotBlank())openDocument(restore,savedInstanceState?.getInt("pageIndex",0))
+            if(DocumentWindows.documentId(intent)==null)handleIncoming(intent)
         }
     }
     private fun makeRoot(){
@@ -134,7 +140,7 @@ class MainActivity:ComponentActivity(){
         status=text("bad note · 4.0",12,0xff607185.toInt()).apply{setPadding(dp(16),dp(5),dp(16),dp(5))}
         blocker=column().apply{gravity=Gravity.CENTER;setBackgroundColor(0xeef5f7fa.toInt());isClickable=true;visibility=View.GONE}
         blockerLabel=text("처리 중…",18);blocker.addView(ProgressBar(this));blocker.addView(blockerLabel)
-        blocker.addView(button("취소"){}.apply{setOnClickListener{if(::fileExport.isInitialized)fileExport.cancel()}})
+        blocker.addView(button("취소"){}.apply{setOnClickListener{backupCancel?.set(true);if(::fileExport.isInitialized)fileExport.cancel()}})
         root.addView(blocker,FrameLayout.LayoutParams(-1,-1));setContentView(root)
     }
     private fun dp(value:Int)=(value*resources.displayMetrics.density).roundToInt()
@@ -178,6 +184,7 @@ class MainActivity:ComponentActivity(){
     }
     private fun loadSettings(){
         settings=JSONObject(repository.setting("preferences",repository.setting("appSettings","{}")))
+        settingsBaseline=settings.copyJson()
         val storedFolders=repository.setting("folders")
         folders=if(storedFolders.isBlank())JSONArray(listOf(json("id" to "root","title" to "문서","color" to "#1b68a6"),json("id" to "study","title" to "학교·공부","color" to "#2b8bc5"),json("id" to "work","title" to "프로젝트","color" to "#6d63c7")))else JSONArray(storedFolders)
         if(storedFolders.isBlank())repository.setting("folders",folders.toString(),true)
@@ -190,7 +197,13 @@ class MainActivity:ComponentActivity(){
             JSONObject(it.readText()).optJSONObject(language)}}.getOrNull()
         additions?.keys()?.forEach{key->if(!dictionary.has(key))dictionary.put(key,additions.getString(key))}
     }
-    private fun saveSettings(){val copy=settings.toString();enqueueSave({repository.setting("preferences",copy,true)})}
+    private fun saveSettings(){
+        val copy=settings.copyJson()
+        val changed=copy.keys().asSequence().filter{copy.opt(it)?.toString()!=settingsBaseline.opt(it)?.toString()}.toList()
+        settingsBaseline=copy.copyJson()
+        enqueueSave({val latest=JSONObject(repository.setting("preferences","{}"));changed.forEach{latest.put(it,copy.opt(it))}
+            repository.setting("preferences",latest.toString(),true)})
+    }
     private fun startMigration(){
         setBusy(true,"기존 노트를 이전하고 있습니다. 원본 데이터는 유지됩니다.")
         migration=LegacyMigration(this,repository,{blockerLabel.text=it}){success->
@@ -238,7 +251,9 @@ class MainActivity:ComponentActivity(){
 
     fun showLibrary(){
         if(audio.recording)stopRecording()
+        val previousDocument=document?.id
         clearScreen();document=null;ids=emptyList();metas=emptyList()
+        if(previousDocument!=null)afterSaved{if(document?.id!=previousDocument)app.windows.release(previousDocument,this)}
         enqueueSave({repository.setting("last-open-document","",true)})
         body.setBackgroundColor(ui.color("#181818"))
         val generation=++libraryGeneration
@@ -465,7 +480,7 @@ class MainActivity:ComponentActivity(){
             if(document==null)showLibrary()}
     }
     private fun documentMenu(doc:DocumentInfo){
-        val options=if(doc.trashed)listOf("복원","영구 삭제")else listOf("이름 변경","폴더로 이동","태그","복제","파일 내보내기","기기 공유","휴지통으로 이동")
+        val options=if(doc.trashed)listOf("복원","영구 삭제")else listOf("이름 변경","폴더로 이동","태그","복제","파일 내보내기","기기 공유","휴지통으로 이동","다른 창에서 열기")
         choose(doc.title,options){i->if(doc.trashed){if(i==0)mutateDocument(doc){put("trashed",false)}else confirm("영구 삭제",doc.title){work("삭제 중…",{repository.deleteDocument(doc.id)}){showLibrary()}}}
             else when(i){
                 0->prompt("노트 이름",doc.title){value->mutateDocument(doc){put("title",value)}}
@@ -475,6 +490,7 @@ class MainActivity:ComponentActivity(){
                 4->exportMenu(doc,false)
                 5->exportMenu(doc,true)
                 6->mutateDocument(doc){put("trashed",true)}
+                7->openDocumentWindow(doc.id)
             }
         }
     }
@@ -485,10 +501,27 @@ class MainActivity:ComponentActivity(){
             val pageIds=repository.pageIds(id);require(pageIds.isNotEmpty()){"페이지가 없습니다."}
             Triple(doc,pageIds,pageIds.map{requireNotNull(repository.pageMeta(it))})
         }){(doc,pageIds,pageMetas)->
+            val existing=app.windows.claim(id,this)
+            if(existing!=null){
+                if(existing.isDestroyed||existing.isFinishing)existing.afterSaved{
+                    app.windows.release(id,existing);if(!isDestroyed&&!isFinishing)openDocument(id,index)
+                }else{DocumentWindows.focus(existing);message("이 문서는 열려 있는 창에서 이어서 편집합니다.")}
+                return@work
+            }
+            document?.id?.takeIf{it!=id}?.let{app.windows.release(it,this)}
             document=doc;ids=pageIds;metas=pageMetas;openTabs+=id
             val remembered=doc.data.optString("lastPageId");val found=pageIds.indexOf(remembered)
             val pageIndex=(index?:if(found>=0)found else doc.data.optInt("lastPageIndex",0)).coerceIn(0,pageIds.lastIndex)
             showEditor(pageIndex);enqueueSave({repository.setting("last-open-document",id,true)})
+        }
+    }
+    internal fun openDocumentWindow(id:String){
+        inkView?.finishContact()
+        afterSaved{
+            val existing=app.windows.owner(id)
+            if(existing!=null&&!existing.isDestroyed&&!existing.isFinishing){
+                DocumentWindows.focus(existing);message("이 문서는 이미 열려 있습니다. 다른 문서를 선택해 두 창에서 편집하세요.")
+            }else startActivity(DocumentWindows.intent(this,id))
         }
     }
     private fun showEditor(index:Int){
@@ -684,6 +717,7 @@ class MainActivity:ComponentActivity(){
     private fun pasteSelection(){clipboard.forEach{inkView?.add(InkGeometry.transform(it,25f,25f).put("id",uid("obj")))}}
     private fun clearPage(){confirm("페이지 지우기","현재 페이지의 모든 필기를 지울까요?"){inkView?.let{v->v.currentPage?.objects?.filter{!it.optBoolean("locked")}?.let{v.changeObjects(it,emptyList())}}}}
     private fun applySettings(view:InkCanvasView){
+        view.pdfDarkMode=settings.optBoolean("pdfDarkMode",false)
         view.stylusOnly=settings.optBoolean("stylusOnly",true);view.scribbleErase=settings.optBoolean("scribbleErase",true);view.drawHold=settings.optBoolean("drawHold",true)
         view.continuous=document?.continuous(settings.optBoolean("continuous",true))?:settings.optBoolean("continuous",true);view.brush=settings.optString("brush","fountain");view.inkColor=settings.optString("inkColor","#111827");view.inkWidth=settings.f("inkWidth",4.2f)
         view.eraserRadius=settings.f("eraserRadius",22f);view.highlighterWidth=settings.f("highlighterWidth",22f);view.penSettings=settings.optJSONObject("penSettings")?:defaultPenSettings(view.brush);view.preciseEraser=settings.optBoolean("preciseEraser",false)
@@ -819,6 +853,14 @@ class MainActivity:ComponentActivity(){
     private fun editorMenu(){
         val doc=document?:return;val view=inkView?:return;val content=showSheet(doc.title,"문서 옵션")
         menuItem(content,"파일 내보내기","export","노트 파일 또는 PDF로 저장합니다."){exportMenu(doc,false)}
+        menuItem(content,"다른 문서를 새 창에서 열기","notebook","문서를 선택하면 별도 창으로 열립니다. 분할 화면 배치는 기기에서 조절합니다."){
+            work("문서 목록을 여는 중…",{repository.documents().filter{!it.trashed&&it.id!=doc.id}}){other->
+                if(other.isEmpty())message("다른 문서를 먼저 만들어 주세요.")else choose("다른 창에서 열 문서",other.map{it.title}){openDocumentWindow(other[it].id)}
+            }
+        }
+        menuItem(content,if(view.pdfDarkMode)"PDF 밝은 배경"else"PDF 다크 모드","read","PDF 배경만 반전하며 필기 색상은 유지합니다."){
+            settings.put("pdfDarkMode",!view.pdfDarkMode);view.pdfDarkMode=!view.pdfDarkMode;saveSettings()
+        }
         menuItem(content,"문서 검색","search","입력한 텍스트, 수식, 제목을 찾습니다."){searchDocument()}
         menuItem(content,"손글씨 OCR","ocr","현재 페이지 필기를 영역별로 인식하고 교정할 수 있습니다."){recognize(false,false)}
         menuItem(content,if(doc.favorite)"파일 즐겨찾기 해제"else"파일 즐겨찾기","star","라이브러리 즐겨찾기와 목록 상단에 고정합니다."){mutateDocument(doc){put("favorite",!doc.favorite)}}
@@ -889,10 +931,16 @@ class MainActivity:ComponentActivity(){
     @Deprecated("Uses platform result contracts for API 23 compatibility")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data)
         if(requestCode==NativeFileExport.REQUEST_SAVE){fileExport.result(resultCode,data);return}
+        if(requestCode==REQUEST_BACKUP_FOLDER&&resultCode==RESULT_OK){
+            data?.data?.let{uri->try{BackupSchedule.chooseFolder(this,uri,data.flags);showBackupSettings()}
+                catch(error:Exception){message(error.message?:"백업 폴더를 지정하지 못했습니다.")}}
+            return
+        }
         if(requestCode==REQUEST_IMPORT&&resultCode==RESULT_OK)data?.data?.let{importUri(it,importMode)}
     }
     override fun onNewIntent(intent:Intent){super.onNewIntent(intent);setIntent(intent);handleIncoming(intent)}
     private fun handleIncoming(intent:Intent?){
+        DocumentWindows.documentId(intent)?.let{id->if(document?.id!=id)openDocument(id);return}
         if(intent?.action==Intent.ACTION_SEND&&intent.type=="application/pdf"){
             @Suppress("DEPRECATION") val uri=intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             if(uri!=null)importUri(uri,"pdf")
@@ -1146,9 +1194,42 @@ class MainActivity:ComponentActivity(){
                 onNotices={val notices=assets.open("pdfium-notices.txt").bufferedReader(Charsets.UTF_8).use{it.readText()}
                     val viewer=showSheet("Open Source","PDFium 라이선스",680)
                     viewer.addView(ui.text(notices,11f,ui.ink).apply{setTextIsSelectable(true)})},
-                onClose={closeSheet()}) }
+                onBackup={showBackupSettings()},onShortcuts={shortcutGuide()},onClose={closeSheet()}) }
         }
         content.addView(compose,LinearLayout.LayoutParams(-1,-2))
+    }
+
+    private fun showBackupSettings(){
+        val prefs=BackupPreferences(this);val content=showSheet("Backup","자동 백업")
+        content.addView(ui.text("선택한 폴더에 변경된 문서의 .ifnote 복사본을 저장합니다. 이전 복사본은 보관합니다. 예약 백업은 약 12시간마다 충전·유휴 상태에서 실행되며 Android가 시점을 조절합니다.",13f,ui.muted))
+        content.addView(ui.text(prefs.status,12f,ui.ink),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12);bottomMargin=dp(12)})
+        if(prefs.folder.isNotBlank())content.addView(ui.text(Uri.parse(prefs.folder).lastPathSegment?:"백업 폴더",12f,ui.muted))
+        menuItem(content,"백업 폴더 선택","folder","읽기·쓰기와 파일 이름 변경을 지원하는 폴더를 선택합니다."){
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION),REQUEST_BACKUP_FOLDER)
+        }
+        menuItem(content,if(prefs.enabled)"자동 백업 끄기"else"자동 백업 켜기","settings"){
+            if(prefs.folder.isBlank())message("백업 폴더를 먼저 선택해 주세요.")else{
+                prefs.enabled=!prefs.enabled
+                try{BackupSchedule.restore(this)}catch(error:Exception){prefs.enabled=false;message(error.message?:"예약 실패")}
+                showBackupSettings()
+            }
+        }
+        menuItem(content,"지금 백업","export","휴지통 문서와 PDF 가져오기가 진행 중인 문서는 건너뜁니다."){runBackupNow()}
+    }
+    private fun runBackupNow(){
+        if(BackupPreferences(this).folder.isBlank()){message("백업 폴더를 먼저 선택해 주세요.");return}
+        inkView?.finishContact();setBusy(true,"변경된 노트를 백업하고 있습니다.")
+        val cancel=java.util.concurrent.atomic.AtomicBoolean();backupCancel=cancel
+        afterSaved{backupWorker.execute{
+            val result=runCatching{SafBackup.run(this,repository){cancel.get()}}
+            runOnUiThread{backupCancel=null;if(!isDestroyed&&!isFinishing){setBusy(false)
+                result.fold({message("${it.written}개 문서를 백업했습니다.")},{message(it.message?:"백업 실패")});showBackupSettings()}}
+        }}
+    }
+    private fun shortcutGuide(){
+        val content=showSheet("Keyboard","키보드 단축키")
+        content.addView(ui.text("Ctrl+Z 실행 취소 · Ctrl+Shift+Z / Ctrl+Y 다시 실행 · Ctrl+S 현재 필기 저장\n\n1 펜 · 2 형광펜 · 3 지우개 · 4 올가미 · 5 손 도구 · 6 텍스트 · 7 도형 · 8 암기 테이프 · 9 레이저\n\n텍스트 입력창과 대화상자에서는 편집기 단축키를 적용하지 않습니다.",14f,ui.ink))
     }
 
     private fun showSettingsLegacy(){
@@ -1352,8 +1433,24 @@ class MainActivity:ComponentActivity(){
         sheetActions(content){closeSheet();action(selected);renderActiveDock()}
     }
     private fun navigateBack(){if(modal!=null){closeSheet();return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
+    override fun dispatchKeyEvent(event:KeyEvent):Boolean{
+        val key=when(event.keyCode){KeyEvent.KEYCODE_Z->"Z";KeyEvent.KEYCODE_Y->"Y";KeyEvent.KEYCODE_S->"S"
+            in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9->(event.keyCode-KeyEvent.KEYCODE_0).toString();else->""}
+        val action=EditorShortcuts.resolve(key,event.isCtrlPressed,event.isShiftPressed,event.isAltPressed,event.isMetaPressed,
+            currentFocus is EditText||currentFocus?.onCheckIsTextEditor()==true,inkView!=null,busy||modal!=null||saveFailed)
+        if(action!=null&&event.action==KeyEvent.ACTION_DOWN){
+            if(event.repeatCount==0)applyShortcut(action)
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+    private fun applyShortcut(action:EditorShortcuts.Action){
+        val view=inkView?:return
+        when(action){EditorShortcuts.Action.UNDO->view.undo();EditorShortcuts.Action.REDO->view.redo()
+            EditorShortcuts.Action.SAVE->{view.finishContact();afterSaved{message("저장됨")}}
+            else->view.tool=InkCanvasView.Tool.valueOf(action.name)}
+    }
     override fun onKeyDown(keyCode:Int,event:KeyEvent):Boolean{
-        if(event.isCtrlPressed){when(keyCode){KeyEvent.KEYCODE_Z->{if(event.isShiftPressed)inkView?.redo()else inkView?.undo();return true};KeyEvent.KEYCODE_Y->{inkView?.redo();return true};KeyEvent.KEYCODE_S->{inkView?.finishContact();return true}}}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(true);return true}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY){inkView?.undo();return true}
         return super.onKeyDown(keyCode,event)
@@ -1362,7 +1459,9 @@ class MainActivity:ComponentActivity(){
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(false);return true}
         return super.onKeyUp(keyCode,event)
     }
-    override fun onSaveInstanceState(outState:Bundle){inkView?.finishContact();outState.putString("documentId",document?.id);outState.putString("pendingExport",fileExport.pendingPath());super.onSaveInstanceState(outState)}
+    override fun onSaveInstanceState(outState:Bundle){inkView?.finishContact();outState.putString("documentId",document?.id)
+        outState.putInt("pageIndex",inkView?.currentIndex?:0);outState.putString("activeTool",inkView?.tool?.name)
+        outState.putString("pendingExport",fileExport.pendingPath());super.onSaveInstanceState(outState)}
     override fun onResume(){super.onResume();if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}}
     override fun onPause(){ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
         if(::pageOcr.isInitialized){pageOcr.setActive(false);recognition.setActive(false)}
@@ -1373,10 +1472,11 @@ class MainActivity:ComponentActivity(){
         recognition.releaseIdle()
     }}
     override fun onDestroy(){ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
+        backupCancel?.set(true);backupWorker.shutdown();afterSaved{app.windows.releaseAll(this)}
         if(saveFailed){pendingRecordings.forEach(audio::discardPending);pendingRecordings.clear()}
         audio.close();recognition.close();network.shutdown();super.onDestroy()}
     companion object{
-        const val REQUEST_IMPORT=4180;const val REQUEST_AUDIO=4181
+        const val REQUEST_IMPORT=4180;const val REQUEST_AUDIO=4181;const val REQUEST_BACKUP_FOLDER=4182
         internal fun saveCalculatedVariable(repository:NoteRepository,documentId:String,name:String,value:Double){
             val latest=repository.document(documentId)?:return
             val variables=latest.data.optJSONObject("variables")?.copyJson()?:JSONObject()

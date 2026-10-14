@@ -84,3 +84,7 @@ python tools/test_native.py --ui-only --device emulator-5580 --adb "C:/Users/Use
 - 4.0.1 개발: [greencow](https://github.com/grncow)
 - 포르투갈어 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
 - 아이콘: [Photon616](https://github.com/Photon616)
+
+### 태블릿 부가 기능 (개발 브랜치)
+
+문서별 창, SAF 자동 백업, 숫자 도구 단축키, PDF 배경 다크 모드의 사용법·저장 범위·검증은 [태블릿 부가 기능 문서](docs/TABLET-PRODUCTIVITY-KO.md)에 정리했습니다.
