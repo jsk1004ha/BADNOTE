@@ -12,6 +12,7 @@ def signingFile = rootProject.file('local-signing.properties')
 if (signingFile.exists()) signingFile.withInputStream { signingProperties.load(it) }
 def ocrBetaEnabled = providers.gradleProperty('badnoteOcrBeta').orElse('false').get().toBoolean()
 def vectorPdfTests = providers.gradleProperty('badnoteVectorPdfTests').orElse('false').get().toBoolean()
+def productivityTests = providers.gradleProperty('badnoteProductivityTests').orElse('false').get().toBoolean()
 
 android {
     namespace 'com.inkforge.notesstudio'
@@ -24,7 +25,8 @@ android {
         targetSdk 36
         versionCode 412
         versionName '4.1.2-beta.1'
-        testInstrumentationRunner(vectorPdfTests ? 'com.inkforge.notesstudio.VectorPdfInstrumentation' : 'com.inkforge.notesstudio.NativeSmokeInstrumentation')
+        testInstrumentationRunner(productivityTests ? 'com.inkforge.notesstudio.ProductivityInstrumentation' :
+            (vectorPdfTests ? 'com.inkforge.notesstudio.VectorPdfInstrumentation' : 'com.inkforge.notesstudio.NativeSmokeInstrumentation'))
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }
