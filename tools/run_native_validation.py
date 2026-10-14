@@ -581,12 +581,15 @@ def main() -> None:
         elif args.phase == "apk":
             sdk = sdk_root()
             os.environ["ANDROID_SDK_ROOT"] = str(sdk)
+            gradle_config = (ANDROID / "app/build.gradle").read_text(encoding="utf-8")
+            version_code = re.search(r"versionCode\s+(\d+)", gradle_config).group(1)
+            version_name = re.search(r"versionName\s+'([^']+)'", gradle_config).group(1)
             for variant in ("update", "sideBySide"):
                 path = ANDROID / f"app/build/outputs/apk/{variant}/release/app-{variant}-release.apk"
                 package = "com.inkforge.note4" if variant == "update" else "com.inkforge.note5"
                 run([sys.executable, ROOT / "tools/verify_apk.py", path, "--native-min-api-limit", "23",
                      "--expected-package", package, "--expected-min-sdk", "23",
-                     "--expected-target-sdk", "36", "--expected-version-code", "411", "--expected-version-name", "4.1.1-beta.1",
+                     "--expected-target-sdk", "36", "--expected-version-code", version_code, "--expected-version-name", version_name,
                      "--expected-certificate", "45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847",
                      "--pdfium-manifest", ROOT / "build/dependencies/pdfium-8086/verification.json",
                      *[argument for guard in args.guarded_native_library for argument in ("--guarded-native-library", guard)],

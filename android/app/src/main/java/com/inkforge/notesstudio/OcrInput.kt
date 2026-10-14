@@ -8,7 +8,7 @@ import java.security.MessageDigest
 
 /** Versioned digests cover actual ordered input, not object IDs or point counts alone. */
 object OcrInput {
-    const val LAYOUT_VERSION = 1
+    const val LAYOUT_VERSION = 2
     const val MODEL_EPOCH = "mlkit-digital-ink-19.0.0"
     const val SOFT_REGION_BYTES = 256 * 1024
     const val SOFT_REGION_POINTS = 8192
@@ -17,17 +17,23 @@ object OcrInput {
     const val HARD_REGION_POINTS = 32768
     const val HARD_REGION_STROKES = 2048
 
-    fun pageDigest(page: NotePage, policy: String): String = hash { h ->
-        h.string("badnote-page-ocr-v1"); h.string(MODEL_EPOCH); h.string(pageSourceDigest(page, policy))
+    fun pageDigest(page: NotePage, policy: String, pipeline: OcrPipeline = OcrPipeline.CURRENT): String = hash { h ->
+        h.string("badnote-page-ocr-v2"); h.string(pipeline.fingerprint); h.string(pageSourceDigest(page, policy))
     }
 
-    private fun pageSourceDigest(page: NotePage, policy: String): String = hash { h ->
+    fun pageSourceDigest(page: NotePage, policy: String): String = hash { h ->
         h.string("badnote-page-source-v1"); h.string(policy)
         h.float(page.width); h.float(page.height)
         h.value(page.meta, setOf("ocrText", "ocrSignature"))
         page.objects.forEachIndexed { index, obj ->
             h.int(index); h.value(obj)
         }
+    }
+
+    /** Independent of layout/model configuration; exact source and order must still match. */
+    fun sourceIdentityDigest(region: PageOcrLayout.Region): String = hash { h ->
+        h.string("badnote-ink-source-identity-v1")
+        region.strokes.forEach { h.string(it.id); h.value(it.source) }
     }
 
     fun imageKey(page: NotePage, policy: String, rendered: Bitmap): String = hash { h ->
@@ -43,7 +49,7 @@ object OcrInput {
 
     fun regionInputDigest(region: PageOcrLayout.Region, languageTag: String, preContext: String,
                           writingWidth: Float, writingHeight: Float, timeMode: String): String = hash { h ->
-        h.string("badnote-region-input-v1"); h.int(LAYOUT_VERSION)
+        h.string("badnote-region-input-v2"); h.string(OcrPipeline.CURRENT.fingerprint)
         h.int(5); h.string(languageTag); h.string(preContext); h.string(timeMode)
         h.float(writingWidth); h.float(writingHeight)
         h.float(region.bounds.left); h.float(region.bounds.top)

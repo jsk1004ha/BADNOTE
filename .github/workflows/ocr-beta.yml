@@ -1,0 +1,201 @@
+name: OCR beta build and prerelease
+
+on:
+  push:
+    branches: [codex/ocr-4.1.2-beta.1]
+  pull_request:
+    branches: [codex/ocr-native-plan]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ocr-beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-release-evidence:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/ocr-4.1.2-beta.1'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Remove diagnostic attachments from the existing beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            assets=$(gh release view v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            for asset in apk-verification.json ocrOnly.log s5cOnly.log SHA256SUMS; do
+              if printf '%s\n' "$assets" | grep -Fxq "$asset"; then
+                gh release delete-asset v4.1.2-beta.1 "$asset" --repo "$GITHUB_REPOSITORY" --yes
+              fi
+            done
+          fi
+
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      signed: ${{ steps.signing.outputs.ready }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install validation dependency
+        run: python3 -m pip install Pillow==12.3.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          cmdline-tools-version: '13114758'
+          log-accepted-android-sdk-licenses: 'false'
+          packages: 'platform-tools'
+      - name: Install pinned Android tools
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.1.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Evaluation and compatibility tool regressions
+        run: |
+          python3 tools/test_ocr_evaluation.py
+          python3 tools/test_ocr_tools.py
+          python3 tools/test_apk_native.py
+          python3 tools/test_pdfium_prepare.py
+          python3 tools/test_release_upgrade.py
+          python3 tools/test_native_validation.py
+      - name: Android tests and isolated test APK
+        working-directory: android
+        run: |
+          bash ./gradlew --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g \
+            :app:testSideBySideDebugUnitTest :app:assembleSideBySideDebug :app:assembleSideBySideDebugAndroidTest
+      - name: Verify APK metadata, signer, alignment and pinned PDFium
+        run: |
+          mkdir -p build/ocr-beta
+          cp android/app/build/outputs/apk/sideBySide/debug/app-sideBySide-debug.apk \
+            build/ocr-beta/BADNOTE-4.1.2-beta.1-SideBySide-Debug.apk
+          python3 tools/verify_apk.py build/ocr-beta/BADNOTE-4.1.2-beta.1-SideBySide-Debug.apk \
+            --build-tools "$ANDROID_HOME/build-tools/36.1.0" \
+            --expected-package com.inkforge.note5.debug --expected-min-sdk 23 --expected-target-sdk 36 \
+            --expected-version-code 412 --expected-version-name 4.1.2-beta.1-debug \
+            --pdfium-manifest build/dependencies/pdfium-8086/verification.json \
+            > build/ocr-beta/apk-verification.json
+          sha256sum build/ocr-beta/*.apk > build/ocr-beta/SHA256SUMS
+      - name: Allow emulator KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android OCR lifetime and storage boundary checks
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash tools/check_ocr_beta_device.sh
+      - name: Prepare the existing release signing identity when configured
+        id: signing
+        if: github.event_name != 'pull_request'
+        env:
+          BADNOTE_KEYSTORE_BASE64: ${{ secrets.BADNOTE_KEYSTORE_BASE64 }}
+          BADNOTE_KEYSTORE_PASSWORD: ${{ secrets.BADNOTE_KEYSTORE_PASSWORD }}
+          BADNOTE_KEY_ALIAS: ${{ secrets.BADNOTE_KEY_ALIAS }}
+          BADNOTE_KEY_PASSWORD: ${{ secrets.BADNOTE_KEY_PASSWORD }}
+        run: python3 tools/prepare_release_signing.py
+      - name: Build both distribution variants
+        working-directory: android
+        run: |
+          bash ./gradlew --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g \
+            -PbadnoteOcrBeta=true :app:assembleUpdateRelease :app:assembleSideBySideRelease
+      - name: Verify distribution identities and keep unsigned builds private
+        env:
+          RELEASE_SIGNED: ${{ steps.signing.outputs.ready }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/ocr-beta-release
+          for pair in 'update Update com.inkforge.note4' 'sideBySide SideBySide com.inkforge.note5'; do
+            read -r flavor suffix package <<< "$pair"
+            if [ "$RELEASE_SIGNED" = true ]; then
+              apk="build/ocr-beta-release/bad-note-Android-4.1.2-beta.1-$suffix.apk"
+              cp "android/app/build/outputs/apk/$flavor/release/app-$flavor-release.apk" "$apk"
+              python3 tools/verify_apk.py "$apk" \
+                --build-tools "$ANDROID_HOME/build-tools/36.1.0" \
+                --expected-package "$package" --expected-min-sdk 23 --expected-target-sdk 36 \
+                --expected-version-code 412 --expected-version-name 4.1.2-beta.1 \
+                --expected-certificate 45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847 \
+                --pdfium-manifest build/dependencies/pdfium-8086/verification.json \
+                > "build/ocr-beta-release/$suffix-verification.json"
+            else
+              cp "android/app/build/outputs/apk/$flavor/release/app-$flavor-release-unsigned.apk" \
+                "build/ocr-beta-release/bad-note-Android-4.1.2-beta.1-$suffix-Unsigned.apk"
+            fi
+          done
+      - name: Remove temporary signing files
+        if: always()
+        run: |
+          rm -f android/local-signing.properties
+          rm -rf "$RUNNER_TEMP/badnote-release-signing"
+      - name: Upload verified beta and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: badnote-4.1.2-beta.1
+          path: build/ocr-beta/
+          if-no-files-found: error
+      - name: Upload distribution builds for this run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: badnote-4.1.2-beta.1-distribution
+          path: build/ocr-beta-release/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/ocr-4.1.2-beta.1' && needs.verify.outputs.signed == 'true'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Download this run's verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name badnote-4.1.2-beta.1-distribution --dir build/ocr-beta-release
+      - name: Publish only the two release APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          update=build/ocr-beta-release/bad-note-Android-4.1.2-beta.1-Update.apk
+          side=build/ocr-beta-release/bad-note-Android-4.1.2-beta.1-SideBySide.apk
+          test -s "$update" && test -s "$side"
+          if gh release view v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v4.1.2-beta.1" --jq '.object.sha')
+            if [ "$existing" != "$GITHUB_SHA" ] && [ "$existing" != 5eadf4bc2c9d76363264b8b655eaf8ea23ae6e2e ]; then
+              echo 'The beta tag changed after this release repair was prepared.'
+              exit 1
+            fi
+            gh release upload v4.1.2-beta.1 "$update" "$side" --repo "$GITHUB_REPOSITORY" --clobber
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v4.1.2-beta.1" \
+                -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            fi
+            gh release edit v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --notes-file docs/RELEASE-4.1.2-BETA-KO.md
+          else
+            gh release create v4.1.2-beta.1 "$update" "$side" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title 'BADNOTE 4.1.2 Beta 1' \
+              --prerelease --latest=false --notes-file docs/RELEASE-4.1.2-BETA-KO.md
+          fi
+          assets=$(gh release view v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          while IFS= read -r asset; do
+            case "$asset" in
+              bad-note-Android-4.1.2-beta.1-Update.apk|bad-note-Android-4.1.2-beta.1-SideBySide.apk) ;;
+              *) gh release delete-asset v4.1.2-beta.1 "$asset" --repo "$GITHUB_REPOSITORY" --yes ;;
+            esac
+          done <<< "$assets"
+          gh release view v4.1.2-beta.1 --repo "$GITHUB_REPOSITORY" --json assets,isPrerelease \
+            --jq 'if .isPrerelease and (.assets | map(.name) | sort) == ["bad-note-Android-4.1.2-beta.1-SideBySide.apk", "bad-note-Android-4.1.2-beta.1-Update.apk"] then "Two APKs plus GitHub source ZIP/TAR.GZ verified." else error("Unexpected beta release assets") end'

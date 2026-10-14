@@ -933,7 +933,12 @@ class MainActivity:ComponentActivity(){
                 try{val saved=requireNotNull(repository.page(pageId));val result=recognition.handwriting(saved.objects,saved.width,saved.height,
                     settings.optString("language","ko"),true)
                     runOnUiThread{if(document?.id==doc.id&&inkView?.currentPage?.id==pageId)calculatePrompt(result.replace('\n',' '))}}
-                catch(e:Exception){runOnUiThread{message(e.message?:"수식 인식 실패")}}
+                catch(e:Exception){runOnUiThread{
+                    if(e.message=="mathEngineUnavailable"){
+                        message("수식 전용 인식 엔진이 아직 준비되지 않았습니다. 수식을 직접 입력해 주세요.")
+                        if(document?.id==doc.id&&inkView?.currentPage?.id==pageId)calculatePrompt("")
+                    }else message("수식 인식에 실패했습니다.")
+                }}
                 finally{recognitionBusy=false}
             }}
             return
@@ -979,6 +984,7 @@ class MainActivity:ComponentActivity(){
         }
     }
     private fun maybeAutoMath(pageId:String,result:JSONObject){
+        if(result.array("regions").objects().none{it.optString("contentKind")=="MATH"&&it.optString("status")=="complete"})return
         val page=inkView?.currentPage?.takeIf{it.id==pageId}?:return
         val recognized=result.array("regions").objects().joinToString("\n"){it.optString("selectedText")}
         if(!recognized.trim().endsWith("="))return

@@ -26,7 +26,10 @@ object PageOcrLayout {
         }
     }
 
-    fun analyze(objects: List<JSONObject>, width: Float, height: Float): Result {
+    fun analyze(objects: List<JSONObject>, width: Float, height: Float,
+                layoutVersion: Int = OcrPipeline.CURRENT.layoutVersion): Result {
+        require(layoutVersion in 1..2)
+        val diagnostics = LinkedHashSet<String>()
         val valid = ArrayList<Stroke>()
         val invalid = ArrayList<Invalid>()
         val seen = HashSet<String>()
@@ -65,9 +68,11 @@ object PageOcrLayout {
             else listOf("left" to main.filter { centerX(it) < columnSplit },
                 "right" to main.filter { centerX(it) >= columnSplit })
         val allLines = mutableListOf<Pair<String, List<Stroke>>>()
-        if (title.isNotEmpty()) buildLines(title, h, width, unresolved).forEach { allLines += "title" to it }
+        fun lines(group: List<Stroke>) = if (layoutVersion == 1) buildLines(group,h,width,unresolved)
+            else OcrLineLayout.build(group,h,width,unresolved,diagnostics)
+        if (title.isNotEmpty()) lines(title).forEach { allLines += "title" to it }
         groups.forEach { (role, group) ->
-            buildLines(group, h, width, unresolved).forEach { line ->
+            lines(group).forEach { line ->
                 val lineY = line.sumOf { centerY(it).toDouble() } / line.size
                 val inferredRole = if (role == "body" && line.minOf { it.bounds.left } > width * .78f &&
                     bodyNear(lineY.toFloat())) "margin" else role
@@ -77,7 +82,9 @@ object PageOcrLayout {
         val ordered = allLines.sortedWith(compareBy<Pair<String, List<Stroke>>> { roleOrder(it.first) }
             .thenBy { it.second.minOf { stroke -> stroke.bounds.top } })
         val regions = ordered.mapIndexed { order, (role, members) ->
-            knownRegion("line:${members.minBy(Stroke::originalIndex).id}", role, members, order)
+            knownRegion("line:${members.minBy(Stroke::originalIndex).id}", role, members, order).let {
+                it.copy(reviewReasons = it.reviewReasons + diagnostics)
+            }
         }
         val result = Result(regions, nonText, unresolved, invalid,
             unresolved.isNotEmpty() || columnSplit == null && regions.any { it.role == "margin" })

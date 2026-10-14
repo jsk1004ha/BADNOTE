@@ -42,6 +42,7 @@ internal object S5cOcrChecks {
                 json("pageDigest" to digest, "modelGeneration" to generation, "status" to "complete",
                     "regions" to JSONArray(listOf(json("id" to region.id,
                         "strokeIds" to JSONArray(region.strokes.map { it.id }),
+                        "sourceIdentityDigest" to OcrInput.sourceIdentityDigest(region),
                         "inputDigest" to input(region), "status" to "complete",
                         "rawText" to "raw", "selectedText" to "raw"))))
             page.objects.clear(); page.objects += stroke(100f)
@@ -67,6 +68,28 @@ internal object S5cOcrChecks {
             check(repository.ocrResult(page.id)!!.array("regions").getJSONObject(0).optString("correctedText") == "user correction") {
                 "Unchanged original input retains the user correction across model generation"
             }
+            val differentEngine = result(original,pageDigest,"ko:$modelAfter")
+            differentEngine.array("regions").getJSONObject(0).put("inputDigest","different-engine-input")
+            check(repository.putOcrResult(doc.id,page.id,repository.generation(page.id),pageDigest,
+                "ko-primary",differentEngine))
+            check(repository.ocrResult(page.id)!!.array("regions").getJSONObject(0).optString("correctedText") == "user correction") {
+                "Identical source must retain correction when only engine input changes"
+            }
+            val copy = repository.duplicatePage(doc.id,page.id,1)
+            check(repository.ocrResult(copy.id)!!.array("regions").getJSONObject(0).optString("correctedText") == "user correction") {
+                "Attached correction must follow the duplicated original, with new source IDs"
+            }
+            val snapshot = requireNotNull(repository.readOcrSnapshot(doc.id,page.id))
+            check(repository.readOcrSnapshot("wrong-document",page.id) == null)
+            val beforeUndo = requireNotNull(repository.page(page.id))
+            val changedOnce = beforeUndo.json().let(NotePage::from)
+            changedOnce.objects[0].array("points").getJSONObject(0).put("x",444)
+            repository.putPage(doc.id,changedOnce,0)
+            repository.putPage(doc.id,beforeUndo,0)
+            check(OcrInput.pageDigest(requireNotNull(repository.page(page.id)),"ko-primary") == pageDigest)
+            check(!repository.putOcrResult(doc.id,page.id,snapshot.generation,pageDigest,"ko-primary",differentEngine)) {
+                "Undo restoring identical bytes must not accept a result from an earlier snapshot"
+            }
             val changed = requireNotNull(repository.page(page.id))
             changed.objects.clear(); changed.objects += stroke(220f)
             repository.putPage(doc.id, changed, 0)
@@ -80,6 +103,10 @@ internal object S5cOcrChecks {
             }
             check(repository.ocrResult(page.id)!!.array("regions").getJSONObject(0).optString("correctedText").isEmpty()) {
                 "Geometry change must not reattach the old user correction"
+            }
+            val detachedCopy = repository.duplicatePage(doc.id,page.id,1)
+            check(repository.ocrResult(detachedCopy.id)!!.array("regions").getJSONObject(0).optString("correctedText").isEmpty()) {
+                "Duplicating newer ink must not resurrect a detached correction from old ink"
             }
             repository.deleteDocument(doc.id)
         }

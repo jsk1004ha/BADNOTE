@@ -10,6 +10,7 @@ plugins {
 def signingProperties = new Properties()
 def signingFile = rootProject.file('local-signing.properties')
 if (signingFile.exists()) signingFile.withInputStream { signingProperties.load(it) }
+def ocrBetaEnabled = providers.gradleProperty('badnoteOcrBeta').orElse('false').get().toBoolean()
 
 android {
     namespace 'com.inkforge.notesstudio'
@@ -20,8 +21,8 @@ android {
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 411
-        versionName '4.1.1-beta.1'
+        versionCode 412
+        versionName '4.1.2-beta.1'
         testInstrumentationRunner 'com.inkforge.notesstudio.NativeSmokeInstrumentation'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
@@ -66,8 +67,12 @@ android {
         debug {
             applicationIdSuffix '.debug'
             versionNameSuffix '-debug'
+            buildConfigField 'boolean', 'OCR_LAYOUT_V2', 'true'
+            buildConfigField 'boolean', 'OCR_MIXED_SOURCES', 'true'
         }
         release {
+            buildConfigField 'boolean', 'OCR_LAYOUT_V2', ocrBetaEnabled.toString()
+            buildConfigField 'boolean', 'OCR_MIXED_SOURCES', ocrBetaEnabled.toString()
             minifyEnabled false
             shrinkResources false
             if (signingFile.exists()) signingConfig signingConfigs.release
@@ -103,6 +108,7 @@ android {
 }
 
 dependencies {
+    implementation project(':ocr-contracts')
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
     implementation 'androidx.room:room-runtime:2.8.5'
     ksp 'androidx.room:room-compiler:2.8.5'
