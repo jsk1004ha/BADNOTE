@@ -12,7 +12,7 @@ import kotlin.math.abs
 
 /** Actual PdfDocument output, PdfRenderer readback and repository scene checks. */
 internal object VectorPdfChecks {
-    fun run(context: Context) {
+    fun run(context: Context, phase: (String) -> Unit = {}) {
         check(context.packageName.endsWith(".debug"))
         NoteRepository(context).use { repository ->
             val doc = repository.create("벡터 PDF 회귀", "root", "blank")
@@ -21,17 +21,23 @@ internal object VectorPdfChecks {
             val sourceFile = File(context.cacheDir, "vector-pdf-source.pdf")
             val assets = mutableListOf<File>()
             try {
+                phase("fixture")
                 addInkFixture(page)
                 save(repository, doc, page)
+                phase("vector-scene")
                 StreamingPdf.write(repository, doc.id, file) { false }
                 val syntax = file.readText(Charsets.ISO_8859_1)
                 check(!syntax.contains("/Subtype /Image")) { "Ink-only page was rasterized" }
                 check(syntax.contains("/Font")) { "Text font resources were lost" }
                 compareScene(repository, page, file)
                 file.copyTo(sourceFile, overwrite = true)
+                phase("page-order")
                 checkPageOrder(repository, doc, file)
+                phase("pdf-background")
                 checkBackground(repository, doc, page, sourceFile, file, assets)
+                phase("image-budget")
                 checkImageBudget(repository, doc, page, file, assets)
+                phase("cancel")
                 checkCancellation(repository, doc, page, file)
             } finally {
                 file.delete(); sourceFile.delete(); repository.deleteDocument(doc.id); assets.forEach(File::delete)

@@ -30,6 +30,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - name: Bounded PDF assembly, binary preservation and independent parsing
         run: python3 tools/test_pdf_assembler.py
       - name: Existing OCR and native validation tool regressions
@@ -50,7 +51,7 @@ jobs:
       - name: Full JVM suite in 96 MiB heaps and isolated Android APKs
         working-directory: android
         run: |
-          bash ./gradlew --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g \
+          bash ./gradlew --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -PbadnoteVectorPdfTests=true \
             :app:testSideBySideDebugUnitTest :app:assembleSideBySideDebug :app:assembleSideBySideDebugAndroidTest
       - name: Upload test APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -86,6 +87,7 @@ jobs:
           api-level: ${{ matrix.api }}
           arch: x86_64
           target: google_apis
+          ram-size: 2048M
           disable-animations: true
           script: bash tools/check_vector_pdf_device.sh
       - name: Save instrumentation evidence
@@ -93,5 +95,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vector-pdf-api-${{ matrix.api }}
-          path: build/vector-pdf-device.log
+          path: build/vector-pdf-*.log
           if-no-files-found: warn

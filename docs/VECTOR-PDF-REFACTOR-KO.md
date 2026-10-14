@@ -33,13 +33,15 @@ PR #7의 최신 브러시 렌더러를 사용하므로 기준은 `codex/ocr-4.1.
 
 `python3 tools/test_pdf_assembler.py`는 생산 Java 병합기를 직접 컴파일하고 별도 `-Xmx96m` JVM에서 실행합니다. 물리 순서가 다른 객체, 나중에 정의된 간접 stream Length, 폰트/페이지 참조, 괄호·hex 문자열과 바이너리 데이터를 검증합니다. 100 MiB 스트림 두 개의 SHA-256 보존, 잘못된 xref/루트/세대/증분/truncation 거절, 복사 중 취소와 페이지 writer 실패의 정리를 검사하며 `pypdf`로 별도 해석합니다.
 
-새 CI는 기존 OCR/Python 검증과 전체 Gradle JVM 테스트 및 debug/androidTest APK 빌드를 수행합니다. Android API 23·35 에뮬레이터의 `vectorPdfOnly` 계측은 실제 `PdfDocument` 출력에 대해 다음을 확인합니다.
+새 CI는 기존 OCR/Python 검증과 전체 Gradle JVM 테스트 및 debug/androidTest APK 빌드를 수행합니다. Android API 23·35 에뮬레이터의 PDF 전용 `VectorPdfInstrumentation` 계측은 실제 `PdfDocument` 출력에 대해 다음을 확인합니다.
 
 - 일반 필기 페이지에 전체 페이지 Image XObject가 없고 폰트 리소스가 존재함.
 - 8종 브러시, 필압·기울기·형광펜, 곡선·회전과 한글의 네이티브 장면/출력 PDF 픽셀 비교.
 - 다중 페이지 순서와 세로·가로 용지 치수.
 - PDF 배경 합성 및 이미지 예산 초과 시 래스터 경로.
 - 객체 렌더링 도중 취소, 미완성 PDF/임시 파일 삭제, 노트 객체 보존.
+
+PDF 계측 APK는 `-PbadnoteVectorPdfTests=true`로 빌드합니다. API 24 이상의 PixelCopy 클래스를 참조하는 종합 계측 러너와 분리해 최소 API에서 실행합니다. 에뮬레이터 시스템 RAM은 2 GiB로 고정하며, Android 앱 전체 힙을 96 MiB로 제한한 검사가 아닙니다.
 
 JVM의 200 MiB 결과는 **스트리밍 병합 엔진**의 힙 제한 검증입니다. 물리 Galaxy/S Pen 지연과 Android 앱 전체 메모리 성능은 별도 실기기 측정이 필요합니다.
 
