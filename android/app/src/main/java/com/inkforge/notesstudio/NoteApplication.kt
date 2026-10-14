@@ -11,7 +11,11 @@ class NoteApplication : Application() {
     val repository by lazy { NoteRepository(this) }
     internal val windows = WindowClaims<MainActivity>()
     private val visible = AtomicInteger()
+    private val saves = AtomicInteger()
     internal val hasVisibleWindow get() = visible.get() > 0
+    internal val hasPendingSaves get() = saves.get() > 0
+    internal fun saveQueued() { saves.incrementAndGet() }
+    internal fun saveCompleted() { saves.decrementAndGet() }
 
     override fun onCreate() {
         super.onCreate()
@@ -24,7 +28,9 @@ class NoteApplication : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
             override fun onActivityDestroyed(activity: Activity) = Unit
         })
-        BackupSchedule.restore(this)
+        runCatching { BackupSchedule.restore(this) }.onFailure { error ->
+            runCatching { BackupPreferences(this).status("자동 백업 예약 실패 · ${error.message}") }
+        }
     }
 }
 

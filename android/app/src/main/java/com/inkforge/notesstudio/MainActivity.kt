@@ -201,7 +201,7 @@ class MainActivity:ComponentActivity(){
         val copy=settings.copyJson()
         val changed=copy.keys().asSequence().filter{copy.opt(it)?.toString()!=settingsBaseline.opt(it)?.toString()}.toList()
         settingsBaseline=copy.copyJson()
-        enqueueSave({val latest=JSONObject(repository.setting("preferences","{}"));changed.forEach{latest.put(it,copy.opt(it))}
+        enqueueSave({val latest=JSONObject(repository.setting("preferences",repository.setting("appSettings","{}")));changed.forEach{latest.put(it,copy.opt(it))}
             repository.setting("preferences",latest.toString(),true)})
     }
     private fun startMigration(){
@@ -215,13 +215,13 @@ class MainActivity:ComponentActivity(){
         val web=requireNotNull(migration).start();root.addView(web,0,FrameLayout.LayoutParams(1,1))
     }
     private fun enqueueSave(block:()->Unit,complete:()->Unit={}){enqueueSave(Save(block,complete))}
-    private fun enqueueSave(work:Save){saves.addLast(work);drainSaves()}
+    private fun enqueueSave(work:Save){app.saveQueued();saves.addLast(work);drainSaves()}
     private fun drainSaves(){
         if(saving||saveFailed||saves.isEmpty())return
         saving=true;status.text=t("저장 중…")
         val work=saves.first()
         repository.executor.execute{
-            try{work.block();runOnUiThread{saving=false;saves.removeFirst();work.complete();if(saves.isEmpty()&&work.reportSaved())status.text=t("저장됨");drainSaves()}}
+            try{work.block();runOnUiThread{saving=false;saves.removeFirst();app.saveCompleted();work.complete();if(saves.isEmpty()&&work.reportSaved())status.text=t("저장됨");drainSaves()}}
             catch(e:Exception){runOnUiThread{saving=false;saveFailed=true;inkView?.readOnly=true;status.text="저장 실패: ${e.message}"
                 AlertDialog.Builder(this).setTitle("저장하지 못했습니다.").setMessage("화면의 필기는 유지됩니다. 저장 공간을 확인한 뒤 다시 시도해 주세요.\n${e.message}")
                     .setPositiveButton("다시 저장"){_,_->saveFailed=false;inkView?.readOnly=false;drainSaves()}.setCancelable(false).show()}}
@@ -510,6 +510,8 @@ class MainActivity:ComponentActivity(){
             }
             document?.id?.takeIf{it!=id}?.let{app.windows.release(it,this)}
             document=doc;ids=pageIds;metas=pageMetas;openTabs+=id
+            @Suppress("DEPRECATION")
+            setTaskDescription(android.app.ActivityManager.TaskDescription(doc.title,null,ui.blue))
             val remembered=doc.data.optString("lastPageId");val found=pageIds.indexOf(remembered)
             val pageIndex=(index?:if(found>=0)found else doc.data.optInt("lastPageIndex",0)).coerceIn(0,pageIds.lastIndex)
             showEditor(pageIndex);enqueueSave({repository.setting("last-open-document",id,true)})

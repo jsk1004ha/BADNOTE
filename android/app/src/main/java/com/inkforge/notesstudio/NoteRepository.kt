@@ -647,6 +647,54 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }
         return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
     }
+    /** Freeze page/OCR metadata under a transaction; binary assets stream after the transaction ends. */
+    internal fun exportBackup(id: String, previousStamp: String?, target: File, cancelled: () -> Boolean): String? {
+        val staging = File(workDirectory, uid("backup-metadata"))
+        val metadata = mutableListOf<Pair<String, File>>()
+        val assets = linkedSetOf<String>()
+        var stamp: String? = null
+        try {
+            transaction {
+                BackupEngine.checkCancelled(cancelled)
+                val doc = document(id) ?: return@transaction
+                if (doc.trashed) return@transaction
+                val ids = pageIds(id)
+                if (ids.any { pageMeta(it)?.optBoolean("pdfImportPending") == true }) return@transaction
+                val current = backupStamp(id)
+                if (current == previousStamp) return@transaction
+                stamp = current
+                check(staging.mkdir())
+                fun freeze(name: String, value: JSONObject) {
+                    BackupEngine.checkCancelled(cancelled)
+                    val file = File(staging, "${metadata.size}.json")
+                    file.outputStream().use { output ->
+                        ByteArrayInputStream(value.toString().toByteArray(Charsets.UTF_8)).use { input ->
+                            ArchiveCodec.copy(input, output, cancelled)
+                        }
+                    }
+                    metadata += name to file
+                }
+                val manifest = doc.data.copyJson().put("format", "badnote-native").put("version", 5).put("pageIds", JSONArray(ids))
+                collectAssets(manifest, assets); freeze("manifest.json", manifest)
+                for (pageId in ids) {
+                    val body = requireNotNull(page(pageId)).json()
+                    collectAssets(body, assets); freeze("pages/$pageId.json", body)
+                    ocrArchive(pageId)?.let { freeze("ocr/$pageId.json", it) }
+                }
+            }
+            if (stamp == null) return null
+            val entries = sequence {
+                for ((name, file) in metadata) yield(ArchiveCodec.Entry(name) { FileInputStream(file) })
+                for (assetId in assets) {
+                    val file = asset(assetId); require(file.isFile) { "노트 자산이 없습니다: $assetId" }
+                    yield(ArchiveCodec.Entry("assets/$assetId") { FileInputStream(file) })
+                }
+            }
+            FileOutputStream(target).use { ArchiveCodec.write(it, entries, cancelled) }
+            return stamp
+        } catch (error: Exception) { target.delete(); throw error }
+        finally { staging.deleteRecursively() }
+    }
     fun export(id: String, target: File, cancelled: () -> Boolean = { false }, progress: (Int, Long) -> Unit = { _, _ -> }) {
         // Caller uses the repository executor: edits cannot race with this consistent snapshot.
         val doc = requireNotNull(document(id))

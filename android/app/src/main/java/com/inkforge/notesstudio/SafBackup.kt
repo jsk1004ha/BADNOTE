@@ -90,14 +90,7 @@ internal object SafBackup {
                     repository.documents().filter { !it.trashed }.map { BackupEngine.Candidate(it.id, it.title) }
                 }
                 override fun prepare(id: String, previousStamp: String?, file: File, cancelled: () -> Boolean): String? = ordered {
-                    BackupEngine.checkCancelled(cancelled)
-                    val doc = repository.document(id)
-                    if (doc == null || doc.trashed || repository.pageIds(id).any {
-                            repository.pageMeta(it)?.optBoolean("pdfImportPending") == true }) return@ordered null
-                    val stamp = repository.backupStamp(id)
-                    if (stamp == previousStamp) return@ordered null
-                    repository.export(id, file, cancelled)
-                    stamp
+                    repository.exportBackup(id, previousStamp, file, cancelled)
                 }
             }
             val result = BackupEngine.run(source, SafBackupDestination(context, Uri.parse(tree)), prefs.journal(tree),
@@ -142,10 +135,10 @@ class BackupJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         val app = application as NoteApplication
         val prefs = BackupPreferences(this)
-        if (!prefs.enabled || prefs.folder.isBlank() || app.hasVisibleWindow) return false
+        if (!prefs.enabled || prefs.folder.isBlank() || app.hasVisibleWindow || app.hasPendingSaves) return false
         val cancel = AtomicBoolean(); stopped = cancel
         worker.execute {
-            runCatching { SafBackup.run(this, app.repository) { cancel.get() || app.hasVisibleWindow ||
+            runCatching { SafBackup.run(this, app.repository) { cancel.get() || app.hasVisibleWindow || app.hasPendingSaves ||
                 !BackupPreferences(this).enabled } }
             mainExecutorCompat { if (!cancel.get()) jobFinished(params, false) }
         }

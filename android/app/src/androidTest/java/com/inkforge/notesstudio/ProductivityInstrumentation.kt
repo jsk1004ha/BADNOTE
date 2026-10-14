@@ -63,6 +63,7 @@ class ProductivityInstrumentation : Instrumentation() {
     private fun checkWindows(repository: NoteRepository) {
         val firstDoc = ordered(repository) { repository.create("첫 창", "root", "blank") }
         val secondDoc = ordered(repository) { repository.create("둘째 창", "root", "blank") }
+        ordered(repository) { repository.addPage(secondDoc.id, NotePage.blank("grid"), 1) }
         var first: MainActivity? = null; var second: MainActivity? = null
         try {
             first = startActivitySync(DocumentWindows.intent(targetContext, firstDoc.id)
@@ -109,14 +110,18 @@ class ProductivityInstrumentation : Instrumentation() {
                 MainActivity::class.java.getDeclaredMethod("closeSheet").apply { isAccessible = true }.invoke(b)
             }
             phase("window-recreation")
+            ui { b.inkView!!.goTo(1) }
+            await("second page") { ui { b.inkView?.currentPage != null && b.inkView?.currentIndex == 1 } }
             val states = Bundle()
             ui { callActivityOnSaveInstanceState(b, states) }
             check(states.getString("documentId") == secondDoc.id)
             check(states.getString("activeTool") == "HIGHLIGHTER")
+            check(states.getInt("pageIndex") == 1)
             ui { b.recreate() }
             await("recreated window claims") { app.windows.owner(secondDoc.id)?.let { it !== b && ui { it.inkView?.currentPage != null } } == true }
             second = app.windows.owner(secondDoc.id)
             check(ui { second!!.inkView!!.tool } == InkCanvasView.Tool.HIGHLIGHTER)
+            check(ui { second!!.inkView!!.currentIndex } == 1)
         } finally {
             ui { first?.finishAndRemoveTask(); second?.finishAndRemoveTask() }
             await("claims released") {
