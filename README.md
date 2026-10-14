@@ -33,7 +33,7 @@
 
 ## 대용량 내보내기와 공유
 
-노트는 SQLite WAL에 문서 정보·페이지·객체를 분리해 저장하며, 대형 자산은 별도 파일입니다. `.ifnote` 내보내기는 페이지 단위 JSON과 자산을 `ZipOutputStream`에 64 KiB씩 기록합니다. 문서 전체 복제나 자산 base64 변환, 전체 결과 Blob 생성이 없습니다. PDF도 한 페이지씩 JPEG 임시 파일로 만든 뒤 최종 출력에 복사합니다.
+노트는 SQLite WAL에 문서 정보·페이지·객체를 분리해 저장하며, 대형 자산은 별도 파일입니다. `.ifnote` 내보내기는 페이지 단위 JSON과 자산을 `ZipOutputStream`에 64 KiB씩 기록합니다. 문서 전체 복제나 자산 base64 변환, 전체 결과 Blob 생성이 없습니다. PDF는 한 페이지씩 네이티브 Canvas로 벡터 PDF를 생성·종료한 뒤 64 KiB 단위로 병합합니다. 가져온 PDF 배경은 래스터로 유지하며, 이미지 기록 예산을 넘는 페이지는 래스터 방식으로 대체합니다. [구조·범위·검증](docs/VECTOR-PDF-REFACTOR-KO.md)을 참고하십시오.
 
 공유 파일을 디스크에 완성한 다음 Android `ACTION_SEND`와 FileProvider 읽기 권한으로 시스템 공유 창을 엽니다. Web Share API의 transient user activation에 의존하지 않습니다. 공유 파일은 수신 앱이 비동기로 읽을 수 있도록 유지하고, 7일이 지난 파일은 다음 내보내기 때 정리합니다.
 
