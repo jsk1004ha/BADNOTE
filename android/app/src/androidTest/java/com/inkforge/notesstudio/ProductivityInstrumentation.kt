@@ -90,6 +90,16 @@ class ProductivityInstrumentation : Instrumentation() {
             waitForIdleSync()
             check(app.windows.owner(secondDoc.id) === b) { "Same document acquired a second editor" }
             ui {
+                val field = MainActivity::class.java.getDeclaredField("settings").apply { isAccessible = true }
+                val save = MainActivity::class.java.getDeclaredMethod("saveSettings").apply { isAccessible = true }
+                (field.get(a) as org.json.JSONObject).put("pdfDarkMode", true); save.invoke(a)
+                (field.get(b) as org.json.JSONObject).put("stylusOnly", false); save.invoke(b)
+            }
+            await("independent preference changes") { ordered(repository) {
+                val preferences = org.json.JSONObject(repository.setting("preferences"))
+                preferences.optBoolean("pdfDarkMode") && !preferences.optBoolean("stylusOnly", true)
+            } }
+            ui {
                 b.inkView!!.requestFocus()
                 press(b, KeyEvent.KEYCODE_2)
                 check(b.inkView!!.tool == InkCanvasView.Tool.HIGHLIGHTER)
@@ -143,12 +153,13 @@ class ProductivityInstrumentation : Instrumentation() {
         val source = File(targetContext.cacheDir, "productivity-source.pdf")
         var asset: File? = null; var view: InkCanvasView? = null; var host: MainActivity? = null
         try {
-            PdfDocument().use { pdf ->
+            val pdf = PdfDocument()
+            try {
                 val page = pdf.startPage(PdfDocument.PageInfo.Builder(1000, 1414, 1).create())
                 page.canvas.drawColor(Color.WHITE)
                 page.canvas.drawRect(100f, 100f, 300f, 260f, Paint().apply { color = Color.BLACK })
                 pdf.finishPage(page); source.outputStream().use { pdf.writeTo(it) }
-            }
+            } finally { pdf.close() }
             val page = ordered(repository) {
                 val id = source.inputStream().use { repository.storeAsset(it, "pdf") }; asset = repository.asset(id)
                 val page = repository.page(repository.pageIds(doc.id).first())!!
