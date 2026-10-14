@@ -46,12 +46,15 @@ class ProductivityInstrumentation : Instrumentation() {
                 repository.setting("preferences", json("autoOcr" to false, "autoMath" to false).toString(), true)
                 repository.setting("last-open-document", "", true)
             }
-            phase("windows-and-shortcuts")
-            checkWindows(repository)
-            phase("pdf-background-colors")
-            checkPdfColors(repository)
-            phase("saf-snapshot-and-restore")
-            checkBackup(repository)
+            val failures = mutableListOf<String>()
+            fun verify(label: String, block: () -> Unit) {
+                phase(label)
+                try { block() } catch (error: Throwable) { failures += "$label: ${error.stackTraceToString()}" }
+            }
+            verify("windows-and-shortcuts") { checkWindows(repository) }
+            verify("pdf-background-colors") { checkPdfColors(repository) }
+            verify("saf-snapshot-and-restore") { checkBackup(repository) }
+            check(failures.isEmpty()) { failures.joinToString("\n\n") }
             result.putString("passed", "true")
             result.putString("productivity", "windows_shortcuts_pdf_colors_saf_restore_schedule_verified")
         } catch (error: Throwable) {
@@ -107,18 +110,8 @@ class ProductivityInstrumentation : Instrumentation() {
                 check(b.inkView!!.currentPage!!.objects.none { it.optString("id") == "second-text" })
                 press(b, KeyEvent.KEYCODE_Z, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON)
                 check(b.inkView!!.currentPage!!.objects.any { it.optString("id") == "second-text" })
-                val content = b.findViewById<FrameLayout>(android.R.id.content)
-                val input = EditText(b).apply { setText(""); isFocusableInTouchMode = true }
-                content.addView(input, FrameLayout.LayoutParams(300, 100)); input.requestFocus()
-                press(b, KeyEvent.KEYCODE_1)
-                check(input.text.toString() == "1") { "Digit was intercepted in text field" }
-                check(b.inkView!!.tool == InkCanvasView.Tool.HIGHLIGHTER)
-                content.removeView(input); b.inkView!!.requestFocus()
-                MainActivity::class.java.getDeclaredMethod("shortcutGuide").apply { isAccessible = true }.invoke(b)
-                press(b, KeyEvent.KEYCODE_3)
-                check(b.inkView!!.tool == InkCanvasView.Tool.HIGHLIGHTER) { "Dialog did not block shortcut" }
-                MainActivity::class.java.getDeclaredMethod("closeSheet").apply { isAccessible = true }.invoke(b)
             }
+            checkTextAndDialogShortcuts(b)
             phase("window-recreation")
             ui { b.inkView!!.goTo(1) }
             await("second page") { ui { b.inkView?.currentPage != null && b.inkView?.currentIndex == 1 } }
@@ -144,8 +137,32 @@ class ProductivityInstrumentation : Instrumentation() {
 
     private fun press(activity: MainActivity, key: Int, modifiers: Int = 0) {
         val time = SystemClock.uptimeMillis()
-        activity.dispatchKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_DOWN, key, 0, modifiers))
-        activity.dispatchKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_UP, key, 0, modifiers))
+        activity.dispatchKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_DOWN, key, 0, modifiers,
+            android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, android.view.InputDevice.SOURCE_KEYBOARD))
+        activity.dispatchKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_UP, key, 0, modifiers,
+            android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, android.view.InputDevice.SOURCE_KEYBOARD))
+    }
+
+    private fun checkTextAndDialogShortcuts(activity: MainActivity) {
+        val input = ui {
+            val field = EditText(activity).apply { setText(""); isFocusableInTouchMode = true }
+            activity.findViewById<FrameLayout>(android.R.id.content).addView(field, FrameLayout.LayoutParams(300, 100))
+            field.layout(0, 0, 300, 100); check(field.requestFocus()); field
+        }
+        await("text field focus") { ui { input.width > 0 && activity.currentFocus === input } }
+        ui {
+            press(activity, KeyEvent.KEYCODE_1)
+            check(input.text.toString() == "1") {
+                "Text field received '${input.text}', focus=${activity.currentFocus}, tool=${activity.inkView!!.tool}"
+            }
+            check(activity.inkView!!.tool == InkCanvasView.Tool.HIGHLIGHTER)
+            activity.findViewById<FrameLayout>(android.R.id.content).removeView(input)
+            activity.inkView!!.requestFocus()
+            MainActivity::class.java.getDeclaredMethod("shortcutGuide").apply { isAccessible = true }.invoke(activity)
+            press(activity, KeyEvent.KEYCODE_3)
+            check(activity.inkView!!.tool == InkCanvasView.Tool.HIGHLIGHTER) { "Dialog did not block shortcut" }
+            MainActivity::class.java.getDeclaredMethod("closeSheet").apply { isAccessible = true }.invoke(activity)
+        }
     }
 
     private fun checkPdfColors(repository: NoteRepository) {
