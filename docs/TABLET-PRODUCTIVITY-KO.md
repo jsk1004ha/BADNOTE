@@ -24,7 +24,7 @@
 
 `ProductivityTest`는 96 MiB JVM에서 200 MiB 파일의 64 KiB 복사·해시·중복 건너뛰기·삭제된 대상 복구와 쓰기/닫기/이름 변경/기록 실패·취소를 검사합니다. 창 소유권과 입력창·수정키 보호도 검사합니다.
 
-`ProductivityInstrumentation`은 API 23·35에서 실제 두 task·독립 저장·문서 소유권·Activity 재생성·키보드 이벤트, PDF 타일 색상·필기 보존·출력 색상, 비공개 debug SAF provider의 백업·재가져오기·권한 상실·예약 조건을 검사합니다. debug provider는 release에 포함되지 않습니다. 실제 태블릿의 분할 화면 배치와 물리 키보드는 별도 실기기 확인 대상입니다.
+`ProductivityInstrumentation`은 API 23·35에서 실제 두 task·독립 저장·문서 소유권·Activity 재생성·키보드 이벤트, PDF 타일 색상·필기 보존·출력 색상, MANAGE_DOCUMENTS 권한으로 보호한 debug SAF provider의 백업·재가져오기·권한 상실·OCR/교정만의 변경·예약 조건을 검사합니다. debug provider는 release에 포함되지 않습니다. 실제 태블릿의 분할 화면 배치와 물리 키보드는 별도 실기기 확인 대상입니다.
 
 ```bash
 cd android

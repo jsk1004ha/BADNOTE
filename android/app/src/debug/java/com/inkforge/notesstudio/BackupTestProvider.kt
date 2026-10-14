@@ -10,7 +10,7 @@ import android.provider.DocumentsProvider
 import java.io.File
 import java.io.FileNotFoundException
 
-/** Private debug-only SAF provider; never packaged in a release. */
+/** Debug-only SAF provider protected by MANAGE_DOCUMENTS and absent from release/chooser listings. */
 class BackupTestProvider : DocumentsProvider() {
     companion object { @Volatile var deny = false }
     private val directory get() = File(requireNotNull(context).cacheDir, "backup-provider-checks").apply { mkdirs() }

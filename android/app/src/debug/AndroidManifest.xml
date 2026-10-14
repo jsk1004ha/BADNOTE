@@ -2,6 +2,7 @@
     <application>
         <provider android:name=".BackupTestProvider"
             android:authorities="${applicationId}.backup-test"
-            android:exported="false" android:grantUriPermissions="true" />
+            android:exported="true" android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS" />
     </application>
 </manifest>

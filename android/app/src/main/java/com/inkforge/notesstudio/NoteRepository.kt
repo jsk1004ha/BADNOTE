@@ -639,8 +639,9 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 field(pageId); field(pages.getInt(1).toString()); field(pages.getString(2)); field(pages.getLong(3).toString())
                 for ((table, order) in listOf("ocr_page_state" to "page_id", "ocr_regions" to "region_id", "ocr_corrections" to "region_id")) {
                     field(table)
-                    readableDatabase.rawQuery("SELECT body FROM $table WHERE page_id=? ORDER BY $order", arrayOf(pageId)).use { rows ->
-                        while (rows.moveToNext()) field(rows.getString(0))
+                    val columns = if (table == "ocr_corrections") "region_id,body,updated_at" else "$order,body"
+                    readableDatabase.rawQuery("SELECT $columns FROM $table WHERE page_id=? ORDER BY $order", arrayOf(pageId)).use { rows ->
+                        while (rows.moveToNext()) for (column in 0 until rows.columnCount) field(rows.getString(column))
                     }
                 }
             }

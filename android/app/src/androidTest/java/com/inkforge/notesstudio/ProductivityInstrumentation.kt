@@ -239,11 +239,30 @@ class ProductivityInstrumentation : Instrumentation() {
             SafBackupDestination(targetContext, tree).delete(newer.uri)
             check(SafBackup.run(targetContext, repository) { false }.written == 1) { "Deleted backup was not repaired" }
             val repaired = journal.previous(doc.id)!!
+            ordered(repository) {
+                val page = repository.page(pageId)!!
+                val policy = "ko-primary"; val input = OcrInput.pageDigest(page, policy)
+                val region = json("id" to "backup-region", "inputDigest" to "backup-input", "text" to "원문",
+                    "strokeIds" to org.json.JSONArray())
+                check(repository.putOcrResult(doc.id, pageId, repository.generation(pageId), input, policy,
+                    json("status" to "ready", "pageDigest" to input, "regions" to org.json.JSONArray().put(region))))
+            }
+            check(SafBackup.run(targetContext, repository) { false }.written == 1) { "OCR-only change was skipped" }
+            val beforeCorrection = ordered(repository) { repository.backupStamp(doc.id) }
+            ordered(repository) { check(repository.correctOcrRegion(pageId, "backup-region", "교정")) }
+            check(beforeCorrection != ordered(repository) { repository.backupStamp(doc.id) })
+            check(SafBackup.run(targetContext, repository) { false }.written == 1)
+            val beforeTimestamp = ordered(repository) { repository.backupStamp(doc.id) }
+            SystemClock.sleep(8)
+            ordered(repository) { check(repository.correctOcrRegion(pageId, "backup-region", "교정")) }
+            check(beforeTimestamp != ordered(repository) { repository.backupStamp(doc.id) }) { "Correction timestamp was excluded" }
+            check(SafBackup.run(targetContext, repository) { false }.written == 1)
+            val withOcr = journal.previous(doc.id)!!
             BackupTestProvider.deny = true
             try { SafBackup.run(targetContext, repository) { false }; error("Revoked provider access was ignored") }
             catch (_: SecurityException) { }
             finally { BackupTestProvider.deny = false }
-            check(journal.previous(doc.id) == repaired)
+            check(journal.previous(doc.id) == withOcr)
             try {
                 BackupSchedule.chooseFolder(targetContext, tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 error("Read-only permission was accepted")
