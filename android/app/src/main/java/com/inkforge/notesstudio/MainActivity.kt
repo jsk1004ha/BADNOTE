@@ -1452,6 +1452,7 @@ open class MainActivity:ComponentActivity(){
     }
     private fun applyShortcut(action:EditorShortcuts.Action){
         val view=inkView?:return
+        view.finishContact()
         when(action){EditorShortcuts.Action.UNDO->view.undo();EditorShortcuts.Action.REDO->view.redo()
             EditorShortcuts.Action.SAVE->{view.finishContact();afterSaved{message("저장됨")}}
             else->view.tool=InkCanvasView.Tool.valueOf(action.name)}
