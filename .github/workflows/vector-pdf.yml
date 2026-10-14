@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: vector-pdf-${{ github.event.pull_request.head.ref || github.ref_name }}

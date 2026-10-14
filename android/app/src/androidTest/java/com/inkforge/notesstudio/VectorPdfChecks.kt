@@ -79,6 +79,7 @@ internal object VectorPdfChecks {
                     "src" to "asset:${picture.name}", "x" to 150 + index * 250, "y" to 1020, "w" to 180, "h" to 100) }
                 repository.transaction { repository.putPage(doc.id, page, 0) }
                 StreamingPdf.write(repository, doc.id, file) { false }
+                check(!file.readText(Charsets.ISO_8859_1).contains("/Font")) { "Image budget did not select the raster fallback" }
                 compareScene(repository, page, file)
 
                 var probes = 0; var interrupted = false
