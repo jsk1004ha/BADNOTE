@@ -16,9 +16,11 @@ internal object PageExportRenderer {
     }
 
     fun draw(repository: NoteRepository, page: NotePage, canvas: Canvas,
-             backgroundWidth: Int, backgroundHeight: Int, cancelled: () -> Boolean = { false }) {
+             backgroundWidth: Int, backgroundHeight: Int, cancelled: () -> Boolean = { false },
+             retained: MutableList<Bitmap>? = null) {
         checkCancelled(cancelled)
         val images = mutableMapOf<String, Bitmap>()
+        fun release(bitmap: Bitmap) { if (retained == null) bitmap.recycle() else retained.add(bitmap) }
         val renderer = NoteRenderer { reference ->
             checkCancelled(cancelled)
             if (!reference.startsWith("asset:")) null else images.getOrPut(reference) {
@@ -45,7 +47,7 @@ internal object PageExportRenderer {
                             source.render(background, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                             checkCancelled(cancelled)
                             canvas.drawBitmap(background, null, bounds, null)
-                        } finally { background.recycle() }
+                        } finally { release(background) }
                     }
                 }
             } else if (page.meta.optString("backgroundImage").startsWith("asset:")) {
@@ -53,16 +55,16 @@ internal object PageExportRenderer {
                     page.meta.getString("backgroundImage").removePrefix("asset:")), 2400)
                     ?: error("PDF 배경 자산을 읽지 못했습니다.")
                 try { checkCancelled(cancelled); canvas.drawBitmap(background, null, bounds, null) }
-                finally { background.recycle() }
+                finally { release(background) }
             }
             for (obj in page.objects) {
                 checkCancelled(cancelled)
                 renderer.draw(canvas, obj, backgroundWidth.toDouble() / page.width)
-                // PdfDocument owns its native drawing resources until this one page is written.
-                images.values.forEach(Bitmap::recycle); images.clear()
+                // PDF keeps explicit ownership until writeTo/close; PNG can release immediately.
+                images.values.forEach(::release); images.clear()
             }
         } finally {
-            images.values.forEach(Bitmap::recycle)
+            images.values.forEach(::release)
             canvas.restoreToCount(saved)
         }
     }

@@ -12,7 +12,9 @@
 
 전체 PDF/자산을 `ByteArray`나 문자열로 읽지 않습니다. 문서 전체에서 유지되는 것은 페이지 ID·객체 위치·페이지 참조이며, 이 메타데이터는 객체 수에 비례합니다. 단일 페이지의 JSON/기하 및 Android의 native PDF 기록 메모리는 별도로 필요합니다.
 
-`PdfDocument`가 한 페이지의 이미지 픽셀을 모두 기록할 수 있으므로, 배경과 표시되는 이미지 객체의 디코딩 크기를 미리 계산합니다. **예상 이미지 픽셀이 24 MiB를 넘는 페이지**는 기존의 이미지 순차 디코딩·해제 방식으로 페이지 하나를 래스터화합니다. 다른 페이지는 계속 벡터로 저장합니다. 이 수치는 전체 앱 힙 또는 native 메모리 상한을 보증하는 수치가 아닙니다.
+`PdfDocument`가 한 페이지의 이미지 픽셀을 모두 기록할 수 있으므로, 배경과 표시되는 이미지 객체의 디코딩 크기를 미리 계산합니다. **예상 이미지 픽셀이 24 MiB를 넘는 페이지**는 기존의 이미지 순차 디코딩·해제 방식으로 페이지 하나를 래스터화합니다. 다른 페이지는 계속 벡터로 저장합니다. PDF 기록용 비트맵은 페이지의 writeTo/close가 끝난 뒤 해제합니다. 이 수치는 전체 앱 힙 또는 native 메모리 상한을 보증하는 수치가 아닙니다.
+
+API 23에서 연필·형광펜이 포함된 벡터 페이지의 생성/렌더링 중 프로세스 종료를 재현했습니다. API 29 미만의 브러시는 PorterDuff.MULTIPLY를 사용하며 Android는 이를 Modulate로 매핑합니다. Skia PDF는 이 모드를 직접 지원하지 않아 별도 합성 구조로 확장합니다. 따라서 **API 23~28에서 연필·형광펜이 있는 페이지**도 한 비트맵으로 래스터화합니다. 같은 버전의 일반 펜·도형·텍스트 페이지, API 29 이상의 연필·형광펜 페이지는 벡터 경로를 유지합니다. 근거: [Android 합성 모드 매핑](https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-graphics-release/android-34/android/graphics/BlendMode.java), [Skia PDF 지원 범위](https://docs.skia.org/docs/user/sample/pdf/).
 
 ## 범위와 호환성
 
@@ -35,7 +37,7 @@ PR #7의 최신 브러시 렌더러를 사용하므로 기준은 `codex/ocr-4.1.
 
 새 CI는 기존 OCR/Python 검증과 전체 Gradle JVM 테스트 및 debug/androidTest APK 빌드를 수행합니다. Android API 23·35 에뮬레이터의 PDF 전용 `VectorPdfInstrumentation` 계측은 실제 `PdfDocument` 출력에 대해 다음을 확인합니다.
 
-- 일반 필기 페이지에 전체 페이지 Image XObject가 없고 폰트 리소스가 존재함.
+- 일반 펜·도형·텍스트 페이지에 Image XObject가 없고 폰트 리소스가 존재함. API 23의 연필·형광펜 페이지는 안전한 래스터 경로, API 35의 같은 페이지는 벡터 경로임.
 - 8종 브러시, 필압·기울기·형광펜, 곡선·회전과 한글의 네이티브 장면/출력 PDF 픽셀 비교.
 - 다중 페이지 순서와 세로·가로 용지 치수.
 - PDF 배경 합성 및 이미지 예산 초과 시 래스터 경로.

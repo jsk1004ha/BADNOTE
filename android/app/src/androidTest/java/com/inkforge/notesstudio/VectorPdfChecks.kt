@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import org.json.JSONArray
 import java.io.File
@@ -23,14 +24,7 @@ internal object VectorPdfChecks {
             try {
                 phase("fixture")
                 addInkFixture(page)
-                save(repository, doc, page)
-                phase("vector-scene")
-                StreamingPdf.write(repository, doc.id, file) { false }
-                val syntax = file.readText(Charsets.ISO_8859_1)
-                check(!syntax.contains("/Subtype /Image")) { "Ink-only page was rasterized" }
-                check(syntax.contains("/Font")) { "Text font resources were lost" }
-                compareScene(repository, page, file)
-                file.copyTo(sourceFile, overwrite = true)
+                checkVectorAndBlends(repository, doc, page, file, sourceFile, phase)
                 phase("page-order")
                 checkPageOrder(repository, doc, file)
                 phase("pdf-background")
@@ -65,6 +59,32 @@ internal object VectorPdfChecks {
             "x" to 120, "y" to 1160, "w" to 780, "h" to 80, "fontSize" to 34)
         page.objects += json("id" to uid("hidden"), "type" to "image", "src" to "asset:missing.png", "hidden" to true)
         page.objects += json("id" to uid("ocr"), "type" to "ocrIndex", "text" to "must not draw")
+    }
+
+    private fun checkVectorAndBlends(repository: NoteRepository, doc: DocumentInfo, page: NotePage,
+                                     file: File, sourceFile: File, phase: (String) -> Unit) {
+        val originals = page.objects.toList()
+        page.objects.removeAll { it.optString("brush") == "pencil" || it.optString("brush") == "highlighter" }
+        save(repository, doc, page)
+        phase("vector-scene")
+        StreamingPdf.write(repository, doc.id, file) { false }
+        var syntax = file.readText(Charsets.ISO_8859_1)
+        check(!syntax.contains("/Subtype /Image")) { "Ordinary ink page was rasterized" }
+        check(syntax.contains("/Font")) { "Text font resources were lost" }
+        compareScene(repository, page, file)
+
+        page.objects.clear(); page.objects.addAll(originals)
+        save(repository, doc, page)
+        phase("blend-scene")
+        StreamingPdf.write(repository, doc.id, file) { false }
+        syntax = file.readText(Charsets.ISO_8859_1)
+        if (Build.VERSION.SDK_INT < 29) {
+            check(syntax.contains("/Subtype /Image") && !syntax.contains("/Font")) { "Unsafe legacy PDF blend was not rasterized" }
+        } else {
+            check(!syntax.contains("/Subtype /Image") && syntax.contains("/Font")) { "Modern blend lost vector output" }
+        }
+        compareScene(repository, page, file)
+        file.copyTo(sourceFile, overwrite = true)
     }
 
     private fun save(repository: NoteRepository, doc: DocumentInfo, page: NotePage) =

@@ -1,8 +1,10 @@
 package com.inkforge.notesstudio
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
+import android.os.Build
 import java.io.File
 import java.io.FilterOutputStream
 import java.io.OutputStream
@@ -26,26 +28,30 @@ internal object VectorPdfExport {
             val pointHeight = height.roundToInt().coerceIn(1, 30000)
             val rasterHeight = (RASTER_WIDTH * page.height / page.width).roundToInt().coerceIn(1, 5000)
             val pdf = PdfDocument()
+            val retained = mutableListOf<Bitmap>()
             try {
                 val nativePage = pdf.startPage(PdfDocument.PageInfo.Builder(pointWidth, pointHeight, 1).create())
                 try {
                     val canvas = nativePage.canvas
                     // A recording PDF canvas can retain all image pixels until writeTo. Large
                     // image collections use the existing bounded one-bitmap raster path instead.
-                    if (imageBytes(repository, page, rasterHeight, cancelled) > IMAGE_BUDGET_BYTES) {
+                    if (ExportRasterPolicy.legacyBlend(page.objects, Build.VERSION.SDK_INT) ||
+                        imageBytes(repository, page, rasterHeight, cancelled) > IMAGE_BUDGET_BYTES) {
                         val bitmap = StreamingPdf.render(repository, page, RASTER_WIDTH, cancelled)
-                        try { canvas.drawBitmap(bitmap, null, RectF(0f, 0f, pointWidth.toFloat(), pointHeight.toFloat()), null) }
-                        finally { bitmap.recycle() }
+                        retained += bitmap
+                        canvas.drawBitmap(bitmap, null, RectF(0f, 0f, pointWidth.toFloat(), pointHeight.toFloat()), null)
                     } else {
                         canvas.scale(pointWidth / page.width, pointHeight / page.height)
-                        PageExportRenderer.draw(repository, page, canvas, RASTER_WIDTH, rasterHeight, cancelled)
+                        PageExportRenderer.draw(repository, page, canvas, RASTER_WIDTH, rasterHeight, cancelled, retained)
                     }
                 } finally { pdf.finishPage(nativePage) }
                 PageExportRenderer.checkCancelled(cancelled)
                 spool.outputStream().buffered(ArchiveCodec.BUFFER_SIZE).use { output ->
                     pdf.writeTo(CancellableOutput(output, cancelled))
                 }
-            } finally { pdf.close() }
+            } finally {
+                try { pdf.close() } finally { retained.forEach(Bitmap::recycle) }
+            }
         }, { cancelled() })
     }
 
