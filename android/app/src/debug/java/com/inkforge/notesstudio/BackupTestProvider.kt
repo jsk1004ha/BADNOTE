@@ -26,14 +26,14 @@ class BackupTestProvider : DocumentsProvider() {
     private fun add(cursor: MatrixCursor, file: File, id: String) {
         val flags = if (id == "root") Document.FLAG_DIR_SUPPORTS_CREATE else
             Document.FLAG_SUPPORTS_WRITE or Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME
-        val values = mapOf(Document.COLUMN_DOCUMENT_ID to id, Document.COLUMN_DISPLAY_NAME to file.name,
+        val values: Map<String, Any> = mapOf(Document.COLUMN_DOCUMENT_ID to id, Document.COLUMN_DISPLAY_NAME to file.name,
             Document.COLUMN_MIME_TYPE to if (id == "root") Document.MIME_TYPE_DIR else "application/octet-stream",
             Document.COLUMN_FLAGS to flags, Document.COLUMN_SIZE to file.length())
         cursor.addRow(cursor.columnNames.map { values[it] }.toTypedArray())
     }
     override fun queryRoots(projection: Array<out String>?): Cursor {
         val names = projection ?: arrayOf(Root.COLUMN_ROOT_ID, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_TITLE, Root.COLUMN_FLAGS)
-        val values = mapOf(Root.COLUMN_ROOT_ID to "root", Root.COLUMN_DOCUMENT_ID to "root",
+        val values: Map<String, Any> = mapOf(Root.COLUMN_ROOT_ID to "root", Root.COLUMN_DOCUMENT_ID to "root",
             Root.COLUMN_TITLE to "BADNOTE backup test", Root.COLUMN_FLAGS to Root.FLAG_SUPPORTS_CREATE)
         return MatrixCursor(names).apply { addRow(names.map { values[it] }.toTypedArray()) }
     }

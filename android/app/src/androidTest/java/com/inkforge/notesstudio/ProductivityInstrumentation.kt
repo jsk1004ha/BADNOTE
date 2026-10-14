@@ -141,7 +141,7 @@ class ProductivityInstrumentation : Instrumentation() {
     private fun checkPdfColors(repository: NoteRepository) {
         val doc = ordered(repository) { repository.create("PDF 색상", "root", "blank") }
         val source = File(targetContext.cacheDir, "productivity-source.pdf")
-        var asset: File? = null; var view: InkCanvasView? = null
+        var asset: File? = null; var view: InkCanvasView? = null; var host: MainActivity? = null
         try {
             PdfDocument().use { pdf ->
                 val page = pdf.startPage(PdfDocument.PageInfo.Builder(1000, 1414, 1).create())
@@ -157,7 +157,14 @@ class ProductivityInstrumentation : Instrumentation() {
                     "x1" to 300, "y1" to 400, "x2" to 700, "y2" to 400, "width" to 24)
                 repository.transaction { repository.putPage(doc.id, page, 0) }; page
             }
-            view = ui { InkCanvasView(targetContext, repository).apply { layout(0, 0, 1000, 1414); open(listOf(page.id), listOf(page.meta)) } }
+            ordered(repository) { repository.setting("last-open-document", "", true) }
+            host = startActivitySync(android.content.Intent(targetContext, MainActivity::class.java)
+                .setAction(android.content.Intent.ACTION_MAIN).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            val activity = requireNotNull(host)
+            view = ui { InkCanvasView(activity, repository).apply {
+                activity.findViewById<FrameLayout>(android.R.id.content).addView(this, FrameLayout.LayoutParams(1000, 1414))
+                layout(0, 0, 1000, 1414); open(listOf(page.id), listOf(page.meta))
+            } }
             val canvas = requireNotNull(view)
             await("page loaded") { ui { canvas.currentPage != null } }
             fun pixel(x: Float, y: Float) = ui {
@@ -180,7 +187,8 @@ class ProductivityInstrumentation : Instrumentation() {
             ui { canvas.pdfDarkMode = false }
             check(Color.red(pixel(800f, 900f)) > 245) { "Cache pixels were mutated" }
         } finally {
-            ui { view?.close() }; ordered(repository) { repository.deleteDocument(doc.id) }; source.delete(); asset?.delete()
+            ui { view?.close(); host?.finishAndRemoveTask() }
+            ordered(repository) { repository.deleteDocument(doc.id) }; source.delete(); asset?.delete()
         }
     }
 
@@ -217,11 +225,18 @@ class ProductivityInstrumentation : Instrumentation() {
             }
             check(ordered(repository) { repository.pageMeta(repository.pageIds(imported!!).first())!!.optBoolean("bookmarked") })
             ordered(repository) { repository.deleteDocument(imported!!); imported = null }
+            SafBackupDestination(targetContext, tree).delete(newer.uri)
+            check(SafBackup.run(targetContext, repository) { false }.written == 1) { "Deleted backup was not repaired" }
+            val repaired = journal.previous(doc.id)!!
             BackupTestProvider.deny = true
             try { SafBackup.run(targetContext, repository) { false }; error("Revoked provider access was ignored") }
             catch (_: SecurityException) { }
             finally { BackupTestProvider.deny = false }
-            check(journal.previous(doc.id) == newer)
+            check(journal.previous(doc.id) == repaired)
+            try {
+                BackupSchedule.chooseFolder(targetContext, tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                error("Read-only permission was accepted")
+            } catch (_: IllegalArgumentException) { }
             check(providerDirectory.listFiles().orEmpty().none { it.name.endsWith(".pending") })
             prefs.enabled = true; BackupSchedule.restore(targetContext)
             val scheduler = targetContext.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler

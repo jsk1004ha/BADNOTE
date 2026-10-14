@@ -9,7 +9,7 @@ import android.os.Build
 
 internal object DocumentWindows {
     private const val ACTION = "com.inkforge.notesstudio.OPEN_DOCUMENT"
-    fun intent(context: Context, id: String): Intent = Intent(context, MainActivity::class.java)
+    fun intent(context: Context, id: String): Intent = Intent(context, DocumentActivity::class.java)
         .setAction(ACTION).setData(Uri.Builder().scheme("badnote").authority("document").appendPath(id).build())
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS)
         .apply { if (Build.VERSION.SDK_INT >= 24) addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT) }
@@ -29,3 +29,6 @@ internal object DocumentWindows {
         task?.moveToFront()
     }
 }
+
+/** A document task keeps its identity while imports and library tabs open other windows. */
+class DocumentActivity : MainActivity()

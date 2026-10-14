@@ -33,7 +33,7 @@ import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.*
 
-class MainActivity:ComponentActivity(){
+open class MainActivity:ComponentActivity(){
     lateinit var repository:NoteRepository;private set
     var inkView:InkCanvasView?=null;private set
     private var inkFrontBuffer:View?=null
@@ -129,8 +129,8 @@ class MainActivity:ComponentActivity(){
             val restore=if(savedInstanceState!=null)savedInstanceState.getString("documentId").orEmpty()
                 else DocumentWindows.documentId(intent)?:repository.setting("last-open-document")
             showLibrary()
-            if(restore.isNotBlank())openDocument(restore,savedInstanceState?.getInt("pageIndex",0))
-            if(DocumentWindows.documentId(intent)==null)handleIncoming(intent)
+            if(intent?.action==Intent.ACTION_SEND&&intent.type=="application/pdf")handleIncoming(intent)
+            else if(restore.isNotBlank())openDocument(restore,savedInstanceState?.getInt("pageIndex",0))
         }
     }
     private fun makeRoot(){
@@ -250,6 +250,9 @@ class MainActivity:ComponentActivity(){
     }
 
     fun showLibrary(){
+        if(this is DocumentActivity&&document!=null){
+            inkView?.finishContact();afterSaved{finishAndRemoveTask()};return
+        }
         if(audio.recording)stopRecording()
         val previousDocument=document?.id
         clearScreen();document=null;ids=emptyList();metas=emptyList()
@@ -495,6 +498,7 @@ class MainActivity:ComponentActivity(){
         }
     }
     fun openDocument(id:String,index:Int?=null){
+        if(this is DocumentActivity&&DocumentWindows.documentId(intent)?.let{it!=id}==true){openDocumentWindow(id);return}
         inkView?.finishContact()
         work("노트를 여는 중…",{
             val doc=requireNotNull(repository.document(id)){"노트를 찾을 수 없습니다."}
@@ -532,7 +536,7 @@ class MainActivity:ComponentActivity(){
         body.setBackgroundColor(ui.color("#f6f6f7"))
         if(!narrow){
             val tabs=ui.row().apply{setBackgroundColor(ui.color("#233e64"));gravity=Gravity.BOTTOM}
-            tabs.addView(ui.iconButton("home","라이브러리",ui.color("#e9f2fb"),40,32,19){showLibrary()})
+            tabs.addView(ui.iconButton(if(this is DocumentActivity)"close"else"home",if(this is DocumentActivity)"문서 창 닫기"else"라이브러리",ui.color("#e9f2fb"),40,32,19){showLibrary()})
             val tabList=ui.row().apply{gravity=Gravity.BOTTOM}
             openTabs.toList().takeLast(6).forEach{id->
                 val tab=ui.row().apply{setPadding(dp(11),0,dp(6),0);background=GradientDrawable().apply{setColor(if(id==doc.id)ui.blue else ui.color("#2c466a"));cornerRadii=floatArrayOf(dp(8).toFloat(),dp(8).toFloat(),dp(8).toFloat(),dp(8).toFloat(),0f,0f,0f,0f)};setOnClickListener{openDocument(id)}}
@@ -602,7 +606,7 @@ class MainActivity:ComponentActivity(){
         val left=ui.row();val center=ui.row();val right=ui.row().apply{gravity=Gravity.RIGHT or Gravity.CENTER_VERTICAL}
         val size=if(narrow)42 else 48
         fun icon(parent:LinearLayout,name:String,label:String,active:Boolean=false,action:()->Unit){parent.addView(ui.iconButton(name,label,Color.WHITE,size,size,if(narrow)23 else 25,active,ui.color("#d9e4ef"),if(name=="pen")ui.color("#1d677b")else ui.color("#162b44"),action),LinearLayout.LayoutParams(dp(size),dp(size)).apply{if(parent.childCount>0)leftMargin=dp(if(parent==center)5 else 4)})}
-        icon(left,"home","라이브러리"){showLibrary()}
+        icon(left,if(this is DocumentActivity)"close"else"home",if(this is DocumentActivity)"문서 창 닫기"else"라이브러리"){showLibrary()}
         if(!narrow){left.addView(ui.divider());icon(left,"sidebar","페이지 사이드바",pageSidebar!=null){togglePages()};icon(left,"sparkles","학습 도우미"){assistantMenu()}}
         fun tool(name:String,label:String,value:InkCanvasView.Tool){icon(center,name,label,view.tool==value){if(value==InkCanvasView.Tool.PEN&&view.tool==value)penSettingsSheet()else{view.tool=value;if(value==InkCanvasView.Tool.IMAGE)insertObject(value,100f,150f)}}}
         tool("lasso","올가미",InkCanvasView.Tool.LASSO);tool("pen","펜",InkCanvasView.Tool.PEN);tool("eraser","지우개",InkCanvasView.Tool.ERASER);tool("text","텍스트",InkCanvasView.Tool.TEXT)
@@ -1434,7 +1438,7 @@ class MainActivity:ComponentActivity(){
         content.addView(range(value,min,max){selected=it;output.text="$it"},LinearLayout.LayoutParams(-1,dp(48)))
         sheetActions(content){closeSheet();action(selected);renderActiveDock()}
     }
-    private fun navigateBack(){if(modal!=null){closeSheet();return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
+    private fun navigateBack(){if(modal!=null){closeSheet();return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){backupCancel?.set(true);fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
     override fun dispatchKeyEvent(event:KeyEvent):Boolean{
         val key=when(event.keyCode){KeyEvent.KEYCODE_Z->"Z";KeyEvent.KEYCODE_Y->"Y";KeyEvent.KEYCODE_S->"S"
             in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9->(event.keyCode-KeyEvent.KEYCODE_0).toString();else->""}
