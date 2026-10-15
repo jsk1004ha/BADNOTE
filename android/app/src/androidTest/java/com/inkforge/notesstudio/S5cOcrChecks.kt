@@ -55,7 +55,14 @@ internal object S5cOcrChecks {
                 original.bounds.height.coerceAtLeast(1f), original.timeMode, modelBefore)
             check(repository.putOcrResult(doc.id, page.id, repository.generation(page.id), pageDigest,
                 "ko-primary", result(original, pageDigest, "ko:$modelBefore")))
+            check(repository.ocrText(page.id) == "raw")
+            check(repository.searchDocumentPages(doc.id, "raw").single().first == 0)
+            check(doc.id in repository.searchOcrDocuments("raw"))
             check(repository.correctOcrRegion(page.id, original.id, "user correction", originalDigest, pageDigest))
+            check(repository.ocrText(page.id) == "user correction")
+            check(repository.searchDocumentPages(doc.id, "user correction").single().second.contains("user correction"))
+            check(doc.id in repository.searchOcrDocuments("user correction"))
+            check(doc.id !in repository.searchOcrDocuments("raw"))
             repository.invalidateModelGeneration("ko")
             val modelAfter = repository.modelGeneration("ko")
             val cacheAfter = OcrInput.regionKey(original, "ko", "", original.bounds.width.coerceAtLeast(1f),
@@ -85,6 +92,8 @@ internal object S5cOcrChecks {
             val changedOnce = beforeUndo.json().let(NotePage::from)
             changedOnce.objects[0].array("points").getJSONObject(0).put("x",444)
             repository.putPage(doc.id,changedOnce,0)
+            check(repository.ocrText(page.id).isEmpty())
+            check(doc.id !in repository.searchOcrDocuments("user correction"))
             repository.putPage(doc.id,beforeUndo,0)
             check(OcrInput.pageDigest(requireNotNull(repository.page(page.id)),"ko-primary") == pageDigest)
             check(!repository.putOcrResult(doc.id,page.id,snapshot.generation,pageDigest,"ko-primary",differentEngine)) {

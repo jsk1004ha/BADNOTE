@@ -37,7 +37,8 @@ internal data class LibraryDocumentUi(val document: DocumentInfo, val date: Stri
 internal data class LibraryUiState(val title: String, val folder: String, val filter: String,
     val query: String, val folders: List<LibraryFolderUi>, val path: List<LibraryFolderUi>,
     val listMode: Boolean, val sortByTitle: Boolean, val selectionMode: Boolean,
-    val selected: Set<String>, val narrow: Boolean, val searchOpen: Boolean)
+    val selected: Set<String>, val narrow: Boolean, val searchOpen: Boolean,
+    val ocrMatches: Set<String> = emptySet())
 
 private val libraryBackground = Color(0xff181818)
 private val libraryPanel = Color(0xff262626)
@@ -59,7 +60,8 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
     val visible = remember(documents, state, search) {
         documents.filter { item ->
             val doc = item.document
-            val matches = doc.title.contains(search, true) || doc.data.array("tags").toString().contains(search, true)
+            val matches = doc.title.contains(search, true) || doc.data.array("tags").toString().contains(search, true) ||
+                (search.isNotBlank() && doc.id in state.ocrMatches)
             matches && when (state.filter) {
                 "trash" -> doc.trashed
                 "favorite" -> !doc.trashed && doc.favorite
