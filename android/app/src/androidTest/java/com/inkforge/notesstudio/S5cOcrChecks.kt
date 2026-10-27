@@ -93,6 +93,11 @@ internal object S5cOcrChecks {
             changedOnce.objects[0].array("points").getJSONObject(0).put("x",444)
             repository.putPage(doc.id,changedOnce,0)
             check(repository.ocrText(page.id).isEmpty())
+            check(repository.searchDocumentPages(doc.id, "user correction").map { it.first } == listOf(1)) {
+                "Search must exclude the stale original while retaining its unchanged duplicate"
+            }
+            check(doc.id in repository.searchOcrDocuments("user correction"))
+            repository.removePage(doc.id, copy.id)
             check(doc.id !in repository.searchOcrDocuments("user correction"))
             repository.putPage(doc.id,beforeUndo,0)
             check(OcrInput.pageDigest(requireNotNull(repository.page(page.id)),"ko-primary") == pageDigest)
@@ -118,7 +123,65 @@ internal object S5cOcrChecks {
                 "Duplicating newer ink must not resurrect a detached correction from old ink"
             }
             repository.deleteDocument(doc.id)
+            checkEncodedSearch(repository)
         }
         context.deleteDatabase(name)
+    }
+
+    private fun checkEncodedSearch(repository: NoteRepository) {
+        val cases = listOf(
+            "He said \"Hi\"" to "He said \"Hi\"",
+            "C:\\notes\\chapter" to "C:\\notes\\chapter",
+            "first line\nsecond line" to "first line\nsecond line",
+            "ÄPFEL" to "äpfel"
+        )
+        for ((index, sample) in cases.withIndex()) {
+            val (text, query) = sample
+            val ocrDoc = repository.create("Encoded OCR $index", "root", "blank")
+            val objectDoc = repository.create("Encoded objects $index", "root", "blank")
+            try {
+                val page = requireNotNull(repository.page(repository.pageIds(ocrDoc.id).single()))
+                val policy = "ko-primary"
+                val pageDigest = OcrInput.pageDigest(page, policy)
+                val regionId = "encoded-$index"
+                val inputDigest = "encoded-input-$index"
+                fun result(selected: String) = json("pageDigest" to pageDigest, "status" to "complete",
+                    "regions" to JSONArray(listOf(json("id" to regionId, "status" to "complete",
+                        "inputDigest" to inputDigest, "strokeIds" to JSONArray(),
+                        "rawText" to selected, "selectedText" to selected))))
+                check(repository.putOcrResult(ocrDoc.id, page.id, repository.generation(page.id),
+                    pageDigest, policy, result(text)))
+                check(ocrDoc.id in repository.searchOcrDocuments(query)) { "Encoded raw OCR library search failed: $index" }
+                check(repository.searchDocumentPages(ocrDoc.id, query).map { it.first } == listOf(0)) {
+                    "Encoded raw OCR page search failed: $index"
+                }
+
+                // The stored model result does not contain the query: only the correction can match.
+                check(repository.putOcrResult(ocrDoc.id, page.id, repository.generation(page.id),
+                    pageDigest, policy, result("uncorrected placeholder")))
+                check(repository.correctOcrRegion(page.id, regionId, text, inputDigest, pageDigest))
+                check(ocrDoc.id in repository.searchOcrDocuments(query)) { "Encoded correction library search failed: $index" }
+                check(repository.searchDocumentPages(ocrDoc.id, query).map { it.first } == listOf(0)) {
+                    "Encoded correction page search failed: $index"
+                }
+                check(ocrDoc.id !in repository.searchOcrDocuments("uncorrected placeholder"))
+
+                // Keep text and expression pages in a document with no OCR to prevent false test passes.
+                val typedPage = requireNotNull(repository.page(repository.pageIds(objectDoc.id).single()))
+                typedPage.objects += json("id" to "typed-$index", "type" to "text", "text" to text)
+                repository.putPage(objectDoc.id, typedPage, 0)
+                val expressionPage = NotePage.blank("blank")
+                expressionPage.objects += json("id" to "expression-$index", "type" to "math", "expression" to text)
+                repository.addPage(objectDoc.id, expressionPage, 1)
+                check(objectDoc.id !in repository.searchOcrDocuments(query))
+                check(repository.searchDocumentPages(objectDoc.id, query).map { it.first }.toSet() == setOf(0, 1)) {
+                    "Encoded typed text or expression search failed: $index"
+                }
+                check(repository.searchDocumentPages(objectDoc.id, query + " missing").isEmpty())
+            } finally {
+                repository.deleteDocument(ocrDoc.id)
+                repository.deleteDocument(objectDoc.id)
+            }
+        }
     }
 }

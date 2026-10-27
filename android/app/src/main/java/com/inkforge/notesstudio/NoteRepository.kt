@@ -489,14 +489,12 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
     fun searchOcrDocuments(query: String): Set<String> {
         val term = query.trim()
         if (term.isEmpty()) return emptySet()
+        // JSON escapes and SQLite's ASCII-only lower() cannot safely prefilter decoded Unicode text.
         val candidates = readableDatabase.rawQuery(
             """SELECT o.page_id,o.document_id FROM ocr_page_state o
                 LEFT JOIN page_generation g ON g.page_id=o.page_id
-                WHERE o.generation=COALESCE(g.generation,0) AND
-                  (instr(lower(o.body),lower(?))>0 OR EXISTS (
-                    SELECT 1 FROM ocr_corrections c WHERE c.page_id=o.page_id
-                      AND instr(lower(c.body),lower(?))>0))""".trimIndent(),
-            arrayOf(term, term)
+                WHERE o.generation=COALESCE(g.generation,0)""".trimIndent(),
+            null
         ).use { cursor ->
             buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) }
         }
@@ -504,7 +502,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             .mapTo(LinkedHashSet<String>()) { it.second }
     }
 
-    /** Page search reads small metadata plus candidate text objects, never the entire ink page. */
+    /** Page search decodes text-bearing objects and metadata, never the entire ink page. */
     fun searchDocumentPages(documentId: String, query: String): List<Pair<Int, String>> {
         val term = query.trim()
         if (term.isEmpty()) return emptyList()
@@ -514,9 +512,8 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 JOIN pages p ON p.id=o.page_id
                 WHERE p.document_id=?
                   AND (instr(o.body,'"text":')>0 OR instr(o.body,'"expression":')>0)
-                  AND instr(lower(o.body),lower(?))>0
                 ORDER BY o.position,o.rowid""".trimIndent(),
-            arrayOf(documentId, term)
+            arrayOf(documentId)
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 val obj = JSONObject(cursor.getString(1))
