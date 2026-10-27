@@ -21,9 +21,9 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 ANDROID = ROOT / "android"
-SOURCE_PREFIXES = ("android/app/src/", "tools/", "docs/", "web/")
+SOURCE_PREFIXES = ("android/app/src/", "android/ocr-contracts/src/", "tools/", "docs/", "legacy/web/")
 SOURCE_FILES = {"android/app/build.gradle", "android/build.gradle", "android/settings.gradle",
-                "android/gradle.properties", "android/gradle/wrapper/gradle-wrapper.properties", "android/app/.gitignore", "README.md", "web/app.js"}
+                "android/gradle.properties", "android/gradle/wrapper/gradle-wrapper.properties", "android/ocr-contracts/build.gradle", "android/app/.gitignore", "README.md", "legacy/web/app.js"}
 
 
 def digest(path: Path) -> str:
@@ -96,9 +96,9 @@ def source_snapshot() -> dict[str, str]:
 def release_capture_inputs(files: dict[str, str]) -> dict[str, str]:
     """Installed-release evidence depends on production inputs, not test runners."""
     return {name: sha for name, sha in files.items()
-            if (name.startswith("android/app/src/")
+            if (name.startswith(("android/app/src/", "android/ocr-contracts/src/"))
                 and not name.startswith(("android/app/src/androidTest/", "android/app/src/test/")))
-            or name.startswith("web/")
+            or name.startswith("legacy/web/")
             or (name in SOURCE_FILES and name.startswith("android/"))
             or name in {"tools/build_apk.py", "tools/sync_native_icons.py",
                         "tools/prepare_pdfium.py", "tools/pdfium.lock.json"}}
@@ -219,7 +219,7 @@ def main() -> None:
     parser.add_argument("--w3-fixtures", type=Path, default=ROOT / "build/ocr/load-w3")
     parser.add_argument("--upgrade-directory", type=Path, default=ROOT / "build/release-upgrade")
     parser.add_argument("--replay-set", choices=("all", "w0"), default="all")
-    parser.add_argument("--brush-fixture", type=Path, default=ROOT / ".adhd/ocr-native-plan/brush-reference.json")
+    parser.add_argument("--brush-fixture", type=Path, default=ROOT / "android/app/src/test/resources/brush-reference.json")
     parser.add_argument("--online", action="store_true", help="Allow Gradle dependency resolution")
     parser.add_argument("--chromium", type=Path, help="Installed Chromium/Chrome executable for existing web regressions")
     parser.add_argument("--guarded-native-library", action="append", default=[], metavar="LIBNAME=API")
@@ -322,7 +322,7 @@ def main() -> None:
             for name, path in (("test_web", output / "web-results.json"),
                                ("test_input_regressions", output / "input-results.json"),
                                ("test_file_export", output / "file-export")):
-                run([sys.executable, ROOT / "tools" / (name + ".py"), "--web", ROOT / "web",
+                run([sys.executable, ROOT / "tools" / (name + ".py"), "--web", ROOT / "legacy/web",
                      "--chromium", browser, "--output", path], name)
         elif args.phase == "build":
             sdk = sdk_root()

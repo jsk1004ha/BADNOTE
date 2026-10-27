@@ -131,7 +131,8 @@ class InstrumentationReceiptTest(unittest.TestCase):
                      "android/app/src/nativeAssets/locales/ko.json", "android/app/src/update/res/values/x.xml",
                      "android/app/src/sideBySide/java/Flavor.kt", "android/app/build.gradle",
                      "android/gradle.properties", "tools/pdfium.lock.json", "tools/prepare_pdfium.py",
-                     "web/locales/ko.js"):
+                     "legacy/web/locales/ko.js", "android/ocr-contracts/src/main/java/Contracts.kt",
+                     "android/ocr-contracts/build.gradle"):
             with self.subTest(path=path):
                 self.assertEqual(release_capture_inputs({path: "old"}), {path: "old"})
                 self.assertNotEqual(release_capture_inputs({path: "old"}), release_capture_inputs({path: "new"}))

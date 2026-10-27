@@ -1923,7 +1923,7 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--web", type=pathlib.Path, required=True)
+    parser.add_argument("--web", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1] / "legacy/web")
     parser.add_argument("--chromium", default="/usr/bin/chromium")
     parser.add_argument("--screenshots", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)

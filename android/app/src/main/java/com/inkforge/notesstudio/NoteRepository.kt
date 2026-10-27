@@ -13,6 +13,7 @@ import java.io.*
 import java.security.DigestOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /** Room owns the single database connection and its schema; opaque JSON stays intact. */
 class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAME) : Closeable {
@@ -26,6 +27,127 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
     val assetDirectory = File(context.filesDir, "native-assets").apply { mkdirs() }
     val workDirectory = File(context.cacheDir, "note-work").apply { mkdirs() }
     val executor = Executors.newSingleThreadExecutor()
+    private val readMain = android.os.Handler(android.os.Looper.getMainLooper())
+    private val readLock = Any()
+    private class PageRead(val owner: Any, val pageId: String?, var priority: Int,
+                           val read: (() -> Boolean) -> Any?, val decode: ((Any?, () -> Boolean) -> Any?)? = null,
+                           val prepare: ((Any?) -> Unit)? = null, val complete: (Any?) -> Unit) {
+        @Volatile var cancelled = false
+    }
+    private val pageReads = ArrayList<PageRead>()
+    private val livePageReads = HashSet<PageRead>()
+    private var activePageRead: PageRead? = null
+    private var pageReadScheduled = false
+    private var pageDecodeBusy = false
+    private val pageDecoder = Executors.newSingleThreadExecutor { task ->
+        Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "note-page-load")
+    }
+    @Volatile private var closed = false
+
+    /** One short database read is admitted at a time; current-page requests overtake queued previews. */
+    private fun enqueuePageRead(request: PageRead) {
+        synchronized(readLock) {
+            if (closed) return
+            if (request.priority == 0) {
+                pageReads.forEach { if (it.owner === request.owner && it.priority == 0) it.priority = 1 }
+            }
+            val existing = pageReads.firstOrNull { it.owner === request.owner && it.pageId == request.pageId }
+            if (existing != null) existing.priority = request.priority
+            else if (livePageReads.none { it.owner === request.owner && it.pageId == request.pageId && !it.cancelled }) {
+                pageReads.add(request); livePageReads.add(request)
+            }
+            schedulePageReadLocked()
+        }
+    }
+    private fun schedulePageReadLocked() {
+        if (closed || pageReadScheduled || pageReads.none { it.decode == null || !pageDecodeBusy }) return
+        pageReadScheduled = true
+        try { executor.execute(::drainPageRead) }
+        catch (_: RejectedExecutionException) { pageReadScheduled = false; pageReads.clear() }
+    }
+    private fun nextPageReadLocked(): PageRead? {
+        var best: PageRead? = null
+        pageReads.forEach { request ->
+            if ((request.decode == null || !pageDecodeBusy) && (best == null || request.priority < best!!.priority)) best = request
+        }
+        return best
+    }
+    private fun drainPageRead() {
+        val request = synchronized(readLock) {
+            pageReadScheduled = false
+            if (closed) return
+            val next = nextPageReadLocked() ?: return
+            pageReads.remove(next); activePageRead = next
+            if (next.decode != null) pageDecodeBusy = true
+            next
+        }
+        val result = if (request.cancelled) null else runCatching { request.read { request.cancelled } }.getOrNull()
+        synchronized(readLock) {
+            activePageRead = null
+            schedulePageReadLocked()
+        }
+        if (request.decode == null) publishPageRead(request, result)
+        else {
+            val decode = Runnable {
+                val decoded = if (request.cancelled) null else runCatching {
+                    request.decode.invoke(result) { request.cancelled }.also { if (!request.cancelled) request.prepare?.invoke(it) }
+                }.getOrNull()
+                synchronized(readLock) { pageDecodeBusy = false; schedulePageReadLocked() }
+                publishPageRead(request, decoded)
+            }
+            try { pageDecoder.execute(decode) }
+            catch (_: RejectedExecutionException) {
+                synchronized(readLock) { pageDecodeBusy = false; schedulePageReadLocked() }
+                publishPageRead(request, null)
+            }
+        }
+    }
+    private fun publishPageRead(request: PageRead, result: Any?) {
+        readMain.post {
+            synchronized(readLock) { livePageReads.remove(request) }
+            if (!closed && !request.cancelled) request.complete(result)
+        }
+    }
+    fun requestPage(owner: Any, pageId: String, selected: Boolean, prepare: (NotePage) -> Unit = {}, complete: (NotePage?) -> Unit) {
+        enqueuePageRead(PageRead(owner, pageId, if (selected) 0 else 1, { cancelled -> readPageSnapshot(pageId, cancelled) },
+            { value, cancelled -> (value as PageSnapshot?)?.page(cancelled) }, { (it as NotePage?)?.let(prepare) }) { complete(it as NotePage?) })
+    }
+    fun cancelPageRequests(owner: Any, keep: Set<String> = emptySet()) {
+        synchronized(readLock) {
+            livePageReads.forEach { if (it.owner === owner && it.pageId !in keep) it.cancelled = true }
+            pageReads.removeAll { it.cancelled }
+            livePageReads.removeAll { it.cancelled }
+        }
+    }
+    internal data class PageSnapshot(val id: String, val metadata: String, val objects: List<String>) {
+        fun page(cancelled: () -> Boolean = { false }): NotePage {
+            val parsed = ArrayList<JSONObject>(objects.size)
+            objects.forEach { if (cancelled()) throw InterruptedIOException("페이지 읽기를 취소했습니다."); parsed.add(JSONObject(it)) }
+            return NotePage(id, JSONObject(metadata), parsed)
+        }
+    }
+    private fun readPageSnapshot(id: String, cancelled: () -> Boolean): PageSnapshot? {
+        val metadata = readableDatabase.rawQuery("SELECT body FROM pages WHERE id=?", arrayOf(id)).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        } ?: return null
+        val objects = readableDatabase.rawQuery("SELECT body FROM objects WHERE page_id=? ORDER BY position,rowid", arrayOf(id)).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    if (cancelled()) throw InterruptedIOException("페이지 읽기를 취소했습니다.")
+                    add(cursor.getString(0))
+                }
+            }
+        }
+        return PageSnapshot(id, metadata, objects)
+    }
+    internal fun requestThumbnail(owner: Any, documentId: String?, pageId: String?, complete: (PageSnapshot?) -> Unit) {
+        enqueuePageRead(PageRead(owner, pageId, 2, { cancelled ->
+            val id = pageId ?: readableDatabase.rawQuery(
+                "SELECT id FROM pages WHERE document_id=? ORDER BY position,id LIMIT 1",
+                arrayOf(requireNotNull(documentId))).use { if (it.moveToFirst()) it.getString(0) else null }
+            id?.let { readPageSnapshot(it, cancelled) }
+        }) { complete(it as PageSnapshot?) })
+    }
     private class Sql(private val db: SupportSQLiteDatabase) {
         fun rawQuery(sql: String, args: Array<String>?): Cursor = db.query(sql, args?.map { it as Any }.orEmpty().toTypedArray())
         fun insertWithOnConflict(table: String, ignored: String?, values: ContentValues, algorithm: Int): Long = db.insert(table, algorithm, values)
@@ -33,6 +155,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         fun update(table: String, values: ContentValues, where: String, args: Array<String>): Int = db.update(table, SQLiteDatabase.CONFLICT_ABORT, values, where, args)
         fun delete(table: String, where: String, args: Array<String>): Int = db.delete(table, where, args)
         fun execSQL(sql: String, args: Array<Any>) = db.execSQL(sql, args)
+        fun compileStatement(sql: String) = db.compileStatement(sql)
         fun beginTransaction() = db.beginTransaction()
         fun setTransactionSuccessful() = db.setTransactionSuccessful()
         fun endTransaction() = db.endTransaction()
@@ -54,8 +177,12 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 if (it.moveToFirst()) it.getLong(0) else null
             }
             result = existing ?: page(pageId)?.objects?.maxOfOrNull { it.optLong("captureSeq", 0) + 1 }?.coerceAtLeast(1) ?: 1
-            writableDatabase.execSQL("INSERT OR IGNORE INTO page_generation(page_id,generation,next_capture_seq) VALUES(?,0,?)", arrayOf<Any>(pageId, result))
-            writableDatabase.execSQL("UPDATE page_generation SET next_capture_seq=? WHERE page_id=?", arrayOf<Any>(result + 1, pageId))
+            if (existing == null) {
+                writableDatabase.execSQL("INSERT INTO page_generation(page_id,generation,next_capture_seq) VALUES(?,0,?)",
+                    arrayOf<Any>(pageId, result + 1))
+            } else {
+                writableDatabase.execSQL("UPDATE page_generation SET next_capture_seq=? WHERE page_id=?", arrayOf<Any>(result + 1, pageId))
+            }
         }
         return result
     }
@@ -98,6 +225,14 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
     }
     fun pageIds(documentId: String): List<String> = readableDatabase.rawQuery("SELECT id FROM pages WHERE document_id=? ORDER BY position,id", arrayOf(documentId)).use {
         buildList { while (it.moveToNext()) add(it.getString(0)) }
+    }
+    fun pageMetas(documentId: String): List<JSONObject> = readableDatabase.rawQuery(
+        "SELECT id,body FROM pages WHERE document_id=? ORDER BY position,id", arrayOf(documentId)).use { cursor ->
+        buildList { while (cursor.moveToNext()) add(JSONObject(cursor.getString(1)).put("id", cursor.getString(0))) }
+    }
+    fun pageCounts(): Map<String, Int> = readableDatabase.rawQuery(
+        "SELECT document_id,COUNT(*) FROM pages GROUP BY document_id", null).use { cursor ->
+        buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getInt(1)) }
     }
     fun pageMeta(id: String): JSONObject? = readableDatabase.rawQuery("SELECT body FROM pages WHERE id=?", arrayOf(id)).use {
         if (it.moveToFirst()) JSONObject(it.getString(0)) else null
@@ -208,22 +343,49 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }
         return inserted
     }
+    private fun objectValues(pageId: String, obj: JSONObject, position: Int) = ContentValues(4).apply {
+        put("id", obj.getString("id")); put("page_id", pageId); put("position", position); put("body", obj.toString())
+    }
     private fun putObject(pageId: String, obj: JSONObject, position: Int) {
-        writableDatabase.insertWithOnConflict("objects", null, ContentValues().apply {
-            put("id", obj.getString("id")); put("page_id", pageId); put("position", position); put("body", obj.toString())
-        }, SQLiteDatabase.CONFLICT_REPLACE)
+        writableDatabase.insertWithOnConflict("objects", null, objectValues(pageId, obj, position), SQLiteDatabase.CONFLICT_REPLACE)
+    }
+    private fun updateObjectPositions(pageId: String, positions: Map<String, Int>, inserted: Set<String>) {
+        if (positions.isEmpty()) return
+        writableDatabase.compileStatement("UPDATE objects SET position=? WHERE page_id=? AND id=? AND position<>?").use { statement ->
+            statement.bindString(2, pageId)
+            positions.forEach { (id, position) ->
+                if (id !in inserted) {
+                    statement.bindLong(1, position.toLong()); statement.bindString(3, id); statement.bindLong(4, position.toLong())
+                    statement.executeUpdateDelete()
+                }
+            }
+        }
     }
     fun commit(documentId: String, pageId: String, change: ObjectChange, positions: Map<String, Int>) {
+        // JSON encoding must not hold SQLite's write lock: the next DOWN durably reserves its sequence there.
+        val removals = change.before.map { arrayOf(pageId, it.getString("id")) }
+        val inserted = HashSet<String>(change.after.size)
+        var captureFloor = 1L
+        val rows = change.after.map { obj ->
+            val id = obj.getString("id")
+            inserted.add(id)
+            captureFloor = maxOf(captureFloor, obj.optLong("captureSeq", 0) + 1)
+            objectValues(pageId, obj, positions[id] ?: Int.MAX_VALUE)
+        }
         transaction {
-            change.before.forEach { writableDatabase.delete("objects", "page_id=? AND id=?", arrayOf(pageId, it.getString("id"))) }
-            change.after.forEach { putObject(pageId, it, positions[it.getString("id")] ?: Int.MAX_VALUE) }
-            positions.forEach { (id, position) -> writableDatabase.execSQL("UPDATE objects SET position=? WHERE page_id=? AND id=?", arrayOf<Any>(position, pageId, id)) }
-            bumpGeneration(pageId, (change.after.maxOfOrNull { it.optLong("captureSeq", 0) } ?: 0) + 1)
+            removals.forEach { writableDatabase.delete("objects", "page_id=? AND id=?", it) }
+            rows.forEach { writableDatabase.insertWithOnConflict("objects", null, it, SQLiteDatabase.CONFLICT_REPLACE) }
+            updateObjectPositions(pageId, positions, inserted)
+            bumpGeneration(pageId, captureFloor)
             writableDatabase.execSQL("UPDATE documents SET updated=? WHERE id=?", arrayOf<Any>(System.currentTimeMillis(), documentId))
         }
     }
     fun addPage(doc: String, page: NotePage, position: Int) = transaction {
-        val shifted = pageIds(doc).drop(position)
+        val existing = pageIds(doc)
+        require(position in 0..existing.size) { "페이지 추가 위치가 올바르지 않습니다." }
+        // Deletion can leave numeric position gaps; insertion takes a visible list index.
+        normalizePagePositions(doc, existing)
+        val shifted = existing.drop(position)
         writableDatabase.execSQL("UPDATE pages SET position=position+1 WHERE document_id=? AND position>=?", arrayOf<Any>(doc, position))
         shifted.forEach(::bumpGeneration)
         putPage(doc, page, position)
@@ -231,7 +393,9 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
     fun duplicatePage(documentId: String, sourceId: String, position: Int): NotePage {
         var duplicated: NotePage? = null
         transaction {
-        require(sourceId in pageIds(documentId)) { "복제할 페이지가 없습니다." }
+        val existing = pageIds(documentId)
+        require(sourceId in existing) { "복제할 페이지가 없습니다." }
+        require(position in 0..existing.size) { "페이지 복제 위치가 올바르지 않습니다." }
         val source = requireNotNull(page(sourceId))
         val raw = readableDatabase.rawQuery("SELECT body FROM ocr_page_state WHERE page_id=?", arrayOf(sourceId)).use {
             if (it.moveToFirst()) JSONObject(it.getString(0)) else null
@@ -251,19 +415,39 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             }
         }.toMutableList()
         val duplicate = NotePage(newId, meta, objects)
-        val shifted = pageIds(documentId).drop(position)
+        normalizePagePositions(documentId, existing)
+        val shifted = existing.drop(position)
         writableDatabase.execSQL("UPDATE pages SET position=position+1 WHERE document_id=? AND position>=?", arrayOf<Any>(documentId, position))
         shifted.forEach(::bumpGeneration)
         putPage(documentId, duplicate, position)
 
-        fun mappedRegionId(id: String): String = when {
-            id.startsWith("line:") -> "line:" + (objectIds[id.removePrefix("line:")] ?: id.removePrefix("line:"))
-            id.startsWith("unresolved:") -> "unresolved:" + (objectIds[id.removePrefix("unresolved:")] ?: id.removePrefix("unresolved:"))
-            else -> id
+        fun mappedRegionId(id: String): String {
+            val prefix = when {
+                id.startsWith("line:") -> "line:"
+                id.startsWith("unresolved:") -> "unresolved:"
+                else -> return id
+            }
+            val sourceObjectId = id.substring(prefix.length).substringBefore('/')
+            return prefix + (objectIds[sourceObjectId] ?: sourceObjectId) +
+                id.substring(prefix.length + sourceObjectId.length)
+        }
+        fun bindRegionSource(value: JSONObject, sourceRegion: PageOcrLayout.Region) {
+            val oldId = value.getString("id")
+            value.put("id", sourceRegion.id)
+                .put("strokeIds", JSONArray(sourceRegion.strokes.map { it.id }))
+                .put("sourceIdentityDigest", OcrInput.sourceIdentityDigest(sourceRegion))
+                .put("bounds", json("left" to sourceRegion.bounds.left, "top" to sourceRegion.bounds.top,
+                    "right" to sourceRegion.bounds.right, "bottom" to sourceRegion.bounds.bottom))
+                .put("timeMode", sourceRegion.timeMode).put("timeOrigin", sourceRegion.timeOrigin)
+            value.array("candidates").objects().forEach { candidate ->
+                if (candidate.optString("hypothesisId") == oldId)
+                    candidate.put("hypothesisId", sourceRegion.id)
+            }
         }
         val newKeys = HashMap<String, String>()
         val newSourceKeys = HashMap<String,String>()
         val originalRegions = raw?.array("regions")?.objects()?.associate { it.optString("id") to it.copyJson() }.orEmpty()
+        val originalDocumentBinding = raw?.let(OcrDocumentCorrection::binding)
         if (raw != null) {
             val newLayout = PageOcrLayout.analyze(duplicate.objects, duplicate.width, duplicate.height)
             val policy = raw.optString("policy")
@@ -276,23 +460,45 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             raw.array("regions").objects().forEach { region ->
                 val oldRegionId = region.getString("id")
                 val mappedIds = region.array("strokeIds").let { ids ->
-                    JSONArray((0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) })
+                    (0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) }
                 }
-                region.put("id", mappedRegionId(oldRegionId)).put("strokeIds", mappedIds)
+                val membership = mappedIds.toHashSet()
+                val line = newLayout.regions.firstOrNull { candidate ->
+                    mappedIds.isNotEmpty() && candidate.strokes.count { it.id in membership } == mappedIds.size
+                }
+                val match = when {
+                    line == null -> null
+                    line.strokes.size == mappedIds.size -> line
+                    oldRegionId.contains("/part") -> PageOcrLayout.knownRegion(mappedRegionId(oldRegionId),
+                        line.role, line.strokes.filter { it.id in membership }, line.order)
+                    else -> null
+                }
                 region.optJSONArray("sourceObjectIds")?.let { ids ->
                     region.put("sourceObjectIds",JSONArray((0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) }))
                 }
-                val match = newLayout.regions.firstOrNull { candidate ->
-                    candidate.strokes.map { it.id } == (0 until mappedIds.length()).map { mappedIds.getString(it) }
-                }
                 if (match != null) {
-                    val key = OcrInput.regionInputDigest(match, region.optString("languageTag", when(policy){"en-primary"->"en-US";else->"ko"}),
-                        "", match.bounds.width.coerceAtLeast(1f), match.bounds.height.coerceAtLeast(1f), match.timeMode)
-                    val sourceKey = OcrInput.sourceIdentityDigest(match)
-                    region.put("inputDigest", key).put("sourceIdentityDigest",sourceKey)
+                    bindRegionSource(region, match)
+                    region.array("wordRegions").objects().forEach { word ->
+                        val wordIds = word.array("strokeIds").let { ids ->
+                            (0 until ids.length()).mapTo(HashSet()) { objectIds[ids.getString(it)] ?: ids.getString(it) }
+                        }
+                        val members = match.strokes.filter { it.id in wordIds }
+                        if (members.isNotEmpty() && members.size == wordIds.size) {
+                            val first = members.minBy { it.originalIndex }
+                            val clonedWord = PageOcrLayout.knownRegion("${match.id}/word:${first.id}",
+                                match.role, members, match.order)
+                            bindRegionSource(word, clonedWord)
+                        }
+                    }
+                    val key = OcrRecognitionPlan.create(match, policy).inputDigest()
+                    val sourceKey = region.getString("sourceIdentityDigest")
+                    region.put("inputDigest", key)
                     newKeys[oldRegionId] = key; newSourceKeys[oldRegionId] = sourceKey
-                } else if (region.optString("role") == "image" && imageKey != null) {
-                    region.put("inputDigest", imageKey); newKeys[oldRegionId] = imageKey
+                } else {
+                    region.put("id", mappedRegionId(oldRegionId)).put("strokeIds", JSONArray(mappedIds))
+                    if (region.optString("role") == "image" && imageKey != null) {
+                        region.put("inputDigest", imageKey); newKeys[oldRegionId] = imageKey
+                    }
                 }
                 region.remove("correctedText")
             }
@@ -312,6 +518,10 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             while (cursor.moveToNext()) {
                 val oldRegionId = cursor.getString(0)
                 val correction = JSONObject(cursor.getString(1))
+                if (correction.optString("scope") == "documentText") {
+                    if (raw == null || correction.optString("sourceBinding") != originalDocumentBinding) continue
+                    correction.put("sourceBinding", OcrDocumentCorrection.binding(raw))
+                }
                 val attached = originalRegions[oldRegionId]?.let { OcrCorrectionPolicy.matches(correction,it) } == true
                 val ids = correction.array("strokeIds")
                 correction.put("strokeIds", JSONArray((0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) }))
@@ -328,8 +538,32 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }
         return requireNotNull(duplicated)
     }
+    private fun normalizePagePositions(doc: String, ids: List<String>) {
+        // Renumbering unchanged visible order must not invalidate saved OCR results.
+        writableDatabase.compileStatement("UPDATE pages SET position=? WHERE document_id=? AND id=?").use { statement ->
+            statement.bindString(2, doc)
+            ids.forEachIndexed { position, id ->
+                statement.bindLong(1, position.toLong()); statement.bindString(3, id); statement.executeUpdateDelete()
+            }
+        }
+    }
     fun reorder(doc: String, ids: List<String>) = transaction {
-        ids.forEachIndexed { i, id -> writableDatabase.execSQL("UPDATE pages SET position=? WHERE document_id=? AND id=?", arrayOf<Any>(i, doc, id)); bumpGeneration(id) }
+        val existing = readableDatabase.rawQuery("SELECT id,position FROM pages WHERE document_id=? ORDER BY position,id", arrayOf(doc)).use { cursor ->
+            buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getInt(1)) }
+        }
+        require(ids.size == existing.size && ids.toSet().size == ids.size && ids.all(existing::containsKey)) {
+            "페이지 순서가 변경되었습니다. 페이지 목록을 다시 열어 주세요."
+        }
+        if (ids == existing.keys.toList()) return@transaction
+        val moved = ids.withIndex().filter { (position, id) -> existing.getValue(id) != position }
+        if (moved.isEmpty()) return@transaction
+        writableDatabase.compileStatement("UPDATE pages SET position=? WHERE document_id=? AND id=?").use { statement ->
+            statement.bindString(2, doc)
+            moved.forEach { (position, id) ->
+                statement.bindLong(1, position.toLong()); statement.bindString(3, id); statement.executeUpdateDelete()
+                bumpGeneration(id)
+            }
+        }
     }
     fun removePage(doc: String, id: String) {
         var stoppedImport: String? = null
@@ -338,14 +572,13 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             require(ids.size > 1) { "마지막 페이지는 삭제할 수 없습니다." }
             val importId = if (id in ids) pageMeta(id)?.optString("pdfImportId").orEmpty() else ""
             if (importId.isNotBlank()) {
-                val firstId = ids.firstOrNull { candidate ->
-                    val meta = pageMeta(candidate)
-                    meta?.optString("pdfImportId") == importId && meta.optInt("pdfPageNumber") == 1 &&
+                val first = pageMetas(doc).firstOrNull { meta ->
+                    meta.optString("pdfImportId") == importId && meta.optInt("pdfPageNumber") == 1 &&
                         meta.optBoolean("pdfImportPending")
                 }
-                if (firstId != null) {
+                if (first != null) {
+                    val firstId = first.getString("id")
                     if (firstId != id) {
-                        val first = requireNotNull(pageMeta(firstId))
                         first.put("pdfImportPending", false).put("pdfImportError", "pdfImportCancelled")
                         writableDatabase.update("pages", ContentValues().apply { put("body", first.toString()) },
                             "id=?", arrayOf(firstId))
@@ -410,10 +643,14 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         val identities = regions.objects().groupingBy { it.optString("sourceIdentityDigest") }.eachCount()
         for (i in 0 until regions.length()) {
             val region = regions.optJSONObject(i) ?: continue
-            val matches = corrections.filter { OcrCorrectionPolicy.matches(it, region) }
+            val matches = corrections.filter { !it.has("scope") && OcrCorrectionPolicy.matches(it, region) }
             if (matches.size == 1 && (region.optString("sourceIdentityDigest").isEmpty() ||
                     identities[region.optString("sourceIdentityDigest")] == 1))
                 region.put("correctedText", matches.single().optString("text"))
+        }
+        result.remove("correctedText")
+        corrections.singleOrNull { OcrDocumentCorrection.matches(it, result) }?.let {
+            result.put("correctedText", it.optString("text"))
         }
         return result
     }
@@ -466,25 +703,48 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 put("page_id", pageId); put("region_id", regionId); put("body", correction.toString())
                 put("updated_at", System.currentTimeMillis())
             }, SQLiteDatabase.CONFLICT_REPLACE)
+            writableDatabase.delete("ocr_corrections", "page_id=? AND region_id=?",
+                arrayOf(pageId, OcrDocumentCorrection.REGION_ID))
+            applied = true
+        }
+        return applied
+    }
+
+    /** Store the single edited result without fabricating per-word correction alignment. */
+    fun correctOcrText(pageId: String, text: String, expectedPageDigest: String): Boolean {
+        var applied = false
+        transaction {
+            val result = ocrResult(pageId) ?: return@transaction
+            if (result.optString("pageDigest") != expectedPageDigest) return@transaction
+            val correction = json("text" to text, "scope" to "documentText", "provenance" to "user",
+                "sourceBinding" to OcrDocumentCorrection.binding(result))
+            writableDatabase.insertWithOnConflict("ocr_corrections", null, ContentValues().apply {
+                put("page_id", pageId); put("region_id", OcrDocumentCorrection.REGION_ID)
+                put("body", correction.toString()); put("updated_at", System.currentTimeMillis())
+            }, SQLiteDatabase.CONFLICT_REPLACE)
             applied = true
         }
         return applied
     }
 
     /** Search is generation-checked without decoding and hashing every stroke on each keystroke. */
-    fun ocrText(pageId: String): String {
+    private fun currentOcrSearchResult(pageId: String): JSONObject? {
         val body = readableDatabase.rawQuery(
             """SELECT o.body FROM ocr_page_state o
                 LEFT JOIN page_generation g ON g.page_id=o.page_id
                 WHERE o.page_id=? AND o.generation=COALESCE(g.generation,0)""".trimIndent(),
             arrayOf(pageId)
         ).use { if (it.moveToFirst()) it.getString(0) else null }
-        if (body == null) return readableDatabase.rawQuery(
-            "SELECT 1 FROM ocr_page_state WHERE page_id=?", arrayOf(pageId)
-        ).use { if (it.moveToFirst()) "" else pageMeta(pageId)?.optString("ocrText").orEmpty() }
-        return OcrResultPolicy.searchableText(attachOcrCorrections(pageId, JSONObject(body)))
+        return body?.let { attachOcrCorrections(pageId, JSONObject(it)) }
     }
 
+    /** A stale sidecar never falls back to the unverified legacy text embedded in metadata. */
+    private fun legacyOcrText(pageId: String): String = readableDatabase.rawQuery(
+        "SELECT 1 FROM ocr_page_state WHERE page_id=?", arrayOf(pageId)
+    ).use { if (it.moveToFirst()) "" else pageMeta(pageId)?.optString("ocrText").orEmpty() }
+
+    fun ocrText(pageId: String): String = currentOcrSearchResult(pageId)?.let(OcrResultPolicy::searchableText)
+        ?: legacyOcrText(pageId)
     /** Global library search: only valid OCR content or attached user corrections can match. */
     fun searchOcrDocuments(query: String): Set<String> {
         val term = query.trim()
@@ -504,51 +764,93 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             .mapTo(LinkedHashSet<String>()) { it.second }
     }
 
-    /** Page search reads small metadata plus candidate text objects, never the entire ink page. */
-    fun searchDocumentPages(documentId: String, query: String): List<Pair<Int, String>> {
+    /** Search metadata and text objects, with source-PDF coordinates loaded only as needed. */
+    fun searchDocumentPages(documentId: String, query: String): List<DocumentSearchHit> {
         val term = query.trim()
         if (term.isEmpty()) return emptyList()
-        val objectText = HashMap<String, MutableList<String>>()
+        val objectText = HashMap<String, MutableList<JSONObject>>()
         readableDatabase.rawQuery(
             """SELECT o.page_id,o.body FROM objects o
                 JOIN pages p ON p.id=o.page_id
                 WHERE p.document_id=?
                   AND (instr(o.body,'"text":')>0 OR instr(o.body,'"expression":')>0)
-                  AND instr(lower(o.body),lower(?))>0
                 ORDER BY o.position,o.rowid""".trimIndent(),
-            arrayOf(documentId, term)
+            arrayOf(documentId)
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 val obj = JSONObject(cursor.getString(1))
-                val text = listOf(obj.optString("text"), obj.optString("expression"))
-                    .filter(String::isNotBlank).joinToString(" ")
-                if (text.contains(term, ignoreCase = true))
-                    objectText.getOrPut(cursor.getString(0)) { ArrayList() }.add(text)
+                objectText.getOrPut(cursor.getString(0)) { ArrayList() }.add(obj)
             }
         }
-        val hits = ArrayList<Pair<Int, String>>()
-        readableDatabase.rawQuery(
-            "SELECT id,body FROM pages WHERE document_id=? ORDER BY position,id",
-            arrayOf(documentId)
-        ).use { cursor ->
-            var index = 0
-            while (cursor.moveToNext()) {
-                val pageId = cursor.getString(0)
-                val meta = JSONObject(cursor.getString(1))
+        val rows = readableDatabase.rawQuery(
+            "SELECT id,body FROM pages WHERE document_id=? ORDER BY position,id", arrayOf(documentId)
+        ).use { cursor -> buildList {
+            while (cursor.moveToNext()) add(cursor.getString(0) to JSONObject(cursor.getString(1)))
+        } }
+        val sessions = HashMap<String, PdfTextSession?>()
+        fun session(source: String): PdfTextSession? {
+            if (!sessions.containsKey(source)) sessions[source] =
+                if (!source.startsWith("asset:")) null
+                else try { PdfTextSession.open(asset(source.removePrefix("asset:"))) }
+                catch (_: Exception) { null }
+            return sessions[source]
+        }
+        try {
+            return rows.mapIndexedNotNull { index, (pageId, meta) ->
+                val source = meta.optString("pdfSource")
+                val number = meta.optInt("pdfPageNumber", 1) - 1
+                val width = meta.f("width", 1000f).coerceIn(32f, 30000f)
+                val height = meta.f("height", 1414f).coerceIn(32f, 30000f)
+                val sourceSession = session(source)
+                val storedPdfText = meta.optString("pdfText")
+                // Old Android extraction sometimes stored empty text or one character per line.
+                // Query the actual PDF character ranges independently; never join stored lines
+                // or require a match in that lossy index before consulting the retained source.
+                val pdfBounds = try { sourceSession?.searchPage(number, term, width, height).orEmpty() }
+                    catch (_: Exception) { emptyList() }
+                val sourceText = if (!storedPdfText.contains(term, ignoreCase = true))
+                    try { sourceSession?.pageText(number) } catch (_: Exception) { null } else null
+                val pdfText = when {
+                    !meta.has("pdfText") -> sourceText.orEmpty()
+                    sourceText?.contains(term, ignoreCase = true) == true -> sourceText
+                    else -> storedPdfText
+                }
+                val ocr = currentOcrSearchResult(pageId)
+                val ocrText = ocr?.let(OcrResultPolicy::searchableText) ?: legacyOcrText(pageId)
+                val spans = ArrayList<DocumentSearchGeometry.Span>()
                 val text = buildString {
-                    append(meta.optString("pdfText"))
+                    append(pdfText)
                     append(' ')
-                    append(ocrText(pageId))
-                    objectText[pageId]?.forEach { append(' '); append(it) }
+                    val offset = length
+                    append(ocrText)
+                    if (ocr != null) DocumentSearchGeometry.ocrSpans(ocr, ocrText).forEach {
+                        spans += it.copy(start = it.start + offset, end = it.end + offset)
+                    }
+                    objectText[pageId]?.forEach { obj ->
+                        val objectValue = listOf(obj.optString("text"), obj.optString("expression"))
+                            .filter(String::isNotBlank).joinToString(" ")
+                        if (objectValue.isNotBlank()) {
+                            append(' ')
+                            val start = length
+                            append(objectValue)
+                            val box = InkGeometry.bounds(obj)
+                            if (box.width > 0f && box.height > 0f)
+                                spans += DocumentSearchGeometry.Span(start, length, box)
+                        }
+                    }
                 }
                 val at = text.indexOf(term, ignoreCase = true)
-                if (at >= 0) hits += index to text.substring(
-                    maxOf(0, at - 20), minOf(text.length, at + 80)
-                ).trim()
-                index++
+                if (at < 0 && pdfBounds.isEmpty()) return@mapIndexedNotNull null
+                val boxes = ArrayList<InkBounds>(pdfBounds.size + spans.size)
+                boxes += pdfBounds
+                boxes += DocumentSearchGeometry.matchingBounds(text, term, spans)
+                // Native search can recognize a real character range even when extraction adds
+                // layout separators. In that case the proven match itself is the honest snippet.
+                val snippet = if (at >= 0)
+                    text.substring(maxOf(0, at - 20), minOf(text.length, at + 80)).trim() else term
+                DocumentSearchHit(index, pageId, snippet, boxes.distinct())
             }
-        }
-        return hits
+        } finally { sessions.values.forEach { it?.close() } }
     }
 
     /** Previously indexed text is retained with unknown provenance, never treated as model truth. */
@@ -948,5 +1250,13 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             }
         }
     }
-    override fun close() { clearOcrMemoryCache(); executor.shutdown(); room.close() }
+    override fun close() {
+        synchronized(readLock) {
+            if (closed) return
+            closed = true; livePageReads.forEach { it.cancelled = true }; livePageReads.clear(); pageReads.clear(); activePageRead?.cancelled = true
+        }
+        pageDecoder.shutdown()
+        executor.execute { clearOcrMemoryCache(); room.close() }
+        executor.shutdown()
+    }
 }

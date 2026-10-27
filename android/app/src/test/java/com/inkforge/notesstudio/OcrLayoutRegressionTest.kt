@@ -73,7 +73,7 @@ class OcrLayoutRegressionTest {
         val a=OcrPipeline(1);val b=OcrPipeline(2)
         assertNotEquals(a.fingerprint,b.fingerprint)
         assertNotEquals(OcrInput.pageDigest(page,"ko-primary",a),OcrInput.pageDigest(page,"ko-primary",b))
-        assertNotEquals(b.fingerprint,b.copy(layoutConfigVersion=2).fingerprint)
+        assertNotEquals(b.fingerprint,b.copy(layoutConfigVersion=b.layoutConfigVersion+1).fingerprint)
         assertNotEquals(b.fingerprint,b.copy(routerVersion=b.routerVersion+1).fingerprint)
         val region=analyze(input).regions.single()
         assertEquals(OcrInput.sourceIdentityDigest(region),OcrInput.sourceIdentityDigest(region.copy(id="other",order=12)))
@@ -81,5 +81,23 @@ class OcrLayoutRegressionTest {
             array("points").objects().forEach { it.put("x",it.getDouble("x")+1) }
         } }
         assertNotEquals(OcrInput.sourceIdentityDigest(region),OcrInput.sourceIdentityDigest(analyze(moved).regions.single()))
+    }
+    @Test fun transparentSourceIsPreservedButNeverFedToTextModels() {
+        val input=gak()+listOf(stroke("invisible",150f,100f,175f,135f).put("opacity",0),
+            stroke("invisibleSetting",180f,100f,200f,135f).put("settings",json("opacity" to 0)))
+        val original=input.map { it.toString() }
+        val result=analyze(input)
+        assertEquals(setOf("invisible","invisibleSetting"),result.nonTextPreserved.map { it.id }.toSet())
+        assertEquals(gak().map { it.getString("id") }.toSet(),result.regions.flatMap { it.strokes }.map { it.id }.toSet())
+        result.assertConserved(input.map { it.getString("id") }.toSet())
+        assertEquals(original,input.map { it.toString() })
+    }
+    @Test fun leadingDashAndDetachedCrossbarAttachAfterLetterBandWithoutReorderingCapture() {
+        val input=listOf(stroke("dash",10f,110f,20f,110f),
+            stroke("letter",30f,100f,45f,130f),stroke("crossbar",32f,114f,43f,114f))
+        val result=analyze(input)
+        assertTrue(result.unresolved.isEmpty())
+        assertEquals(input.map { it.getString("id") },result.regions.single().strokes.map { it.id })
+        assertEquals(1,analyze(listOf(stroke("dashOnly",10f,110f,20f,110f))).regions.size)
     }
 }

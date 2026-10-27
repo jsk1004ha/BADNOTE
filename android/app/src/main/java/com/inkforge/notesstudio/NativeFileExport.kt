@@ -109,19 +109,23 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
 
 /** One raster page and one JPEG spool at a time, including at 300 MB total asset size. */
 object StreamingPdf {
-    fun render(repository:NoteRepository,page:NotePage,width:Int):Bitmap {
+    fun render(repository:NoteRepository,page:NotePage,width:Int,imageMaxDimension:Int=2400,cancelled:()->Boolean={false}):Bitmap {
         val height=(width*page.height/page.width).roundToInt().coerceIn(1,5000)
         val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
+        fun checkCancelled(){if(cancelled())throw InterruptedIOException("미리보기를 취소했습니다.")}
         try{
+            checkCancelled()
             val canvas=Canvas(bitmap);canvas.scale(width/page.width,height/page.height)
             val imageCache=mutableMapOf<String,Bitmap>()
             val renderer=NoteRenderer { ref->
                 if(!ref.startsWith("asset:"))null else imageCache.getOrPut(ref){
-                    BackgroundLoader.decodeImage(repository.asset(ref.removePrefix("asset:")),2000)?:error("이미지 자산을 읽지 못했습니다.")
+                    checkCancelled()
+                    BackgroundLoader.decodeImage(repository.asset(ref.removePrefix("asset:")),min(2000,imageMaxDimension))?:error("이미지 자산을 읽지 못했습니다.")
                 }
             }
             try{
                 renderer.template(canvas,page)
+                checkCancelled()
                 val pdfRef=page.meta.optString("pdfSource")
                 if(pdfRef.startsWith("asset:")){
                     PdfRenderer(ParcelFileDescriptor.open(repository.asset(pdfRef.removePrefix("asset:")),ParcelFileDescriptor.MODE_READ_ONLY)).use{pdf->
@@ -131,10 +135,10 @@ object StreamingPdf {
                                 canvas.drawBitmap(background,null,RectF(0f,0f,page.width,page.height),null)}finally{background.recycle()}
                         }}
                 }else if(page.meta.optString("backgroundImage").startsWith("asset:")){
-                    val bg=BackgroundLoader.decodeImage(repository.asset(page.meta.getString("backgroundImage").removePrefix("asset:")),2400)?:error("PDF 배경 자산을 읽지 못했습니다.")
+                    val bg=BackgroundLoader.decodeImage(repository.asset(page.meta.getString("backgroundImage").removePrefix("asset:")),imageMaxDimension)?:error("PDF 배경 자산을 읽지 못했습니다.")
                     try{canvas.drawBitmap(bg,null,RectF(0f,0f,page.width,page.height),null)}finally{bg.recycle()}
                 }
-                page.objects.forEach{obj->renderer.draw(canvas,obj)
+                page.objects.forEach{obj->checkCancelled();renderer.draw(canvas,obj)
                     // Images are consumed in order, so a page with hundreds of images stays bounded.
                     imageCache.values.forEach{it.recycle()};imageCache.clear()}
             }finally{imageCache.values.forEach{it.recycle()}}

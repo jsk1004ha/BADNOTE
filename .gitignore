@@ -1,10 +1,13 @@
 .omx/
 **/.omx/
 .worktrees/
+/_delete_after_review/
 
 # Local build tool caches and generated outputs
 **/.build-tools/
 **/.gradle/
+**/.kotlin/
+**/.cxx/
 **/build/
 
 # Python benchmark caches
@@ -18,3 +21,10 @@
 **/local.properties
 **/local-signing.properties
 **/*.jks
+
+# Private workstation cleanup records and helpers
+/docs/WORKSPACE-KO.md
+/docs/CLEANUP-KO.md
+/tools/cleanup_local_targets.json
+/tools/cleanup_local.ps1
+/tools/test_cleanup_local.ps1

@@ -138,7 +138,7 @@ async def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--web", type=Path, default=Path("web"))
+    parser.add_argument("--web", type=Path, default=Path(__file__).resolve().parents[1] / "legacy/web")
     parser.add_argument("--chromium", required=True)
     parser.add_argument("--output", type=Path, default=Path("build/tests/export-3.3.30"))
     args = parser.parse_args()

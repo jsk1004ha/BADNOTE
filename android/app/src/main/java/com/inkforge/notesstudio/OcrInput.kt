@@ -53,6 +53,7 @@ object OcrInput {
         h.int(5); h.string(languageTag); h.string(preContext); h.string(timeMode)
         h.float(writingWidth); h.float(writingHeight)
         h.float(region.bounds.left); h.float(region.bounds.top)
+        val space = OcrInkGeometry.space(region)
         region.strokes.forEach { stroke ->
             h.string(stroke.id); h.long(stroke.captureSeq ?: -1)
             h.string(stroke.captureSessionId ?: ""); h.string(stroke.timeBasis)
@@ -61,13 +62,27 @@ object OcrInput {
             h.int(points.length())
             for (i in 0 until points.length()) {
                 val point = requireNotNull(points.optJSONObject(i)) { "invalidInput:${stroke.id}:pointObject" }
-                val x = number(point, "x").toFloat() - region.bounds.left
-                val y = number(point, "y").toFloat() - region.bounds.top
+                val x = space.x(number(point, "x").toFloat())
+                val y = space.y(number(point, "y").toFloat())
                 h.float(x); h.float(y)
                 h.float(number(point, "p", .5).toFloat())
                 h.float(number(point, "tilt", 0.0).toFloat())
                 h.float(number(point, "orientation", 0.0).toFloat())
                 if (timeMode == "relative") h.long(point.getLong("t") - region.timeOrigin)
+            }
+        }
+    }
+
+    /** Hash every actual word's area, order and effective timing; a parent line may have no
+     * common session even when each independently recognized word has valid relative times. */
+    internal fun textInputDigest(regions: List<PageOcrLayout.Region>, languageTags: List<String>,
+                                 policy: String, preContext: String = ""): String = hash { h ->
+        h.string("badnote-text-plan-input-v1"); h.string(policy); h.int(regions.size); h.int(languageTags.size)
+        regions.forEachIndexed { index, region ->
+            val space = OcrInkGeometry.space(region)
+            languageTags.forEach { tag ->
+                h.string(regionInputDigest(region, tag, if (index == 0) preContext else "",
+                    space.width, space.height, region.timeMode))
             }
         }
     }
