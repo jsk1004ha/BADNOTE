@@ -1,5 +1,8 @@
 package com.inkforge.notesstudio
 
+import com.inkforge.ocr.contracts.RecognitionCandidate
+import com.inkforge.ocr.contracts.SourceKind
+import com.inkforge.ocr.contracts.ContentKind
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executor
@@ -21,11 +24,12 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
 
     private fun process(request: OcrRequestQueue.Request): Receipt {
         if (!queue.current(request)) return Receipt(false, null, "cancelled")
-        val page = repository.page(request.pageId) ?: return Receipt(false, null, "pageMissing")
-        val imageSource = page.meta.has("backgroundImage") || page.meta.has("pdfSource") ||
-            page.objects.any { it.optString("type") == "image" }
+        val snapshot = repository.readOcrSnapshot(request.documentId, request.pageId)
+            ?: return Receipt(false, null, "pageMissing")
+        val page = snapshot.page
+        val imageSource = OcrSources.hasRasterSource(page)
         if (page.objects.none { it.optString("type") == "stroke" } && !imageSource) return Receipt(false, null, "noInk")
-        val generation = repository.generation(request.pageId)
+        val generation = snapshot.generation
         val digest = OcrInput.pageDigest(page, request.policy)
         if (request.expectedDigest != null && digest != request.expectedDigest)
             return Receipt(false, null, "stalePage")
@@ -40,20 +44,37 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
         if (modelTags.isNotEmpty()) recognition.ensureModels(request.policy)
         val modelGeneration = modelTags.joinToString("|") { "$it:${repository.modelGeneration(it)}" }
         if (request.automatic && repository.ocrResult(request.pageId)?.let {
-                it.optString("policy") == request.policy && it.optString("modelGeneration") == modelGeneration
+                it.optString("policy") == request.policy && it.optString("modelGeneration") == modelGeneration &&
+                    it.optString("pipelineFingerprint") == OcrPipeline.CURRENT.fingerprint &&
+                    it.optString("status") == "complete"
             } == true) return Receipt(false, null, "alreadyIndexed")
         val regions = JSONArray()
         val readingOrder = JSONArray()
         var failed = 0
-        if (layout.regions.isEmpty() && layout.unresolved.isEmpty() && imageSource) {
+        val recognizeRaster = imageSource && (BuildConfig.OCR_MIXED_SOURCES ||
+            layout.regions.isEmpty() && layout.unresolved.isEmpty())
+        if (recognizeRaster) {
+            if (!queue.current(request)) return Receipt(false,null,"cancelled")
             queue.progress(request, "image", 0, 1)
             try {
-                val bitmap = StreamingPdf.render(repository, page, 1400)
+                recognition.requireAvailable()
+                val imagePage = if (BuildConfig.OCR_MIXED_SOURCES) OcrSources.rasterOnly(page) else page
+                val bitmap = StreamingPdf.render(repository, imagePage,OcrSources.rasterWidth(imagePage))
+                val lease = BitmapLease { bitmap.recycle() }
+                var handedToEngine = false
                 val imageLanguage = if (request.policy == "en-primary") "en" else if (request.policy == "mixed-review") "ko" else request.policy.substringBefore('-')
                 val (imageDigest, text) = try {
-                    OcrInput.imageKey(page, request.policy, bitmap) to recognition.image(bitmap, imageLanguage)
-                } finally { bitmap.recycle() }
+                    val key = OcrInput.imageKey(imagePage, request.policy, bitmap)
+                    handedToEngine = true
+                    key to recognition.image(bitmap, imageLanguage,lease::close)
+                } finally { if (!handedToEngine) lease.close() }
+                if (text.isBlank()) error("emptyCandidates")
                 regions.put(json("id" to "image", "strokeIds" to JSONArray(), "order" to 0,
+                    "sourceKind" to SourceKind.RASTER_IMAGE.name,"contentKind" to ContentKind.TEXT.name,
+                    "renderMode" to if (BuildConfig.OCR_MIXED_SOURCES) "SOURCE_ONLY" else "COMPOSITE",
+                    "sourceObjectIds" to JSONArray(imagePage.objects.map { it.optString("id") }),
+                    "bounds" to json("left" to 0,"top" to 0,"right" to page.width,"bottom" to page.height),
+                    "reviewReasons" to JSONArray(listOf("pageLevelRasterMapping")),
                     "role" to "image", "status" to "complete", "rawText" to text, "selectedText" to text,
                     "inputDigest" to imageDigest,
                     "candidates" to JSONArray(listOf(json("rank" to 0, "text" to text, "confidence" to JSONObject.NULL)))))
@@ -63,7 +84,8 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                 regions.put(json("id" to "image", "strokeIds" to JSONArray(), "order" to 0,
                     "role" to "image", "status" to "failed", "errorCode" to (error.message ?: "imageOcrFailed")))
             }
-        } else {
+        }
+        if (!recognizeRaster || BuildConfig.OCR_MIXED_SOURCES) {
             recognitionRegions.forEachIndexed { index, region ->
                 if (!queue.current(request)) return Receipt(false, null, "cancelled")
                 queue.progress(request, "recognizing", index, recognitionRegions.size)
@@ -71,7 +93,9 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                 val bounds = json("left" to region.bounds.left, "top" to region.bounds.top,
                     "right" to region.bounds.right, "bottom" to region.bounds.bottom)
                 val output = json("id" to region.id, "strokeIds" to ids, "order" to region.order,
+                    "sourceKind" to SourceKind.DIGITAL_INK.name,"contentKind" to ContentKind.TEXT.name,
                     "role" to region.role, "bounds" to bounds, "timeMode" to region.timeMode,
+                    "sourceIdentityDigest" to OcrInput.sourceIdentityDigest(region),
                     "reviewReasons" to JSONArray(region.reviewReasons))
                 try {
                     val tag = when (request.policy) {
@@ -91,17 +115,27 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                     val texts = primary?.candidates ?: cached?.array("candidates")?.objects()?.map { it.optString("text") }.orEmpty()
                     val selected = texts.firstOrNull().orEmpty()
                     val candidates = JSONArray(texts.mapIndexed { rank, text ->
-                        json("rank" to rank, "text" to text, "confidence" to JSONObject.NULL)
+                        val candidate = RecognitionCandidate(text,OcrInput.MODEL_EPOCH,tag,
+                            request.token.toString(),region.id,rank)
+                        json("rank" to rank,"nativeRank" to candidate.nativeRank,
+                            "text" to candidate.rawText,"rawText" to candidate.rawText,
+                            "engineId" to candidate.engineId,"languageTag" to candidate.languageTag,
+                            "requestId" to candidate.requestId,"hypothesisId" to candidate.hypothesisId,
+                            "score" to JSONObject.NULL,"confidence" to JSONObject.NULL)
                     })
                     val alternate = models.getOrNull(1)
                     if (alternate?.candidates?.firstOrNull()?.let { it != selected } == true)
                         output.array("reviewReasons").put("languageDisagreement")
+                    if (texts.isEmpty() || selected.isBlank()) error("emptyCandidates")
                     output.put("status", if (cached != null && primary == null) "cached" else "complete")
                         .put("rawText", selected).put("selectedText", selected).put("candidates", candidates)
                         .put("languageTag", primary?.languageTag ?: tag)
                     if (alternate != null) output.put("alternateLanguage", json("languageTag" to alternate.languageTag,
                         "candidates" to JSONArray(alternate.candidates.mapIndexed { rank, text ->
-                            json("rank" to rank, "text" to text, "confidence" to JSONObject.NULL)
+                            json("rank" to rank,"nativeRank" to rank,"text" to text,"rawText" to text,
+                                "engineId" to OcrInput.MODEL_EPOCH,"languageTag" to alternate.languageTag,
+                                "requestId" to request.token.toString(),"hypothesisId" to region.id,
+                                "score" to JSONObject.NULL,"confidence" to JSONObject.NULL)
                         })))
                     if (cached == null && primary != null) repository.cacheOcr(key, json("candidates" to candidates))
                 } catch (error: Exception) {
@@ -123,6 +157,8 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
             (regions.length() > 0 || layout.nonTextPreserved.isEmpty())) "complete" else "partial"
         val result = json("schemaVersion" to 1, "documentId" to request.documentId, "pageId" to request.pageId,
             "pageDigest" to digest, "generation" to generation, "status" to status,
+            "pipelineFingerprint" to OcrPipeline.CURRENT.fingerprint,
+            "sourceDigest" to OcrInput.pageSourceDigest(page, request.policy),
             "modelGeneration" to modelGeneration,
             "regions" to regions, "readingOrder" to readingOrder,
             "invalidInput" to JSONArray(layout.invalidInput.map { json("id" to it.id, "reason" to it.reason) }),

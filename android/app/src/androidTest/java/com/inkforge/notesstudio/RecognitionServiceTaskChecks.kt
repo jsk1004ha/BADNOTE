@@ -15,6 +15,34 @@ object RecognitionServiceTaskChecks {
         failedTaskReleasesPermitForNextRealTask()
         inactiveServiceRejectsNewTaskWithoutReleasingRunningTask()
         renderedImageDigestTracksPixelsAndPolicy()
+        timeoutDoesNotRecycleBitmapLeaseBeforeActualCompletion()
+        mathUnavailableDoesNotStartTextRecognition()
+    }
+    private fun timeoutDoesNotRecycleBitmapLeaseBeforeActualCompletion() {
+        val service = RecognitionService()
+        val workers = Executors.newSingleThreadExecutor()
+        val task = TaskCompletionSource<String>()
+        val released = java.util.concurrent.atomic.AtomicInteger()
+        val lease = BitmapLease { released.incrementAndGet(); Unit }
+        try {
+            val logical = workers.submit<Throwable?> {
+                try { service.infer(1,{ task.task },lease::close); null } catch (e: Throwable) { e }
+            }
+            check(logical.get(3,TimeUnit.SECONDS)?.message == "recognizerTimeout")
+            check(released.get() == 0) { "Logical timeout released the SDK input" }
+            task.setResult("late")
+            check(released.get() == 1) { "Actual completion failed to release the SDK input" }
+            lease.close(); check(released.get() == 1)
+        } finally { if (!task.task.isComplete) task.setResult("cleanup"); service.close(); workers.shutdownNow() }
+    }
+    private fun mathUnavailableDoesNotStartTextRecognition() {
+        val service = RecognitionService()
+        var modelTouched = false
+        service.onModelState = { _,_ -> modelTouched = true }
+        try {
+            val error = runCatching { service.handwriting(emptyList(),1000f,1414f,"en",true) }.exceptionOrNull()
+            check(error?.message == "mathEngineUnavailable" && !modelTouched)
+        } finally { service.close() }
     }
     private fun timedOutTaskKeepsPermitThenRecoversAfterActualCompletion() {
         val service = RecognitionService()
@@ -34,6 +62,9 @@ object RecognitionServiceTaskChecks {
             }
             check(first.get(3, TimeUnit.SECONDS) is IllegalStateException)
             check(!secondStarted.get()) { "second recognizer started while original Task remained running" }
+            check(runCatching { service.requireAvailable() }.exceptionOrNull()?.message == "recognizerCircuitOpen") {
+                "An image fallback must be rejected before allocating pixels for a timed-out Task"
+            }
             val early = try { service.infer(1, { Tasks.forResult("too early") }); null }
                 catch (error: Throwable) { error }
             check(early is IllegalStateException)

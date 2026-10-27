@@ -34,6 +34,16 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
+def current_release_version() -> tuple[int, str]:
+    """Keep APK and installed-upgrade checks tied to the same build version."""
+    config = (ANDROID / "app/build.gradle").read_text(encoding="utf-8")
+    codes = re.findall(r"(?m)^\s*versionCode\s+(\d+)\s*$", config)
+    names = re.findall(r"(?m)^\s*versionName\s+'([^']+)'\s*$", config)
+    if len(codes) != 1 or len(names) != 1:
+        raise ValueError("Expected one literal release versionCode and versionName in app/build.gradle")
+    return int(codes[0]), names[0]
+
+
 def transfer_private_fixture(adb: list, source_path: Path, private_path: str,
                              package: str = "com.inkforge.note4.debug") -> dict:
     """ADB push preserves binary bytes on Windows; verify the private copy."""
@@ -581,17 +591,19 @@ def main() -> None:
         elif args.phase == "apk":
             sdk = sdk_root()
             os.environ["ANDROID_SDK_ROOT"] = str(sdk)
+            version_code, version_name = current_release_version()
             for variant in ("update", "sideBySide"):
                 path = ANDROID / f"app/build/outputs/apk/{variant}/release/app-{variant}-release.apk"
                 package = "com.inkforge.note4" if variant == "update" else "com.inkforge.note5"
                 run([sys.executable, ROOT / "tools/verify_apk.py", path, "--native-min-api-limit", "23",
                      "--expected-package", package, "--expected-min-sdk", "23",
-                     "--expected-target-sdk", "36", "--expected-version-code", "411", "--expected-version-name", "4.1.1-beta.1",
+                     "--expected-target-sdk", "36", "--expected-version-code", version_code, "--expected-version-name", version_name,
                      "--expected-certificate", "45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847",
                      "--pdfium-manifest", ROOT / "build/dependencies/pdfium-8086/verification.json",
                      *[argument for guard in args.guarded_native_library for argument in ("--guarded-native-library", guard)],
                      *[argument for asset in args.require_asset for argument in ("--require-asset", asset)]], "apk-" + variant)
         elif args.phase == "upgrade":
+            version_code, _ = current_release_version()
             directory = args.upgrade_directory.resolve()
             if not directory.is_relative_to(ROOT / "build"):
                 raise ValueError("Installed upgrade captures must be beneath repository/build")
@@ -605,7 +617,7 @@ def main() -> None:
                 if digest(old_apk) != pinned_sha:
                     raise ValueError("Retained signed 4.0.1 APK no longer matches its pinned input")
                 captures = []
-                for label, version, apk in (("before", 401, old_apk), ("after", 411, new_apk)):
+                for label, version, apk in (("before", 401, old_apk), ("after", version_code, new_apk)):
                     captured = directory / variant / label
                     capture_path = captured / "capture-receipt.json"
                     capture = json.loads(capture_path.read_text(encoding="utf-8"))

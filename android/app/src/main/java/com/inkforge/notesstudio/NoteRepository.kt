@@ -109,6 +109,19 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }
         return NotePage(id, meta, objects)
     }
+
+    data class OcrSnapshot(val page: NotePage, val generation: Long)
+
+    /** Fresh parsed JSON owned by this worker; no transaction remains open during inference. */
+    fun readOcrSnapshot(documentId: String, pageId: String): OcrSnapshot? {
+        var snapshot: OcrSnapshot? = null
+        transaction {
+            val belongs = readableDatabase.rawQuery("SELECT 1 FROM pages WHERE id=? AND document_id=?",
+                arrayOf(pageId, documentId)).use { it.moveToFirst() }
+            if (belongs) page(pageId)?.let { snapshot = OcrSnapshot(it, generation(pageId)) }
+        }
+        return snapshot
+    }
     fun putPage(documentId: String, page: NotePage, position: Int) {
         val values = ContentValues().apply {
             put("id", page.id); put("document_id", documentId); put("position", position); put("body", page.meta.toString())
@@ -249,12 +262,16 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             else -> id
         }
         val newKeys = HashMap<String, String>()
+        val newSourceKeys = HashMap<String,String>()
+        val originalRegions = raw?.array("regions")?.objects()?.associate { it.optString("id") to it.copyJson() }.orEmpty()
         if (raw != null) {
             val newLayout = PageOcrLayout.analyze(duplicate.objects, duplicate.width, duplicate.height)
             val policy = raw.optString("policy")
             val imageKey = if (raw.array("regions").objects().any { it.optString("role") == "image" }) {
-                val bitmap = StreamingPdf.render(this, duplicate, 1400)
-                try { OcrInput.imageKey(duplicate, policy, bitmap) } finally { bitmap.recycle() }
+                val sourceOnly = raw.array("regions").objects().any { it.optString("renderMode") == "SOURCE_ONLY" }
+                val imagePage = if (sourceOnly) OcrSources.rasterOnly(duplicate) else duplicate
+                val bitmap = StreamingPdf.render(this, imagePage,OcrSources.rasterWidth(imagePage))
+                try { OcrInput.imageKey(imagePage, policy, bitmap) } finally { bitmap.recycle() }
             } else null
             raw.array("regions").objects().forEach { region ->
                 val oldRegionId = region.getString("id")
@@ -262,13 +279,18 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                     JSONArray((0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) })
                 }
                 region.put("id", mappedRegionId(oldRegionId)).put("strokeIds", mappedIds)
+                region.optJSONArray("sourceObjectIds")?.let { ids ->
+                    region.put("sourceObjectIds",JSONArray((0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) }))
+                }
                 val match = newLayout.regions.firstOrNull { candidate ->
                     candidate.strokes.map { it.id } == (0 until mappedIds.length()).map { mappedIds.getString(it) }
                 }
                 if (match != null) {
                     val key = OcrInput.regionInputDigest(match, region.optString("languageTag", when(policy){"en-primary"->"en-US";else->"ko"}),
                         "", match.bounds.width.coerceAtLeast(1f), match.bounds.height.coerceAtLeast(1f), match.timeMode)
-                    region.put("inputDigest", key); newKeys[oldRegionId] = key
+                    val sourceKey = OcrInput.sourceIdentityDigest(match)
+                    region.put("inputDigest", key).put("sourceIdentityDigest",sourceKey)
+                    newKeys[oldRegionId] = key; newSourceKeys[oldRegionId] = sourceKey
                 } else if (region.optString("role") == "image" && imageKey != null) {
                     region.put("inputDigest", imageKey); newKeys[oldRegionId] = imageKey
                 }
@@ -281,6 +303,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             }
             raw.put("documentId", documentId).put("pageId", newId)
                 .put("pageDigest", OcrInput.pageDigest(duplicate, policy)).put("generation", generation(newId))
+                .put("sourceDigest",OcrInput.pageSourceDigest(duplicate,policy))
             require(putOcrResult(documentId, newId, generation(newId), raw.getString("pageDigest"), policy, raw)) {
                 "복제한 페이지의 OCR 결과를 저장하지 못했습니다."
             }
@@ -289,9 +312,12 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             while (cursor.moveToNext()) {
                 val oldRegionId = cursor.getString(0)
                 val correction = JSONObject(cursor.getString(1))
+                val attached = originalRegions[oldRegionId]?.let { OcrCorrectionPolicy.matches(correction,it) } == true
                 val ids = correction.array("strokeIds")
                 correction.put("strokeIds", JSONArray((0 until ids.length()).map { objectIds[ids.getString(it)] ?: ids.getString(it) }))
-                newKeys[oldRegionId]?.let { correction.put("inputDigest", it) }
+                if (attached) newKeys[oldRegionId]?.let { correction.put("inputDigest", it) }
+                if (attached && correction.optString("sourceIdentityDigest").isNotEmpty())
+                    newSourceKeys[oldRegionId]?.let { correction.put("sourceIdentityDigest",it) }
                 writableDatabase.insertWithOnConflict("ocr_corrections", null, ContentValues().apply {
                     put("page_id", newId); put("region_id", mappedRegionId(oldRegionId))
                     put("body", correction.toString()); put("updated_at", cursor.getLong(2))
@@ -374,13 +400,15 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         val current = page(pageId) ?: return null
         if (row.first != generation(pageId) || row.second != OcrInput.pageDigest(current, result.optString("policy"))) return null
         val regions = result.array("regions")
+        val corrections = readableDatabase.rawQuery("SELECT body FROM ocr_corrections WHERE page_id=?",
+            arrayOf(pageId)).use { c -> buildList { while (c.moveToNext()) add(JSONObject(c.getString(0))) } }
+        val identities = regions.objects().groupingBy { it.optString("sourceIdentityDigest") }.eachCount()
         for (i in 0 until regions.length()) {
             val region = regions.optJSONObject(i) ?: continue
-            val correction = readableDatabase.rawQuery("SELECT body FROM ocr_corrections WHERE page_id=? AND region_id=?",
-                arrayOf(pageId, region.optString("id"))).use { if (it.moveToFirst()) JSONObject(it.getString(0)) else null }
-            if (correction != null && correction.array("strokeIds").toString() == region.array("strokeIds").toString() &&
-                correction.optString("inputDigest") == region.optString("inputDigest"))
-                region.put("correctedText", correction.optString("text"))
+            val matches = corrections.filter { OcrCorrectionPolicy.matches(it,region) }
+            if (matches.size == 1 && (region.optString("sourceIdentityDigest").isEmpty() ||
+                    identities[region.optString("sourceIdentityDigest")] == 1))
+                region.put("correctedText", matches.single().optString("text"))
         }
         return result
     }
@@ -396,7 +424,9 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 (expectedInputDigest != null && expectedInputDigest != region.optString("inputDigest")))
                 return@transaction
             val correction = json("text" to text, "strokeIds" to region.array("strokeIds"),
-                "inputDigest" to region.optString("inputDigest"), "provenance" to "user")
+                "inputDigest" to region.optString("inputDigest"), "provenance" to "user",
+                "sourceIdentityDigest" to region.optString("sourceIdentityDigest"),
+                "contentKind" to region.optString("contentKind","TEXT"))
             writableDatabase.insertWithOnConflict("ocr_corrections", null, ContentValues().apply {
                 put("page_id", pageId); put("region_id", regionId); put("body", correction.toString())
                 put("updated_at", System.currentTimeMillis())
