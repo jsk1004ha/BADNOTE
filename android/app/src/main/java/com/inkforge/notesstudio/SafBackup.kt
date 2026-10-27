@@ -51,6 +51,8 @@ internal class SafBackupDestination(context: Context, folder: Uri) : BackupEngin
         arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)?.use { it.moveToFirst() } ?: false }
         catch (_: java.io.FileNotFoundException) { false }
         catch (_: IllegalArgumentException) { false }
+    override fun input(uri: String) = resolver.openInputStream(Uri.parse(uri))
+        ?: throw java.io.IOException("백업 파일을 읽을 수 없습니다.")
     override fun create(name: String): String {
         val uri = requireNotNull(DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name)) {
             "백업 파일을 만들 수 없습니다. 폴더 권한을 다시 지정해 주세요."

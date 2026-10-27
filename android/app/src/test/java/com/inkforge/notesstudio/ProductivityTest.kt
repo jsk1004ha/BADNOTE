@@ -3,6 +3,7 @@ package com.inkforge.notesstudio
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
+import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.io.OutputStream
@@ -52,8 +53,17 @@ class ProductivityTest {
     }
     private class Destination(val directory: File) : BackupEngine.Destination {
         var failWrite = false; var failClose = false; var failRename = false; var maxChunk = 0
+        var failRead = false; var maxReadChunk = 0
+        var onRead: () -> Unit = {}
         var onWrite: () -> Unit = {}
         override fun exists(uri: String) = File(uri).exists()
+        override fun input(uri: String) = object : FilterInputStream(File(uri).inputStream()) {
+            override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                maxReadChunk = maxOf(maxReadChunk, length)
+                if (failRead) throw IOException("read failure")
+                return super.read(bytes, offset, length).also { onRead() }
+            }
+        }
         override fun create(name: String) = File(directory, name).apply { check(createNewFile()) }.path
         override fun output(uri: String): OutputStream {
             val output = File(uri).outputStream()
@@ -106,12 +116,59 @@ class ProductivityTest {
             }
             assertEquals(digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }, old.sha256)
             assertEquals(1, BackupEngine.run(source, destination, journal, work).skipped); assertEquals(1, source.exports)
+            assertTrue(destination.maxReadChunk in 1..64 * 1024)
             source.stamp = "v2"; assertEquals(1, BackupEngine.run(source, destination, journal, work).written)
             assertTrue(file.exists()); assertNotEquals(old.uri, journal.previous("one")?.uri)
             File(requireNotNull(journal.previous("one")).uri).delete()
             assertEquals(1, BackupEngine.run(source, destination, journal, work).written)
             assertTrue(work.listFiles().orEmpty().isEmpty())
         } finally { root.deleteRecursively() }
+    }
+    @Test fun unchangedDocumentRepairsTruncatedAndSameSizeCorruptBackups() {
+        for (truncate in listOf(true, false)) {
+            val root = Files.createTempDirectory("backup-corrupt").toFile()
+            try {
+                val work = File(root, "work").apply { mkdir() }
+                val destination = Destination(File(root, "remote").apply { mkdir() })
+                val journal = Journal(); val source = Source(1024 * 1024)
+                BackupEngine.run(source, destination, journal, work)
+                val old = requireNotNull(journal.previous("one"))
+                val file = File(old.uri)
+                if (truncate) file.writeBytes(byteArrayOf(1, 2, 3))
+                else java.io.RandomAccessFile(file, "rw").use { it.writeByte(99) }
+                assertEquals(1, BackupEngine.run(source, destination, journal, work).written)
+                val repaired = requireNotNull(journal.previous("one"))
+                assertEquals(2, source.exports)
+                assertEquals(old.stamp, repaired.stamp)
+                assertEquals(old.sha256, repaired.sha256)
+                assertNotEquals(old.uri, repaired.uri)
+                assertTrue(file.exists())
+                assertEquals(1, BackupEngine.run(source, destination, journal, work).skipped)
+                assertTrue(work.listFiles().orEmpty().isEmpty())
+            } finally { root.deleteRecursively() }
+        }
+    }
+    @Test fun verificationReadFailureAndCancellationPreserveCheckpointAndArchive() {
+        for (cancel in listOf(false, true)) {
+            val root = Files.createTempDirectory("backup-verify").toFile()
+            try {
+                val work = File(root, "work").apply { mkdir() }
+                val remote = File(root, "remote").apply { mkdir() }
+                val destination = Destination(remote); val journal = Journal(); val source = Source(1024 * 1024)
+                BackupEngine.run(source, destination, journal, work)
+                val old = requireNotNull(journal.previous("one"))
+                var cancelled = false
+                destination.failRead = !cancel
+                if (cancel) destination.onRead = { cancelled = true }
+                try { BackupEngine.run(source, destination, journal, work) { cancelled }; fail("verification succeeded") }
+                catch (error: IOException) { if (cancel) assertTrue(error is InterruptedIOException) }
+                assertEquals(old, journal.previous("one"))
+                assertEquals(1, source.exports)
+                assertTrue(File(old.uri).exists())
+                assertEquals(1, remote.listFiles().orEmpty().size)
+                assertTrue(work.listFiles().orEmpty().isEmpty())
+            } finally { root.deleteRecursively() }
+        }
     }
     @Test fun failedWriteCloseRenameJournalAndCancellationPreserveLastCompleteBackup() {
         for (failure in listOf("write", "close", "rename", "journal", "cancel", "snapshot")) {

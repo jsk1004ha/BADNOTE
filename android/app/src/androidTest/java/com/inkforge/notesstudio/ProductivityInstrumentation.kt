@@ -244,6 +244,13 @@ class ProductivityInstrumentation : Instrumentation() {
             }
             check(old.sha256 == digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) })
             check(SafBackup.run(targetContext, repository) { false }.written == 0)
+            targetContext.contentResolver.openOutputStream(Uri.parse(old.uri), "wt")!!.use {
+                it.write(byteArrayOf(1, 2, 3))
+            }
+            check(SafBackup.run(targetContext, repository) { false }.written == 1) { "Corrupt backup was not repaired" }
+            val contentRepaired = journal.previous(doc.id)!!
+            check(contentRepaired.uri != old.uri && contentRepaired.stamp == old.stamp)
+            check(SafBackup.run(targetContext, repository) { false }.written == 0)
             ordered(repository) { repository.setPageBookmark(pageId, true) }
             check(SafBackup.run(targetContext, repository) { false }.written == 1)
             val newer = journal.previous(doc.id)!!

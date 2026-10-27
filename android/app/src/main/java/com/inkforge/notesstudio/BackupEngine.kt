@@ -1,6 +1,7 @@
 package com.inkforge.notesstudio
 
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.InputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
@@ -20,6 +21,7 @@ internal object BackupEngine {
     }
     interface Destination {
         fun exists(uri: String): Boolean
+        fun input(uri: String): InputStream
         fun create(name: String): String
         fun output(uri: String): OutputStream
         fun finish(uri: String, name: String): String
@@ -35,7 +37,7 @@ internal object BackupEngine {
         var written = 0; var skipped = 0
         for (doc in source.documents()) {
             checkCancelled(cancelled)
-            val old = journal.previous(doc.id)?.takeIf { destination.exists(it.uri) }
+            val old = journal.previous(doc.id)?.takeIf { verified(destination, it, cancelled) }
             val staging = File.createTempFile("backup-", ".ifnote", directory)
             var pending: String? = null
             try {
@@ -63,6 +65,28 @@ internal object BackupEngine {
             }
         }
         return Result(written, skipped)
+    }
+
+    /** A reachable provider URI can still contain truncated or changed bytes. */
+    private fun verified(destination: Destination, checkpoint: Checkpoint, cancelled: () -> Boolean): Boolean {
+        if (!destination.exists(checkpoint.uri) || !checkpoint.sha256.matches(Regex("[0-9a-fA-F]{64}"))) return false
+        val digest = MessageDigest.getInstance("SHA-256")
+        try {
+            destination.input(checkpoint.uri).use { input ->
+                val bytes = ByteArray(64 * 1024)
+                while (true) {
+                    checkCancelled(cancelled)
+                    val count = input.read(bytes)
+                    if (count < 0) break
+                    digest.update(bytes, 0, count)
+                }
+            }
+        } catch (_: FileNotFoundException) {
+            return false // The provider may remove the document after exists().
+        }
+        checkCancelled(cancelled)
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+            .equals(checkpoint.sha256, ignoreCase = true)
     }
 
     fun copy(input: InputStream, output: OutputStream, cancelled: () -> Boolean) {
