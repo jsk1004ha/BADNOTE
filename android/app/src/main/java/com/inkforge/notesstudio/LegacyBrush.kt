@@ -5,10 +5,30 @@ import kotlin.math.*
 
 /** The 3.x brush arithmetic. Coordinates stay Double until a Canvas command is drawn. */
 object LegacyBrush {
-    data class Operation(val name: String, val args: List<Any?> = emptyList())
-    fun interface Sink { fun emit(operation: Operation) }
+    internal const val STABLE_BLOCK_SEGMENTS = 64
+    /** Primitive drawing boundary shared by committed and live ink. */
+    internal interface DrawingSink {
+        fun save()
+        fun restore()
+        fun alpha(value: Double)
+        fun strokeColor(value: String)
+        fun fillColor(value: String)
+        fun cap(butt: Boolean)
+        fun roundJoin()
+        fun width(value: Double)
+        fun multiply()
+        fun beginSegmentBlock(first: Int, count: Int, stable: Boolean, context: WidthContext,
+                              widthScale: Double): Boolean
+        fun beginPath(segment: Int = -1)
+        fun moveTo(x: Double, y: Double)
+        fun lineTo(x: Double, y: Double)
+        fun quadraticTo(cx: Double, cy: Double, x: Double, y: Double)
+        fun arc(x: Double, y: Double, radius: Double, start: Double, end: Double)
+        fun stroke()
+        fun fill()
+    }
 
-    private data class Point(val x: Double, val y: Double, val p: Double?,
+    internal data class Point(val x: Double, val y: Double, val p: Double?,
                              val azimuth: Double?, val tx: Double?, val ty: Double?) {
         fun shifted(dx: Double, dy: Double) = copy(x = x + dx, y = y + dy)
     }
@@ -49,14 +69,6 @@ object LegacyBrush {
     private fun clamp(value: Double, min: Double, max: Double) = value.coerceIn(min, max)
     private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
     private fun jsRound(value: Double) = floor(value + .5).toInt()
-    private fun points(stroke: JSONObject): List<Point> {
-        val input = stroke.optJSONArray("points") ?: return emptyList()
-        return (0 until input.length()).map { index ->
-            val item = input.getJSONObject(index)
-            Point(item.getDouble("x"), item.getDouble("y"), field(item, "p"),
-                field(item, "azimuth"), field(item, "tx"), field(item, "ty"))
-        }
-    }
     private fun point(item: InkPoint, copiedCoordinatesAndPressure: Boolean): Point {
         val original = item.original
         val x = if (copiedCoordinatesAndPressure) copiedNumber(item.x) else number(item.x)
@@ -106,9 +118,91 @@ object LegacyBrush {
         return output
     }
 
-    private fun smoothedPoints(stroke: JSONObject) = smoothed(stroke).map { item ->
-        Point(item.getDouble("x"), item.getDouble("y"), field(item, "p"),
-            field(item, "azimuth"), field(item, "tx"), field(item, "ty"))
+    private fun smoothedPoints(stroke: JSONObject):List<Point>{
+        val input=stroke.optJSONArray("points")?:return emptyList()
+        val amount=value(settings(stroke),defaultSettings(brush(stroke)),"smoothing",.3)
+        fun coordinate(item:JSONObject,key:String):Double{
+            val raw=item.get(key)
+            return if(raw is Number)requireNotNull(copiedNumber(raw)) else item.getDouble(key)
+        }
+        fun copiedPoint(item:JSONObject)=Point(coordinate(item,"x"),coordinate(item,"y"),
+            copiedField(item,"p"),copiedField(item,"azimuth"),copiedField(item,"tx"),copiedField(item,"ty"))
+        if(input.length()<3||amount<=0)return (0 until input.length()).map{copiedPoint(input.getJSONObject(it))}
+        val factor=clamp(amount,0.0,.92)
+        val output=ArrayList<Point>(input.length())
+        output+=copiedPoint(input.getJSONObject(0))
+        for(index in 1 until input.length()){
+            val previous=output.last();val current=input.getJSONObject(index)
+            // Match smoothed() arithmetic and JSON number normalization without copying extension trees.
+            val x=current.getDouble("x");val y=current.getDouble("y")
+            output+=smoothPoint(previous, Point(x,y,field(current,"p"),
+                copiedField(current,"azimuth"),copiedField(current,"tx"),copiedField(current,"ty")),factor)
+        }
+        return output
+    }
+
+    private fun smoothPoint(previous: Point, current: Point, factor: Double) = current.copy(
+        x = lerp(current.x, (previous.x + current.x) * .5, factor),
+        y = lerp(current.y, (previous.y + current.y) * .5, factor),
+        p = lerp(current.p ?: .5, previous.p ?: .5, factor * .28))
+
+    /** Smoothing is causal, except for the original one/two-point special case. */
+    internal class LiveSmoothing {
+        private var source: Any? = null
+        private var amount = Double.NaN
+        private var smoothing = false
+        private val output = ArrayList<Point>()
+        internal var geometryVersion = 0
+            private set
+        private var widthContext: WidthContext? = null
+        private var bodyWidths = DoubleArray(64) { Double.NaN }
+
+        internal fun width(context: WidthContext, a: Point, b: Point, index: Int, total: Int): Double {
+            if (widthContext !== context) {
+                if (widthContext?.matches(context) != true) java.util.Arrays.fill(bodyWidths, Double.NaN)
+                widthContext = context
+            }
+            // Never freeze a fixed tail: both endpoint tapers must currently equal one.
+            val stable = stable(context, index, total)
+            if (stable && index < bodyWidths.size && !bodyWidths[index].isNaN()) return bodyWidths[index]
+            val width = (segmentWidth(context, a, b, index, total) +
+                segmentWidth(context, b, a, index + 1, total)) / 2
+            if (stable) {
+                if (index >= bodyWidths.size) {
+                    val oldSize = bodyWidths.size
+                    bodyWidths = bodyWidths.copyOf(max(index + 1, oldSize * 2))
+                    java.util.Arrays.fill(bodyWidths, oldSize, bodyWidths.size, Double.NaN)
+                }
+                bodyWidths[index] = width
+            }
+            return width
+        }
+
+        internal fun stable(context: WidthContext, index: Int, total: Int): Boolean {
+            if (context.taper == 0.0 || context.brush == "highlighter") return true
+            val first = index.toDouble() / (total - 1)
+            val second = (index + 1).toDouble() / (total - 1)
+            return first / .045 >= 1 && (1 - first) / .07 >= 1 &&
+                second / .045 >= 1 && (1 - second) / .07 >= 1
+        }
+
+        internal fun points(stroke: JSONObject, input: InkPointSnapshot): List<Point> {
+            val nextAmount = value(settings(stroke), defaultSettings(brush(stroke)), "smoothing", .3)
+            val nextSmoothing = input.size >= 3 && nextAmount > 0
+            if (source !== input.source || amount != nextAmount || smoothing != nextSmoothing ||
+                output.size > input.size) {
+                output.clear(); source = input.source; amount = nextAmount; smoothing = nextSmoothing
+                geometryVersion++
+                widthContext = null
+                java.util.Arrays.fill(bodyWidths, Double.NaN)
+            }
+            val factor = clamp(amount, 0.0, .92)
+            for (index in output.size until input.size) {
+                val current = point(input[index], !smoothing || index == 0)
+                output += if (!smoothing || index == 0) current else smoothPoint(output.last(), current, factor)
+            }
+            return output
+        }
     }
 
     private fun smoothedPoints(stroke: JSONObject, input: List<InkPoint>): List<Point> {
@@ -117,14 +211,7 @@ object LegacyBrush {
         val factor = clamp(amount, 0.0, .92)
         val output = ArrayList<Point>(input.size)
         output += point(input.first(), true)
-        for (index in 1 until input.size) {
-            val previous = output.last()
-            val current = point(input[index], false)
-            output += current.copy(
-                x = lerp(current.x, (previous.x + current.x) * .5, factor),
-                y = lerp(current.y, (previous.y + current.y) * .5, factor),
-                p = lerp(current.p ?: .5, previous.p ?: .5, factor * .28))
-        }
+        for (index in 1 until input.size) output += smoothPoint(output.last(), point(input[index], false), factor)
         return output
     }
 
@@ -169,32 +256,64 @@ object LegacyBrush {
         val pressure = point.p ?: Double.NaN
         return if (!pressure.isFinite() || pressure <= 0) fallback else clamp(pressure, .02, 1.0)
     }
-    private fun segmentWidth(stroke: JSONObject, point: Point, next: Point?, index: Int,
-                             total: Int): Double {
-        val base = max(.35, jsOr(field(stroke, "width"), 4.0))
+    internal class WidthContext(stroke: JSONObject) {
+        val rawWidth = jsOr(field(stroke, "width"), 4.0)
+        val base = max(.35, rawWidth)
         val brush = brush(stroke)
-        val settings = settings(stroke)
-        val fallback = defaultSettings(brush)
+        private val settings = settings(stroke)
+        private val fallback = defaultSettings(brush)
+        val taper = value(settings, fallback, "taper", 0.0, true)
+        val pressure = value(settings, fallback, "pressure",
+            when (brush) { "ballpoint" -> .08; "brush" -> .95; else -> .76 }, true)
+        val tiltShade = value(settings, fallback, "tiltShade", .82, true)
+        fun matches(other: WidthContext) = brush == other.brush && rawWidth == other.rawWidth &&
+            taper == other.taper && pressure == other.pressure && tiltShade == other.tiltShade
+    }
+    private fun segmentWidth(context: WidthContext, point: Point, next: Point?, index: Int,
+                             total: Int): Double {
+        val base = context.base
+        val brush = context.brush
         val pressure = pointPressure(point, if (brush == "ballpoint" || brush == "fineliner") .54 else .42)
         val progress = if (total > 1) index.toDouble() / (total - 1) else 0.0
         val startTaper = clamp(progress / .045, 0.0, 1.0)
         val endTaper = clamp((1 - progress) / .07, 0.0, 1.0)
-        val taper = lerp(1.0, min(startTaper, endTaper), value(settings, fallback, "taper", 0.0, true))
+        val taper = lerp(1.0, min(startTaper, endTaper), context.taper)
         val direction = if (next == null) 0.0 else atan2(next.y - point.y, next.x - point.x)
         val stylusAngle = point.azimuth ?: direction
         val nib = .72 + .28 * abs(sin(direction - stylusAngle))
         return when (brush) {
-            "ballpoint" -> base * lerp(.94, 1.08, pressure * value(settings, fallback, "pressure", .08, true)) * taper
+            "ballpoint" -> base * lerp(.94, 1.08, pressure * context.pressure) * taper
             "fineliner" -> base * (.98 + pressure * .025) * taper
             "gel" -> base * (.88 + pressure * .24) * taper
-            "brush" -> base * (.18 + pressure * 1.32 * value(settings, fallback, "pressure", .95, true)) * taper
+            "brush" -> base * (.18 + pressure * 1.32 * context.pressure) * taper
             "pencil" -> {
                 val tilt = hypot(point.tx ?: 0.0, point.ty ?: 0.0) / 90
-                base * (.45 + pressure * .65 + tilt * value(settings, fallback, "tiltShade", .82, true) * 1.35)
+                base * (.45 + pressure * .65 + tilt * context.tiltShade * 1.35)
             }
             "highlighter" -> base
-            else -> base * (.28 + pressure * (1.04 + value(settings, fallback, "pressure", .76, true) * .48)) * nib * taper
+            else -> base * (.28 + pressure * (1.04 + context.pressure * .48)) * nib * taper
         }
+    }
+
+    /**
+     * Conservative transient-ink padding, evaluated through the same width arithmetic.
+     * Smoothing is convex in position. Pressure and taper extrema bound every segment;
+     * pencil additionally needs its complete scatter/particle envelope.
+     */
+    internal fun frontPadding(stroke: JSONObject, points: InkPointSnapshot): Double? {
+        if (points.hasOriginal) return null
+        val context = WidthContext(stroke)
+        var width = .25
+        for (pressureIndex in 0..1) {
+            val pressure = if (pressureIndex == 0) .02 else 1.0
+            val point = Point(0.0, 0.0, pressure, PI / 2, points.maxTilt, 0.0)
+            val next = point.copy(x = 1.0)
+            for (index in 0..2) width = max(width, abs(segmentWidth(context, point, next, index, 3)))
+        }
+        val padding = if (context.brush == "pencil")
+            width * 2 + abs(context.rawWidth) * 2 + points.maxTilt * .05 + 4
+        else width * 1.2 + 3
+        return padding.takeIf { it.isFinite() }
     }
 
     fun widths(stroke: JSONObject): List<Double> {
@@ -202,7 +321,8 @@ object LegacyBrush {
             Point(item.getDouble("x"), item.getDouble("y"), field(item, "p"),
                 field(item, "azimuth"), field(item, "tx"), field(item, "ty")) }
             else smoothedPoints(stroke)
-        return rendered.mapIndexed { index, point -> segmentWidth(stroke, point,
+        val context = WidthContext(stroke)
+        return rendered.mapIndexed { index, point -> segmentWidth(context, point,
             rendered.getOrNull(index + 1), index, rendered.size) }
     }
 
@@ -212,46 +332,63 @@ object LegacyBrush {
     fun toolStrokeWidthToPage(baseCssWidth: Double, width: Double) = max(.25,
         max(.5, jsOr(width, 1.0)) / max(1.0, baseCssWidth) * 1000.0)
 
-    private fun emit(sink: Sink, name: String, vararg args: Any?) = sink.emit(Operation(name, args.toList()))
-    private fun strokePath(sink: Sink, points: List<Point>, stroke: JSONObject,
-                           opacity: Double, color: String, cap: String = "round", widthScale: Double = 1.0) {
+    private fun strokePath(sink: DrawingSink, points: List<Point>, context: WidthContext,
+                           opacity: Double, color: String, butt: Boolean = false, widthScale: Double = 1.0,
+                           live: LiveSmoothing? = null) {
         if (points.isEmpty()) return
-        emit(sink, "save");emit(sink, "set", "globalAlpha", opacity)
-        emit(sink, "set", "strokeStyle", color);emit(sink, "set", "fillStyle", color)
-        emit(sink, "set", "lineCap", cap);emit(sink, "set", "lineJoin", "round")
+        sink.save(); sink.alpha(opacity)
+        sink.strokeColor(color); sink.fillColor(color)
+        sink.cap(butt); sink.roundJoin()
         if (points.size == 1) {
-            emit(sink, "beginPath");emit(sink, "arc", points[0].x, points[0].y,
-                segmentWidth(stroke, points[0], null, 0, 1) / 2, 0.0, PI * 2)
-            emit(sink, "fill");emit(sink, "restore");return
+            sink.beginPath(); sink.arc(points[0].x, points[0].y,
+                segmentWidth(context, points[0], null, 0, 1) / 2, 0.0, PI * 2)
+            sink.fill(); sink.restore(); return
         }
-        for (index in 1 until points.size) {
+        var index = 1
+        while (index < points.size) {
+            val first = index - 1
+            if (first % STABLE_BLOCK_SEGMENTS == 0) {
+                val count = min(STABLE_BLOCK_SEGMENTS, points.size - 1 - first)
+                val stable = count == STABLE_BLOCK_SEGMENTS && live != null &&
+                    live.stable(context, first, points.size) &&
+                    live.stable(context, first + count - 1, points.size)
+                if (sink.beginSegmentBlock(first, count, stable, context, widthScale)) {
+                    index += count
+                    continue
+                }
+            }
             val a = points[index - 1]; val b = points[index]
-            emit(sink, "set", "lineWidth", max(.25, (segmentWidth(stroke, a, b, index - 1, points.size) +
-                segmentWidth(stroke, b, a, index, points.size)) / 2 * jsOr(widthScale, 1.0)))
-            emit(sink, "beginPath");emit(sink, "moveTo", a.x, a.y)
-            emit(sink, "quadraticCurveTo", a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2)
-            emit(sink, "lineTo", b.x, b.y);emit(sink, "stroke")
+            val width = live?.width(context, a, b, index - 1, points.size) ?:
+                ((segmentWidth(context, a, b, index - 1, points.size) +
+                    segmentWidth(context, b, a, index, points.size)) / 2)
+            sink.width(max(.25, width * jsOr(widthScale, 1.0)))
+            sink.beginPath(index - 1); sink.moveTo(a.x, a.y)
+            sink.quadraticTo(a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2)
+            sink.lineTo(b.x, b.y); sink.stroke()
+            index++
         }
-        emit(sink, "restore")
+        sink.restore()
     }
 
-    fun render(stroke: JSONObject, renderScale: Double = 1.0, sink: Sink) {
+    internal fun renderTyped(stroke: JSONObject, renderScale: Double, sink: DrawingSink) {
         val smooth = smoothedPoints(stroke)
-        renderPoints(stroke, smooth, renderScale, sink) {
-            pencilRenderPoints(stroke).map { item -> Point(item.getDouble("x"), item.getDouble("y"),
-                field(item, "p"), field(item, "azimuth"), field(item, "tx"), field(item, "ty")) }
-        }
+        renderPoints(stroke, smooth, renderScale, sink, null) { pencilRenderPoints(stroke, smooth) }
     }
 
-    fun render(stroke: JSONObject, points: List<InkPoint>, renderScale: Double = 1.0, sink: Sink) {
-        val smooth = smoothedPoints(stroke, points)
-        renderPoints(stroke, smooth, renderScale, sink) { pencilRenderPoints(stroke, smooth) }
+    internal fun renderTyped(stroke: JSONObject, points: List<InkPoint>, renderScale: Double,
+                             sink: DrawingSink, live: LiveSmoothing? = null) {
+        val smooth = if (points is InkPointSnapshot && live != null) live.points(stroke, points)
+            else smoothedPoints(stroke, points)
+        renderPoints(stroke, smooth, renderScale, sink, if (points is InkPointSnapshot) live else null) {
+            pencilRenderPoints(stroke, smooth)
+        }
     }
 
     private inline fun renderPoints(stroke: JSONObject, smooth: List<Point>, renderScale: Double,
-                                    sink: Sink, pencilPoints: () -> List<Point>) {
+                                    sink: DrawingSink, live: LiveSmoothing?, pencilPoints: () -> List<Point>) {
         if (smooth.isEmpty()) return
-        val brush = brush(stroke);val settings = settings(stroke);val fallback = defaultSettings(brush)
+        val brush = brush(stroke); val settings = settings(stroke); val fallback = defaultSettings(brush)
+        val context = WidthContext(stroke)
         val color = stroke.optString("color").ifBlank { "#111827" }
         val opacity = field(stroke, "opacity") ?: value(settings, fallback, "opacity", 1.0)
         when (brush) {
@@ -261,8 +398,8 @@ object LegacyBrush {
                 val source = pencilPoints()
                 val random = Random(stroke.optString("id"))
                 val pencilColor = stroke.optString("color").ifBlank { "#30343a" }
-                emit(sink, "save");emit(sink, "set", "globalCompositeOperation", "multiply")
-                strokePath(sink, source, stroke, pencilOpacity * .56, pencilColor, widthScale = .7)
+                sink.save(); sink.multiply()
+                strokePath(sink, source, context, pencilOpacity * .56, pencilColor, widthScale = .7)
                 val grain = clamp(value(settings, fallback, "grain", .66), 0.0, 1.0)
                 val layers = 2 + jsRound(grain * 2)
                 val highCost = max(1.0, abs(renderScale)) > 2.6 || source.size > 180
@@ -272,37 +409,37 @@ object LegacyBrush {
                     val offset = source.map { point -> point.shifted((random.next() - .5) * scatter +
                         (point.tx ?: 0.0) / 90 * (layer - layers / 2.0) * .18,
                         (random.next() - .5) * scatter + (point.ty ?: 0.0) / 90 * (layer - layers / 2.0) * .18) }
-                    strokePath(sink, offset, stroke, (.05 + random.next() * .05) * pencilOpacity,
+                    strokePath(sink, offset, context, (.05 + random.next() * .05) * pencilOpacity,
                         pencilColor, widthScale = .28 + random.next() * .24)
                 }
                 val particleLimit = if (highCost) 28 else 48
                 val step = max(1, ceil(source.size.toDouble() / particleLimit).toInt())
                 for (index in source.indices step step) {
                     val point = source[index]
-                    val width = segmentWidth(stroke, point, source.getOrNull(index + 1), index, source.size)
+                    val width = segmentWidth(context, point, source.getOrNull(index + 1), index, source.size)
                     val particles = if (highCost) 1 else 1 + jsRound(grain * 2)
                     repeat(particles) {
-                        emit(sink, "set", "globalAlpha", (.035 + random.next() * .08) * pencilOpacity)
-                        emit(sink, "set", "fillStyle", pencilColor)
-                        emit(sink, "beginPath")
-                        emit(sink, "arc", point.x + (random.next() - .5) * width,
+                        sink.alpha((.035 + random.next() * .08) * pencilOpacity)
+                        sink.fillColor(pencilColor)
+                        sink.beginPath()
+                        sink.arc(point.x + (random.next() - .5) * width,
                             point.y + (random.next() - .5) * width, .28 + random.next() * .55, 0.0, PI * 2)
-                        emit(sink, "fill")
+                        sink.fill()
                     }
                 }
-                emit(sink, "restore")
+                sink.restore()
             }
             "highlighter" -> {
-                emit(sink, "save");emit(sink, "set", "globalCompositeOperation", "multiply")
-                strokePath(sink, smooth, stroke, field(stroke, "opacity") ?: .28, color, "butt")
-                emit(sink, "restore")
+                sink.save(); sink.multiply()
+                strokePath(sink, smooth, context, field(stroke, "opacity") ?: .28, color, true, live = live)
+                sink.restore()
             }
             "gel" -> {
-                strokePath(sink, smooth, stroke, field(stroke, "opacity") ?: .98, color, widthScale = 1.12)
-                strokePath(sink, smooth, stroke, .38, "#ffffff", widthScale = .28)
+                strokePath(sink, smooth, context, field(stroke, "opacity") ?: .98, color, widthScale = 1.12, live = live)
+                strokePath(sink, smooth, context, .38, "#ffffff", widthScale = .28, live = live)
             }
-            "fineliner" -> strokePath(sink, smooth, stroke, field(stroke, "opacity") ?: .98, color)
-            else -> strokePath(sink, smooth, stroke, opacity, color)
+            "fineliner" -> strokePath(sink, smooth, context, field(stroke, "opacity") ?: .98, color, live = live)
+            else -> strokePath(sink, smooth, context, opacity, color, live = live)
         }
     }
 }

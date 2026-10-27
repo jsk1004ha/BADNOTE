@@ -1,0 +1,625 @@
+{
+  "schemaVersion": 1,
+  "backupRelativePath": "../badnote-backups/2026-10-20-workspace-cleanup",
+  "expectedVersion": "4.1.3-beta.2-local.1",
+  "expectedVersionCode": 415,
+  "expectedWorktreeHead": "d6873da66a2fd76029bf89141d3af81606e9480f",
+  "targets": [
+    ".worktrees/beta2-improvements",
+    "_delete_after_review"
+  ],
+  "backupFiles": [
+    {
+      "path": "root-4.0.1/source.zip",
+      "sha256": "ce078e30e27bb752555727df4f88f3ec88ef780217cc9dfa712c28eebf224da2"
+    },
+    {
+      "path": "root-4.0.1/manifest.json",
+      "sha256": "db47d7360ba4df5bf8590047390f010c02ccd8e3656cf5344721a67dd2b50d66"
+    },
+    {
+      "path": "beta2-local/source.zip",
+      "sha256": "a653c0fa74aeee404a1eea41f52cdecf090b11be40ef92fe158ae5d1a09623c2"
+    },
+    {
+      "path": "beta2-local/manifest.json",
+      "sha256": "03aeaad87bff2ea62db3f0806f38ce787242095fb1e74a49cd2a9770e1f0f489"
+    }
+  ],
+  "retainedArtifacts": [
+    {
+      "source": "android/local.properties",
+      "destination": "android/local.properties",
+      "destinationRoot": "project",
+      "sha256": "6027018459c3af2c0622840b5ecea9c6d64b03ad30ab8a852a82e6bdd1f97ac3"
+    },
+    {
+      "source": "android/local-signing.properties",
+      "destination": "android/local-signing.properties",
+      "destinationRoot": "project",
+      "sha256": "79a5dbc575856109ac1dd4b04ad082cbfc44828ec3749b4c515e45484252422b"
+    },
+    {
+      "source": "android/badnote-local-release.jks",
+      "destination": "android/badnote-local-release.jks",
+      "destinationRoot": "project",
+      "sha256": "dcf78647b759f41450dfcc0778127ec2c227f72d88fae004575b688787e076ea"
+    },
+    {
+      "source": "build/apk/bad-note-Android-4.1.3-beta.2-local.1-Debug.apk",
+      "destination": "build/apk/bad-note-Android-4.1.3-beta.2-local.1-Debug.apk",
+      "destinationRoot": "project",
+      "sha256": "32c3d6f3e1594f833c28e82062bada27d638f393010a89e7a6faafd48418c34d"
+    },
+    {
+      "source": "build/apk/bad-note-Android-4.1.3-beta.2-local.1-SideBySide.apk",
+      "destination": "build/apk/bad-note-Android-4.1.3-beta.2-local.1-SideBySide.apk",
+      "destinationRoot": "project",
+      "sha256": "1cbefe1238119a0d5b5b0201da597e39138a8f2c982e954dc325d950fe710f2b"
+    },
+    {
+      "source": "build/apk/bad-note-Android-4.1.3-beta.2-local.1-Update.apk",
+      "destination": "build/apk/bad-note-Android-4.1.3-beta.2-local.1-Update.apk",
+      "destinationRoot": "project",
+      "sha256": "72de996b74b598332e1e7c7ce136f3cd11521be91bcca95c9ef0750f4ee26c2c"
+    },
+    {
+      "source": "beta2-published-update.apk",
+      "destination": "beta2-local/beta2-published-update.apk",
+      "destinationRoot": "backup",
+      "sha256": "a88f21b4f482138e80eb4a11268851395b5b17fee4cfdcb1cfa3f9d9c6dbe563"
+    },
+    {
+      "source": "build/local-improvements/apk-debug-verification.json",
+      "destination": "beta2-local/evidence/apk-debug-verification.json",
+      "destinationRoot": "backup",
+      "sha256": "8130b8c1fdb43ea351ba34367dae0ed999558c33cb314ea163733ec61d26a121"
+    },
+    {
+      "source": "build/local-improvements/apk-sidebyside-verification.json",
+      "destination": "beta2-local/evidence/apk-sidebyside-verification.json",
+      "destinationRoot": "backup",
+      "sha256": "fe00ce83ff4180dea198c34e340a5bfaef34103eb590656feda594605629f516"
+    },
+    {
+      "source": "build/local-improvements/apk-update-verification.json",
+      "destination": "beta2-local/evidence/apk-update-verification.json",
+      "destinationRoot": "backup",
+      "sha256": "6462597860bf9006d28e690c9f1829aa3b31dd3f89ae373a373d739ab387689e"
+    },
+    {
+      "source": "build/local-improvements/baseline-apk/app.apk",
+      "destination": "beta2-local/evidence/baseline-apk/app.apk",
+      "destinationRoot": "backup",
+      "sha256": "c5ffc565a6f2023049a0ac267013f3429bcba3a0d5cd5328f7ebcea65de790a1"
+    },
+    {
+      "source": "build/local-improvements/baseline-apk/test-lasso12.apk",
+      "destination": "beta2-local/evidence/baseline-apk/test-lasso12.apk",
+      "destinationRoot": "backup",
+      "sha256": "dbff64d4aece80b84b6339f413012bdf0b9309fa83d54e1e2d72b75625835118"
+    },
+    {
+      "source": "build/local-improvements/baseline-apk/test.apk",
+      "destination": "beta2-local/evidence/baseline-apk/test.apk",
+      "destinationRoot": "backup",
+      "sha256": "64e796205793c9471ff19ea96d67ecde4486a97181a9e0b34b18a6ecd9753942"
+    },
+    {
+      "source": "build/local-improvements/baseline-fixtures-v1.json",
+      "destination": "beta2-local/evidence/baseline-fixtures-v1.json",
+      "destinationRoot": "backup",
+      "sha256": "1f18952115356d60e135df2053ead21298a7cffab3edfebd105e5441df5ef8cf"
+    },
+    {
+      "source": "build/local-improvements/baseline-instrumentation.zip",
+      "destination": "beta2-local/evidence/baseline-instrumentation.zip",
+      "destinationRoot": "backup",
+      "sha256": "67304feee76913e4d78e2c2af9a32398eaa22d6d5f7a5ab80c30031cee76440a"
+    },
+    {
+      "source": "build/local-improvements/baseline-ocr-incompatible-test-attempt.json",
+      "destination": "beta2-local/evidence/baseline-ocr-incompatible-test-attempt.json",
+      "destinationRoot": "backup",
+      "sha256": "f0cf82dc21ebc3a4884b1d286e3e2ad63e604760c41160b0e90cc63a9f223f11"
+    },
+    {
+      "source": "build/local-improvements/baseline-receipt-text-only.json",
+      "destination": "beta2-local/evidence/baseline-receipt-text-only.json",
+      "destinationRoot": "backup",
+      "sha256": "e218b59b6b4c26e8853b63f347b3beb5b4e80322a0f7e44ca190a3fbe5bd9224"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-front-buffer-portrait.log",
+      "destination": "beta2-local/evidence/candidate-final-front-buffer-portrait.log",
+      "destinationRoot": "backup",
+      "sha256": "7325c8626e7cfe3263ec38d684b9c1cb952932780bb127baa2413eb93834041d"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-lasso-48-oom-partial.json",
+      "destination": "beta2-local/evidence/candidate-final-lasso-48-oom-partial.json",
+      "destinationRoot": "backup",
+      "sha256": "6e2d0c42cb62a255864fb8b6ff22973077b8e2c213235e39b8dac657ea4f2a4d"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-lasso-48.log",
+      "destination": "beta2-local/evidence/candidate-final-lasso-48.log",
+      "destinationRoot": "backup",
+      "sha256": "2b9c4f7d7f13a246eeadd1b8029df5d932101bd466e2cd3fd9cc3dcb098b02a4"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-ocr-quality.json",
+      "destination": "beta2-local/evidence/candidate-final-ocr-quality.json",
+      "destinationRoot": "backup",
+      "sha256": "9cadd7db82d2d6f6adbc884d34dba78929f17d502c6cd1c7fb2471a90c64fbcd"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-ocr-quality.log",
+      "destination": "beta2-local/evidence/candidate-final-ocr-quality.log",
+      "destinationRoot": "backup",
+      "sha256": "a5cd6c8e80f91eb1a0d26622c44528abe46ead1ee9535301e449b54770a8b7c1"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-ocr-scope-duplication.log",
+      "destination": "beta2-local/evidence/candidate-final-ocr-scope-duplication.log",
+      "destinationRoot": "backup",
+      "sha256": "4896ee124a193ee32db7f964b076f6bcb0776302b21c071257898715d0e580e9"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-pen-presentation-portrait.log",
+      "destination": "beta2-local/evidence/candidate-final-pen-presentation-portrait.log",
+      "destinationRoot": "backup",
+      "sha256": "a8cb71b620461a04b0fe7b130da9bb48061f47d900f44c406707ec7a4e29c2d3"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-pen-presentation.log",
+      "destination": "beta2-local/evidence/candidate-final-pen-presentation.log",
+      "destinationRoot": "backup",
+      "sha256": "130df1bcd656662835d3f7fbf087c4ce1e6d6e6b53d02757899e12550aba9094"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-pen-surface.png",
+      "destination": "beta2-local/evidence/candidate-final-pen-surface.png",
+      "destinationRoot": "backup",
+      "sha256": "f89614db9d936b52245b4b7ec754bdf595d8759b8ce35a1c5a95bd25029b4026"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-release-open.png",
+      "destination": "beta2-local/evidence/candidate-final-release-open.png",
+      "destinationRoot": "backup",
+      "sha256": "cab1c35e3bc7c9807ab57065f7853adebd1b107b665501d128f381e1e121c447"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-viewport-portrait.log",
+      "destination": "beta2-local/evidence/candidate-final-viewport-portrait.log",
+      "destinationRoot": "backup",
+      "sha256": "0160ea80581a8d72eaa47e04cf504df79fed762a67b34bdf4af6d94e499036b7"
+    },
+    {
+      "source": "build/local-improvements/candidate-final-writing-gate.log",
+      "destination": "beta2-local/evidence/candidate-final-writing-gate.log",
+      "destinationRoot": "backup",
+      "sha256": "564f6c5ce97c6a2d9c2caa28a29cf5f91d237d75596d701d8918d5b68c9cd975"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-front-buffer.log",
+      "destination": "beta2-local/evidence/candidate-fixed-front-buffer.log",
+      "destinationRoot": "backup",
+      "sha256": "d116030ce43587b5a0631a61a83be6f31ddc37fad2db6199ea2fa2e13f4e1a63"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-input-storage.log",
+      "destination": "beta2-local/evidence/candidate-fixed-input-storage.log",
+      "destinationRoot": "backup",
+      "sha256": "f42e1c7f680d04cf7193f4cc76a6301bc61d3be34470f6054037ab5256e5b112"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-lasso-48.json",
+      "destination": "beta2-local/evidence/candidate-fixed-lasso-48.json",
+      "destinationRoot": "backup",
+      "sha256": "443c4c3641782f624b1fdac0b41ad32c76cb4112451af497e7e97bbe0d8536b1"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-lasso-48.log",
+      "destination": "beta2-local/evidence/candidate-fixed-lasso-48.log",
+      "destinationRoot": "backup",
+      "sha256": "85607595d2bea8820c3f27ae629e4a4b01c2f4b75f997e5d1eccad776074eafb"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-ocr-quality-calculator.log",
+      "destination": "beta2-local/evidence/candidate-fixed-ocr-quality-calculator.log",
+      "destinationRoot": "backup",
+      "sha256": "323c9493c67ace7555c8bbd4fa6476be60e44195b932faa6238e57aed38941cc"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-ocr-task-calculator.log",
+      "destination": "beta2-local/evidence/candidate-fixed-ocr-task-calculator.log",
+      "destinationRoot": "backup",
+      "sha256": "ff33f9fa6ad822a918955ed5efad6a56d758bc0bb8a1329fd7246a4b73896031"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-pen-presentation.log",
+      "destination": "beta2-local/evidence/candidate-fixed-pen-presentation.log",
+      "destinationRoot": "backup",
+      "sha256": "a8cb71b620461a04b0fe7b130da9bb48061f47d900f44c406707ec7a4e29c2d3"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-stylus-contact.log",
+      "destination": "beta2-local/evidence/candidate-fixed-stylus-contact.log",
+      "destinationRoot": "backup",
+      "sha256": "47238b3fb9ac62336f3fd055837100f935abbc93e8cc66dbf666817c2e2228b8"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixed-viewport.log",
+      "destination": "beta2-local/evidence/candidate-fixed-viewport.log",
+      "destinationRoot": "backup",
+      "sha256": "0a2bee7dd07fc443429a0db041da9c6ce553fc362ac0adb631797385a700383a"
+    },
+    {
+      "source": "build/local-improvements/candidate-fixtures-v1.json",
+      "destination": "beta2-local/evidence/candidate-fixtures-v1.json",
+      "destinationRoot": "backup",
+      "sha256": "1f18952115356d60e135df2053ead21298a7cffab3edfebd105e5441df5ef8cf"
+    },
+    {
+      "source": "build/local-improvements/candidate-input-storage.log",
+      "destination": "beta2-local/evidence/candidate-input-storage.log",
+      "destinationRoot": "backup",
+      "sha256": "f42e1c7f680d04cf7193f4cc76a6301bc61d3be34470f6054037ab5256e5b112"
+    },
+    {
+      "source": "build/local-improvements/candidate-ocr-scope-storage.log",
+      "destination": "beta2-local/evidence/candidate-ocr-scope-storage.log",
+      "destinationRoot": "backup",
+      "sha256": "4896ee124a193ee32db7f964b076f6bcb0776302b21c071257898715d0e580e9"
+    },
+    {
+      "source": "build/local-improvements/candidate-ocr-task-lifecycle.log",
+      "destination": "beta2-local/evidence/candidate-ocr-task-lifecycle.log",
+      "destinationRoot": "backup",
+      "sha256": "ff33f9fa6ad822a918955ed5efad6a56d758bc0bb8a1329fd7246a4b73896031"
+    },
+    {
+      "source": "build/local-improvements/candidate-receipt-full.json",
+      "destination": "beta2-local/evidence/candidate-receipt-full.json",
+      "destinationRoot": "backup",
+      "sha256": "17f854f5e1c409a94fba19ff19a9d790700f37bc7d4ce24bf513dac8634eace9"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-after-calculator-cancel.png",
+      "destination": "beta2-local/evidence/candidate-release-after-calculator-cancel.png",
+      "destinationRoot": "backup",
+      "sha256": "4ab53c53927020761b7861ecf1d9d17e986f8ec451d4c67eba4fb0f61f1554ab"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-calculator-fixed.png",
+      "destination": "beta2-local/evidence/candidate-release-calculator-fixed.png",
+      "destinationRoot": "backup",
+      "sha256": "dea393ed2ce2603482682c721f4b37a142a916a9df7dd5b08019625828d17c8c"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-handwritten-math.png",
+      "destination": "beta2-local/evidence/candidate-release-handwritten-math.png",
+      "destinationRoot": "backup",
+      "sha256": "03a5f96b170f7579cd6c0b0500936ebbef379e94fbb8b751a6976b5282412489"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-lasso-selected.png",
+      "destination": "beta2-local/evidence/candidate-release-lasso-selected.png",
+      "destinationRoot": "backup",
+      "sha256": "36d9fa13e31e217a174414f86ba9d9e084684f334b8cfb7e36bf8cc5706aad9c"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-math-calculation.png",
+      "destination": "beta2-local/evidence/candidate-release-math-calculation.png",
+      "destinationRoot": "backup",
+      "sha256": "b7460c3073a9354b7104e094ba8a1682672f88b7c50690bdf003125ffe73acdf"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-math-corrected.png",
+      "destination": "beta2-local/evidence/candidate-release-math-corrected.png",
+      "destinationRoot": "backup",
+      "sha256": "727a80fe24a97726a86ea0d987cbf818264ccf31621209d606effde9f88fd832"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-math-edit-input.png",
+      "destination": "beta2-local/evidence/candidate-release-math-edit-input.png",
+      "destinationRoot": "backup",
+      "sha256": "25ca9e1c7aeb6d756eb39ad90ea88442a0ba292d1db2166c72eb0cbe58f8af68"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-math-request.png",
+      "destination": "beta2-local/evidence/candidate-release-math-request.png",
+      "destinationRoot": "backup",
+      "sha256": "dbca7ef8607274137ace1aea66b7fe0070f60a96be0639dd3bd2387fbc48de1e"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-math-review.png",
+      "destination": "beta2-local/evidence/candidate-release-math-review.png",
+      "destinationRoot": "backup",
+      "sha256": "5c60c613b960ab722ca366aa7dc0b34fc3161cc81f8587ced92b7a8651d1113b"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-ocr-cancel.png",
+      "destination": "beta2-local/evidence/candidate-release-ocr-cancel.png",
+      "destinationRoot": "backup",
+      "sha256": "ece71407c57df150bb360d1e16af3bb5a63a42a440d8a4998362829e724e0ba5"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-ocr-menu.png",
+      "destination": "beta2-local/evidence/candidate-release-ocr-menu.png",
+      "destinationRoot": "backup",
+      "sha256": "160686305d4c2f7769184be1dab21b5c87f3c6aa2f43500adc044eabdfb682fa"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-selection-insert-redo.png",
+      "destination": "beta2-local/evidence/candidate-release-selection-insert-redo.png",
+      "destinationRoot": "backup",
+      "sha256": "205979ddf43cdc0501a44aee685703398e09410454ce08874c63181b2217048b"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-selection-insert-reopened.png",
+      "destination": "beta2-local/evidence/candidate-release-selection-insert-reopened.png",
+      "destinationRoot": "backup",
+      "sha256": "f99d1e0e53538a871dff6aacb3cb6f68de0ad0370e1904c3fce7e3b9ff57aef9"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-selection-insert-undo.png",
+      "destination": "beta2-local/evidence/candidate-release-selection-insert-undo.png",
+      "destinationRoot": "backup",
+      "sha256": "e3615e6cc142ae3b624632c35615b6e3c95890294391530a5295a3c6acf47005"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-selection-text-inserted.png",
+      "destination": "beta2-local/evidence/candidate-release-selection-text-inserted.png",
+      "destinationRoot": "backup",
+      "sha256": "5469db7499a4af3736097e08a8b1001b7d8b89199e0405d4d7c53b2780e6d572"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-selection-text-review.png",
+      "destination": "beta2-local/evidence/candidate-release-selection-text-review.png",
+      "destinationRoot": "backup",
+      "sha256": "f0f4b0f87331fb739d4bc9818fef63dcb431530107baf7bf67736986bd1aac54"
+    },
+    {
+      "source": "build/local-improvements/candidate-release-word-candidate-recompose.png",
+      "destination": "beta2-local/evidence/candidate-release-word-candidate-recompose.png",
+      "destinationRoot": "backup",
+      "sha256": "61460170c7944386b09cb99bb102d27782849f471cc4b4148cb3c4e78e189af7"
+    },
+    {
+      "source": "build/local-improvements/candidate-stylus-contact.log",
+      "destination": "beta2-local/evidence/candidate-stylus-contact.log",
+      "destinationRoot": "backup",
+      "sha256": "47238b3fb9ac62336f3fd055837100f935abbc93e8cc66dbf666817c2e2228b8"
+    },
+    {
+      "source": "build/local-improvements/candidate-writing-gate.log",
+      "destination": "beta2-local/evidence/candidate-writing-gate.log",
+      "destinationRoot": "backup",
+      "sha256": "564f6c5ce97c6a2d9c2caa28a29cf5f91d237d75596d701d8918d5b68c9cd975"
+    },
+    {
+      "source": "build/local-improvements/failed-lasso-db/badnote-native.db",
+      "destination": "beta2-local/evidence/failed-lasso-db/badnote-native.db",
+      "destinationRoot": "backup",
+      "sha256": "38c6f31abb727242e396305ff4238f978c1e06506d93f9e12a954097065b9bec"
+    },
+    {
+      "source": "build/local-improvements/failed-lasso-db/badnote-native.db-shm",
+      "destination": "beta2-local/evidence/failed-lasso-db/badnote-native.db-shm",
+      "destinationRoot": "backup",
+      "sha256": "eafd4f9b4c2b033b3461c6988370749b17361b043b49aec88c21107ddb82856b"
+    },
+    {
+      "source": "build/local-improvements/failed-lasso-db/badnote-native.db-wal",
+      "destination": "beta2-local/evidence/failed-lasso-db/badnote-native.db-wal",
+      "destinationRoot": "backup",
+      "sha256": "d07f236daa13b9980cc84c9e7ba9e157e0f6a96c7e2acf8b95939b2f6f94c757"
+    },
+    {
+      "source": "build/local-improvements/final-delivered-release-lasso-moved.png",
+      "destination": "beta2-local/evidence/final-delivered-release-lasso-moved.png",
+      "destinationRoot": "backup",
+      "sha256": "d93a1dfc70cc297d107748ba0a9b3403dcf5b833c1df5310224f286f1247a6b7"
+    },
+    {
+      "source": "build/local-improvements/final-delivered-release-lasso-undo.png",
+      "destination": "beta2-local/evidence/final-delivered-release-lasso-undo.png",
+      "destinationRoot": "backup",
+      "sha256": "15a6cb3e214e7b68671bf50beb36db45c86eade6e8279b4c21deee0b4e396655"
+    },
+    {
+      "source": "build/local-improvements/final-delivered-release-reopened.png",
+      "destination": "beta2-local/evidence/final-delivered-release-reopened.png",
+      "destinationRoot": "backup",
+      "sha256": "719db3bb5119c0275a503b951096d4525e9842011316cb823a3f5e5543248327"
+    },
+    {
+      "source": "build/local-improvements/final-input-storage.log",
+      "destination": "beta2-local/evidence/final-input-storage.log",
+      "destinationRoot": "backup",
+      "sha256": "f42e1c7f680d04cf7193f4cc76a6301bc61d3be34470f6054037ab5256e5b112"
+    },
+    {
+      "source": "build/local-improvements/final-lasso-48.json",
+      "destination": "beta2-local/evidence/final-lasso-48.json",
+      "destinationRoot": "backup",
+      "sha256": "62d988d8698c6e4a46f57cb6a061aa981d3ac8ef9ce0b6d740d43875fb54e1be"
+    },
+    {
+      "source": "build/local-improvements/final-lasso-48.log",
+      "destination": "beta2-local/evidence/final-lasso-48.log",
+      "destinationRoot": "backup",
+      "sha256": "31555bd4bdca4f92e85b7fe96e3049dc06fd4def3b66aa85acce31785d9fba63"
+    },
+    {
+      "source": "build/local-improvements/final-ocr-calculator.log",
+      "destination": "beta2-local/evidence/final-ocr-calculator.log",
+      "destinationRoot": "backup",
+      "sha256": "ff33f9fa6ad822a918955ed5efad6a56d758bc0bb8a1329fd7246a4b73896031"
+    },
+    {
+      "source": "build/local-improvements/final-ocr-quality.log",
+      "destination": "beta2-local/evidence/final-ocr-quality.log",
+      "destinationRoot": "backup",
+      "sha256": "7e1b92fa5564891de686062babe0b831387686fdbcede2ab83a85e6182782ba3"
+    },
+    {
+      "source": "build/local-improvements/final-ocr-scope-duplication.log",
+      "destination": "beta2-local/evidence/final-ocr-scope-duplication.log",
+      "destinationRoot": "backup",
+      "sha256": "4896ee124a193ee32db7f964b076f6bcb0776302b21c071257898715d0e580e9"
+    },
+    {
+      "source": "build/local-improvements/final-stylus-contact.log",
+      "destination": "beta2-local/evidence/final-stylus-contact.log",
+      "destinationRoot": "backup",
+      "sha256": "47238b3fb9ac62336f3fd055837100f935abbc93e8cc66dbf666817c2e2228b8"
+    },
+    {
+      "source": "build/local-improvements/lasso-baseline-12-partial.json",
+      "destination": "beta2-local/evidence/lasso-baseline-12-partial.json",
+      "destinationRoot": "backup",
+      "sha256": "1c2dabdf73ecd9afe3faca10bff98856af7da1aec7ba68b9fea85da483e50a7c"
+    },
+    {
+      "source": "build/local-improvements/lasso-baseline-12-timeout.json",
+      "destination": "beta2-local/evidence/lasso-baseline-12-timeout.json",
+      "destinationRoot": "backup",
+      "sha256": "bc01c425062a6bffa4fe8df420445b1814ef403662ee168776337f70e61dc0a8"
+    },
+    {
+      "source": "build/local-improvements/lasso-baseline-thread-dump.txt",
+      "destination": "beta2-local/evidence/lasso-baseline-thread-dump.txt",
+      "destinationRoot": "backup",
+      "sha256": "369f8c8af70900da9a74bc9abf15971ebb819e9c0c038eb23cb666c6bced6598"
+    },
+    {
+      "source": "build/local-improvements/lasso-baseline-timeout-logcat.txt",
+      "destination": "beta2-local/evidence/lasso-baseline-timeout-logcat.txt",
+      "destinationRoot": "backup",
+      "sha256": "4146f067ba54c8ae58bf9eb1742ef3761997bad1eb0bc70361c2fa7a6a8061e1"
+    },
+    {
+      "source": "build/local-improvements/lasso-baseline-timeout.json",
+      "destination": "beta2-local/evidence/lasso-baseline-timeout.json",
+      "destinationRoot": "backup",
+      "sha256": "cc7598a6d56502fe155d98091aff372302b893abde3417fc37debcd00eb83d78"
+    },
+    {
+      "source": "build/local-improvements/lasso-baseline-timeout.png",
+      "destination": "beta2-local/evidence/lasso-baseline-timeout.png",
+      "destinationRoot": "backup",
+      "sha256": "8e71c7fd9e3daef17baecbb67b49bc41d7256df28b4ea75f2d3ac789b6f36578"
+    },
+    {
+      "source": "build/local-improvements/lasso-candidate-full.log",
+      "destination": "beta2-local/evidence/lasso-candidate-full.log",
+      "destinationRoot": "backup",
+      "sha256": "84f2bd5529ad5c103b5e9db592d36e64e0f239f4d3123e229b874b00f94f8be0"
+    },
+    {
+      "source": "build/local-improvements/lasso-committed.png",
+      "destination": "beta2-local/evidence/lasso-committed.png",
+      "destinationRoot": "backup",
+      "sha256": "3d90e93e7b8ca1ea53f340a67fea3a167f78e41993609563ba4cc2c368963f13"
+    },
+    {
+      "source": "build/local-improvements/lasso-failed-page.json",
+      "destination": "beta2-local/evidence/lasso-failed-page.json",
+      "destinationRoot": "backup",
+      "sha256": "b84c70cc805987c95a8b6a061c01848777d0ae14ed0f3f70a4e06995feccc5a6"
+    },
+    {
+      "source": "build/local-improvements/lasso-failure-analysis.json",
+      "destination": "beta2-local/evidence/lasso-failure-analysis.json",
+      "destinationRoot": "backup",
+      "sha256": "e2e145004bea6c4ac57d81168a0ab61db42bbeb97b15f971d0affa4cc4aea9b0"
+    },
+    {
+      "source": "build/local-improvements/lasso-preview.png",
+      "destination": "beta2-local/evidence/lasso-preview.png",
+      "destinationRoot": "backup",
+      "sha256": "3d90e93e7b8ca1ea53f340a67fea3a167f78e41993609563ba4cc2c368963f13"
+    },
+    {
+      "source": "build/local-improvements/ocr-baseline-compatible.log",
+      "destination": "beta2-local/evidence/ocr-baseline-compatible.log",
+      "destinationRoot": "backup",
+      "sha256": "87103aaf5939960867410594198ae49be0a5cb81e664fd3e536bf764850ac936"
+    },
+    {
+      "source": "build/local-improvements/ocr-baseline.log",
+      "destination": "beta2-local/evidence/ocr-baseline.log",
+      "destinationRoot": "backup",
+      "sha256": "59ee97c4bf5975b751216d2524dcf4b9504fcb226295649c72ba624da0b877b1"
+    },
+    {
+      "source": "build/local-improvements/ocr-candidate.log",
+      "destination": "beta2-local/evidence/ocr-candidate.log",
+      "destinationRoot": "backup",
+      "sha256": "aa72599961674602e3ff55a39bdc4e8dd75e07995562ed4adf25b3ecb6998d25"
+    },
+    {
+      "source": "build/local-improvements/pen-baseline.json",
+      "destination": "beta2-local/evidence/pen-baseline.json",
+      "destinationRoot": "backup",
+      "sha256": "e54c4454c4c67a13e0291674c579c50f97ca14b308075887b8c02931487dc139"
+    },
+    {
+      "source": "build/local-improvements/pen-baseline.log",
+      "destination": "beta2-local/evidence/pen-baseline.log",
+      "destinationRoot": "backup",
+      "sha256": "8dbfb2cc1e8c5eb9b60847256d010f6b022d0f4ebcdf7a99e9beecda278f0821"
+    },
+    {
+      "source": "build/local-improvements/pen-candidate.json",
+      "destination": "beta2-local/evidence/pen-candidate.json",
+      "destinationRoot": "backup",
+      "sha256": "3322e27128f5ae6ffea034c80213fcc67327614bfcf51d383db2ae30f43976ad"
+    },
+    {
+      "source": "build/local-improvements/pen-candidate.log",
+      "destination": "beta2-local/evidence/pen-candidate.log",
+      "destinationRoot": "backup",
+      "sha256": "462c2b13346209597c3c511ab32cb1e605fd47da66112dc06d06f2775fca8c87"
+    },
+    {
+      "source": "build/local-improvements/published-beta2-library.png",
+      "destination": "beta2-local/evidence/published-beta2-library.png",
+      "destinationRoot": "backup",
+      "sha256": "b5a7dd56cb76ad92cd036fcbe9d5ad9030866048096abaa063082dbc3b692890"
+    },
+    {
+      "source": "build/local-improvements/published-beta2-note.png",
+      "destination": "beta2-local/evidence/published-beta2-note.png",
+      "destinationRoot": "backup",
+      "sha256": "bcad6b07f2bd477a518c83ec66e584f0c08c2693e0ad91a6458e8ae6f663e5ed"
+    },
+    {
+      "source": "build/local-improvements/published-ui.xml",
+      "destination": "beta2-local/evidence/published-ui.xml",
+      "destinationRoot": "backup",
+      "sha256": "fe8a74d9c7cf368bbc19e2837de99edf033794b33f1b280042b7fa9a5429e879"
+    },
+    {
+      "source": "build/local-improvements/release-calculator-fixed.json",
+      "destination": "beta2-local/evidence/release-calculator-fixed.json",
+      "destinationRoot": "backup",
+      "sha256": "14cb4b610cbbde23f61362f53187fe535690f182117acc4d1b07b17995b00a46"
+    },
+    {
+      "source": "build/local-improvements/release-ocr-ui-before-math-fix.json",
+      "destination": "beta2-local/evidence/release-ocr-ui-before-math-fix.json",
+      "destinationRoot": "backup",
+      "sha256": "fb5c268b3e2900986b246cd96551f53635cef4b0c7b8e5f1e6c1c9b5e2d472c2"
+    },
+    {
+      "source": "build/local-improvements/verification.json",
+      "destination": "beta2-local/evidence/verification.json",
+      "destinationRoot": "backup",
+      "sha256": "a26733b77c0e20701a7f941e30d1e76c02eebbbf0182a580652ce9d11466ee41"
+    }
+  ]
+}

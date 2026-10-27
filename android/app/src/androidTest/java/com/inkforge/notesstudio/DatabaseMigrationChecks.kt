@@ -107,6 +107,7 @@ object DatabaseMigrationChecks {
                 check(repository.putOcrResult("d", "p", repository.generation("p"), imageDigest, "ko-primary", imageResult))
                 check(repository.ocrText("p") == "image raw")
             }
+            commitHotPathChecks(context, name)
             NativeDatabase.open(context, name).let { again ->
                 try { again.openHelper.readableDatabase.query("SELECT body FROM ocr_corrections WHERE page_id='p' AND region_id='line:z'").use {
                     check(it.moveToFirst() && it.getString(0).contains("corrected"))
@@ -138,5 +139,86 @@ object DatabaseMigrationChecks {
                 }
             } finally { context.deleteDatabase(brokenName) }
         } finally { context.deleteDatabase(name) }
+    }
+
+    private fun commitHotPathChecks(context: Context, name: String) {
+        val inspector = NativeDatabase.open(context, name)
+        var pageId = ""
+        var finalObjects = emptyList<org.json.JSONObject>()
+        fun positions(objects: List<org.json.JSONObject>) =
+            objects.mapIndexed { index, obj -> obj.getString("id") to index }.toMap()
+        fun saved(repository: NoteRepository, objects: List<org.json.JSONObject>) {
+            val actual = requireNotNull(repository.page(pageId)).objects
+            check(actual.size == objects.size)
+            objects.forEachIndexed { index, obj ->
+                check(actual[index].toString() == obj.toString()) {
+                    "Delta commit changed ordering or untouched raw JSON at $index"
+                }
+            }
+        }
+        try {
+            NoteRepository(context, name).use { repository ->
+                val document = repository.create("Repository delta fixture", "root", "blank")
+                val page = requireNotNull(repository.page(repository.pageIds(document.id).first()))
+                pageId = page.id
+                val original = List(64) { index ->
+                    json("id" to "persist-$index", "captureSeq" to index + 1L,
+                        "points" to org.json.JSONArray(listOf(json("x" to index, "p" to .65,
+                            "unknown" to org.json.JSONObject.NULL))), "extension" to "untouched-$index")
+                }
+                page.objects.addAll(original)
+                repository.transaction { repository.putPage(document.id, page, 0) }
+                val firstSequence = repository.reserveCaptureSequence(pageId)
+                check(firstSequence == 65L && repository.reserveCaptureSequence(pageId) == 66L)
+                val added = json("id" to "persist-appended", "captureSeq" to firstSequence,
+                    "points" to org.json.JSONArray(listOf(json("x" to 100, "p" to 0))))
+                val appended = original + added
+                val generation = repository.generation(pageId)
+                repository.commit(document.id, pageId, ObjectChange(emptyList(), listOf(added)), positions(appended))
+                saved(repository, appended)
+                check(repository.generation(pageId) == generation + 1)
+                check(repository.reserveCaptureSequence(pageId) == 67L)
+
+                val erased = original[10]
+                val remaining = appended.filterNot { it === erased }
+                val erase = ObjectChange(listOf(erased), emptyList())
+                repository.commit(document.id, pageId, erase, positions(remaining))
+                saved(repository, remaining)
+                repository.commit(document.id, pageId, erase.reversed(), positions(appended))
+                saved(repository, appended)
+                val reversed = appended.reversed()
+                repository.commit(document.id, pageId, ObjectChange(emptyList(), emptyList()), positions(reversed))
+                saved(repository, reversed)
+
+                val highSequence = added.copyJson().put("captureSeq", 500L)
+                finalObjects = reversed.map { if (it === added) highSequence else it }
+                repository.commit(document.id, pageId, ObjectChange(listOf(added), listOf(highSequence)), positions(finalObjects))
+                saved(repository, finalObjects)
+                check(repository.reserveCaptureSequence(pageId) == 501L)
+                val beforeFailure = repository.generation(pageId)
+                val rollback = IllegalStateException("repository rollback fixture")
+                try {
+                    repository.transaction {
+                        repository.commit(document.id, pageId, ObjectChange(listOf(erased), emptyList()),
+                            positions(finalObjects.filterNot { it === erased }))
+                        throw rollback
+                    }
+                } catch (failure: IllegalStateException) {
+                    check(failure === rollback)
+                }
+                check(repository.generation(pageId) == beforeFailure)
+                saved(repository, finalObjects)
+                // A migrated page without generation state must reserve above persisted ink, synchronously.
+                inspector.openHelper.writableDatabase.execSQL("DELETE FROM page_generation WHERE page_id=?", arrayOf<Any>(pageId))
+                check(repository.reserveCaptureSequence(pageId) == 501L)
+                check(repository.reserveCaptureSequence(pageId) == 502L)
+            }
+            NoteRepository(context, name).use { repository ->
+                saved(repository, finalObjects)
+                check(repository.reserveCaptureSequence(pageId) == 503L)
+            }
+        } finally {
+            inspector.close()
+        }
     }
 }

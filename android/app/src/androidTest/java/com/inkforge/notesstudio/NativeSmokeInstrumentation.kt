@@ -53,14 +53,72 @@ class NativeSmokeInstrumentation:Instrumentation(){
     private var w3Only=false
     private var w3RunId:String?=null
     private var replayArguments:Bundle?=null
-    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);penPresentationOnly=arguments?.getString("penPresentationOnly")=="true";penInputOnly=arguments?.getString("penInputOnly")=="true";viewportOnly=arguments?.getString("viewportOnly")=="true";writingOnly=arguments?.getString("writingOnly")=="true";writingBaseline=arguments?.getString("writingBaseline")=="true";uiOnly=arguments?.getString("uiOnly")=="true";migrationOnly=arguments?.getString("migrationOnly")=="true";ocrOnly=arguments?.getString("ocrOnly")=="true";pdfOnly=arguments?.getString("pdfOnly")=="true";s3Only=arguments?.getString("s3Only")=="true";s5aOnly=arguments?.getString("s5aOnly")=="true";s5bOnly=arguments?.getString("s5bOnly")=="true";s5aBitmapOnly=arguments?.getString("s5aBitmapOnly")=="true";brushRasterOnly=arguments?.getString("brushRasterOnly")=="true";brushRasterTransparent=arguments?.getString("brushRasterTransparent")=="true";s5cOnly=arguments?.getString("s5cOnly")=="true";mediaOnly=arguments?.getString("mediaOnly")=="true";pdfStressMiB=arguments?.getString("pdfStressMiB")?.toIntOrNull();pdfStressCancel=arguments?.getString("pdfStressCancel")=="true";w3Only=arguments?.getString("w3Only")=="true";w3RunId=arguments?.getString("w3RunId");replayArguments=arguments?.takeIf{it.containsKey("ocrInput")};legacyOnly=arguments?.getString("legacyOnly")=="true";start()}
+    private var localChecks:Bundle?=null
+    override fun finish(resultCode:Int,results:Bundle?){
+        try{
+            val receipt=JSONObject()
+            results?.keySet()?.forEach{key->receipt.put(key,results.get(key))}
+            File(targetContext.filesDir,"last-instrumentation-result.json").writeText(receipt.toString())
+        }finally{super.finish(resultCode,results)}
+    }
+    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);localChecks=arguments;penPresentationOnly=arguments?.getString("penPresentationOnly")=="true";penInputOnly=arguments?.getString("penInputOnly")=="true";viewportOnly=arguments?.getString("viewportOnly")=="true";writingOnly=arguments?.getString("writingOnly")=="true";writingBaseline=arguments?.getString("writingBaseline")=="true";uiOnly=arguments?.getString("uiOnly")=="true";migrationOnly=arguments?.getString("migrationOnly")=="true";ocrOnly=arguments?.getString("ocrOnly")=="true";pdfOnly=arguments?.getString("pdfOnly")=="true";s3Only=arguments?.getString("s3Only")=="true";s5aOnly=arguments?.getString("s5aOnly")=="true";s5bOnly=arguments?.getString("s5bOnly")=="true";s5aBitmapOnly=arguments?.getString("s5aBitmapOnly")=="true";brushRasterOnly=arguments?.getString("brushRasterOnly")=="true";brushRasterTransparent=arguments?.getString("brushRasterTransparent")=="true";s5cOnly=arguments?.getString("s5cOnly")=="true";mediaOnly=arguments?.getString("mediaOnly")=="true";pdfStressMiB=arguments?.getString("pdfStressMiB")?.toIntOrNull();pdfStressCancel=arguments?.getString("pdfStressCancel")=="true";w3Only=arguments?.getString("w3Only")=="true";w3RunId=arguments?.getString("w3RunId");replayArguments=arguments?.takeIf{it.containsKey("ocrInput")};legacyOnly=arguments?.getString("legacyOnly")=="true";start()}
     private fun <T> ui(block:()->T):T{val value=AtomicReference<T>();val failure=AtomicReference<Throwable>();runOnMainSync{try{value.set(block())}catch(e:Throwable){failure.set(e)}};failure.get()?.let{throw it};return value.get()}
     private fun await(label:String,condition:()->Boolean){val end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(condition())return;SystemClock.sleep(50)};error("Timeout: $label")}
     private fun check(value:Boolean,message:String){if(!value)throw AssertionError(message)}
+    private fun awaitFocusedStartup():Long{
+        val started=SystemClock.uptimeMillis();val deadline=started+120000
+        val main=android.os.Handler(android.os.Looper.getMainLooper())
+        fun field(name:String)=MainActivity::class.java.getDeclaredField(name).apply{isAccessible=true}
+        val busyField=field("busy");val savingField=field("saving");val failedField=field("saveFailed")
+        val savesField=field("saves");val thumbnailsField=field("thumbnails")
+        var state="initial repository work"
+        fun waitFor(latch:CountDownLatch,stage:String){
+            val remaining=deadline-SystemClock.uptimeMillis()
+            check(remaining>0&&latch.await(remaining,TimeUnit.MILLISECONDS),"Timeout: focused startup $stage ($state)")
+        }
+        while(true){
+            val drained=CountDownLatch(1)
+            repository.executor.execute{drained.countDown()}
+            waitFor(drained,"repository drain")
+            val framed=CountDownLatch(1);var ready=false;var failure:Throwable?=null
+            main.post{
+                val decor=activity.window.decorView
+                // Library callbacks can compose visible previews after the executor barrier.
+                // Two real frames, then the main queue, let those previews enqueue their work.
+                decor.postOnAnimation{decor.postOnAnimation{main.post{
+                    try{
+                        val busy=busyField.getBoolean(activity);val saving=savingField.getBoolean(activity)
+                        val failed=failedField.getBoolean(activity)
+                        val saves=(savesField.get(activity) as Collection<*>).size
+                        val thumbnails=(thumbnailsField.get(activity) as ThumbnailLoader).pendingCount
+                        state="busy=$busy saving=$saving saveFailed=$failed saves=$saves thumbnails=$thumbnails"
+                        ready=!busy&&!saving&&!failed&&saves==0&&thumbnails==0
+                    }catch(error:Throwable){failure=error}finally{framed.countDown()}
+                }}}
+            }
+            waitFor(framed,"library frames")
+            failure?.let{throw it}
+            if(ready)return SystemClock.uptimeMillis()-started
+        }
+    }
     override fun onStart(){
         val result=Bundle()
         try{
             check(targetContext.packageName.endsWith(".debug"),"Refusing to test a release app")
+            if(android.os.Build.VERSION.SDK_INT>=33)android.graphics.HardwareRenderer.setDrawingEnabled(true)
+            if(localChecks?.getString("pdfZoomOnly")=="true"){
+                result.putString("pdfZoom",PdfZoomChecks.run(targetContext,this))
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("documentSearchOnly")=="true"){
+                DocumentSearchChecks.run(targetContext,context)
+                result.putString("documentSearch","pdf_ocr_text_match_bounds_verified")
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("ocrQuality")=="true"||localChecks?.getString("ocrQualityTextOnly")=="true"){
+                val receipt=if(localChecks?.getString("ocrQualityTextOnly")=="true")OcrQualityChecks.runTextOnly(targetContext) else OcrQualityChecks.run(targetContext)
+                result.putString("ocrQuality",receipt.toString());result.putString("passed","true");finish(0,result);return
+            }
             if(w3Only){val receipt=W3NotebookChecks.run(targetContext,this,requireNotNull(w3RunId))
                 result.putString("w3","300_persisted_w1_pages_lazy_viewport_ocr_verified")
                 result.putString("w3RunId",receipt.runId);result.putInt("w3PersistedPages",receipt.pages)
@@ -86,10 +144,49 @@ class NativeSmokeInstrumentation:Instrumentation(){
             if(s3Only){S3ClosureChecks.run(targetContext,this);result.putString("passed","true");result.putString("s3Closure","held_save_digest_bookmark_phone_status_verified");finish(0,result);return}
             DatabaseMigrationChecks.run(targetContext)
             if(migrationOnly){result.putString("migration","v1_to_v2_records_null_keys_generation_correction_verified");result.putString("passed","true");finish(0,result);return}
-            NoteRepository(targetContext).use{it.setting("legacy-migration-complete","true",true);it.setting("preferences","{\"autoOcr\":false,\"drawHold\":false,\"scribbleErase\":false,\"stylusOnly\":true}",true)}
+            val filledWorkload=localChecks?.getString("filledInkOnly")=="true"
+            val manyPageWorkload=localChecks?.getString("manyPagesOnly")=="true"
+            val loadingWorkload=localChecks?.getString("loadingOnly")=="true"
+            val focusedWorkload=filledWorkload||manyPageWorkload||loadingWorkload
+            val focusedEditor=focusedWorkload||penPresentationOnly||localChecks?.getString("denseInkOnly")=="true"||
+                localChecks?.getString("stylusContactOnly")=="true"||localChecks?.getString("pageManagementOnly")=="true"||localChecks?.getString("textEditingOnly")=="true"||
+                localChecks?.getString("editorContinuityOnly")=="true"||localChecks?.getString("displayListRecoveryOnly")=="true"
+            var workloadLastOpen:String?=null
+            var workloadLegacyMigration:String?=null
+            NoteRepository(targetContext).use{
+                if(focusedWorkload){
+                    workloadLastOpen=it.setting("last-open-document","")
+                    workloadLegacyMigration=it.setting("legacy-migration-complete","")
+                }
+                it.setting("legacy-migration-complete","true",true)
+                if(focusedEditor)it.setting("last-open-document","",true)
+                // Workload proofs retain real feature preferences instead of disabling work to improve timings.
+                if(!focusedWorkload){
+                    val preferences=json("autoOcr" to false,"drawHold" to false,"scribbleErase" to false,"stylusOnly" to true)
+                    it.setting("preferences",preferences.toString(),true)
+                }
+            }
             activity=startActivitySync(Intent(Intent.ACTION_MAIN).setClassName(targetContext.packageName,MainActivity::class.java.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             repository=activity.repository
             if(legacyOnly){migrateLegacyFixture(result);result.putString("legacyMigration","blob_origins_mime_bytes_failure_cleanup_verified");result.putString("passed","true");finish(0,result);return}
+            if(focusedEditor&&!focusedWorkload)result.putLong("focusedStartupMs",awaitFocusedStartup())
+            if(focusedWorkload){
+                try{
+                    result.putLong("focusedStartupMs",awaitFocusedStartup())
+                    if(filledWorkload){
+                        result.putString("sceneAppend",ui{InkSceneCacheAppendChecks.run()})
+                        result.putString("sceneRasterizer",InkSceneRasterizerChecks.run{task->ui{task()}})
+                        EditorWorkloadChecks.filled(activity,this,result,localChecks?.getString("profileErase")=="true",
+                            localChecks?.getString("continuousTiming")=="true")
+                    }
+                    if(manyPageWorkload)EditorWorkloadChecks.manyPages(activity,this,result)
+                    if(loadingWorkload)result.putString("loading",LoadingChecks.run(activity,this))
+                }finally{
+                    repository.setting("last-open-document",workloadLastOpen.orEmpty(),true)
+                    repository.setting("legacy-migration-complete",workloadLegacyMigration.orEmpty(),true)
+                }
+                result.putString("passed","true");finish(0,result);return
+            }
             val doc=repository.create("네이티브 필기 검증","root","grid")
             val page=requireNotNull(repository.page(repository.pageIds(doc.id).first()))
             fun stroke(id:String,y:Int)=json("id" to id,"type" to "stroke","brush" to "fountain","width" to 4,"color" to "#172033","points" to JSONArray(listOf(InkPoint(450f,y.toFloat()).json(),InkPoint(550f,y.toFloat()).json())))
@@ -103,6 +200,48 @@ class NativeSmokeInstrumentation:Instrumentation(){
             repository.transaction{repository.putPage(doc.id,page,0)}
             ui{activity.openDocument(doc.id)}
             await("native editor ready"){ui{activity.inkView?.currentPage?.id==page.id&&activity.inkView!!.width>0}}
+            if(localChecks?.getString("displayListRecoveryOnly")=="true"){
+                InkDisplayListRecoveryChecks.run(activity,{block->ui{block()}},result)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("editorContinuityOnly")=="true"){
+                EditorContinuityChecks.run(activity,{block->ui{block()}},result)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("pageManagementOnly")=="true"){
+                PageManagementChecks.run(activity,this,result,leaveOpen=true)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("textEditingOnly")=="true"){
+                TextEditingChecks.run(activity,this,result)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("denseInkOnly")=="true"){
+                DenseInkChecks.run(activity,{block->ui{block()}},result)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("ocrUiOnly")=="true"){
+                OcrUiChecks.run(activity,this,result)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("ocrUiFixture")=="true"){
+                OcrUiChecks.showFixture(activity)
+                waitForIdleSync()
+                val image=requireNotNull(uiAutomation.takeScreenshot())
+                val capture=File(targetContext.filesDir,"ocr-ui-${activity.resources.configuration.screenWidthDp}dp.png")
+                try{capture.outputStream().use{check(image.compress(Bitmap.CompressFormat.PNG,100,it),"OCR UI screenshot failed")}}
+                finally{image.recycle()}
+                result.putString("ocrUiScreenshot",capture.absolutePath)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("lassoDragOnly")=="true"){
+                LassoDragChecks.run(activity,{block->ui{block()}},result,localChecks?.getString("lassoBaseline")=="true",localChecks?.getString("lassoEvents")?.toIntOrNull()?:48)
+                result.putString("passed","true");finish(0,result);return
+            }
+            if(localChecks?.getString("stylusContactOnly")=="true"){
+                StylusContactChecks.run(activity,{block->ui{block()}},result)
+                result.putString("passed","true");finish(0,result);return
+            }
             if(penInputOnly){PenInputChecks.run(activity,{block->ui{block()}},result);result.putString("passed","true");finish(0,result);return}
             if(penPresentationOnly){PenPresentationChecks.run(activity,this,{block->ui{block()}},result);result.putString("passed","true");finish(0,result);return}
             if(viewportOnly){ViewportChecks.run(activity,{block->ui{block()}},writingBaseline,result);result.putString("viewport","pan_pinch_auto_gate_bounded_draw_verified");result.putString("passed","true");finish(0,result);return}
@@ -119,19 +258,21 @@ class NativeSmokeInstrumentation:Instrumentation(){
             check(ui{activity.inkView!!.currentPage!!.objects.size==2},"Hover must not erase")
             motion(MotionEvent.ACTION_DOWN,500f,450f,32)
             check(ui{activity.inkView!!.currentPage!!.objects.none{it.optString("id")=="first"}},"S Pen button down erases")
-            motion(MotionEvent.ACTION_MOVE,500f,600f,32)
-            check(ui{activity.inkView!!.currentPage!!.objects.isEmpty()},"Held S Pen button erases along path")
-            motion(MotionEvent.ACTION_MOVE,600f,700f,0)
+            motion(MotionEvent.ACTION_MOVE,500f,600f,0)
+            check(ui{activity.inkView!!.currentPage!!.objects.isEmpty()},"Released S Pen button continues erasing along the contact")
             motion(MotionEvent.ACTION_MOVE,700f,740f,0)
             motion(MotionEvent.ACTION_UP,750f,760f,0)
-            check(ui{activity.inkView!!.currentPage!!.objects.size==1},"Button release resumes ink on same contact")
+            check(ui{activity.inkView!!.currentPage!!.objects.isEmpty()},"Button release must not create ink before lift")
+            await("erase saved"){repository.page(page.id)?.objects?.isEmpty()==true}
+            ui{activity.inkView!!.undo()}
+            check(ui{activity.inkView!!.currentPage!!.objects.size==2},"One undo restores the complete erase contact")
+            ui{activity.inkView!!.redo()}
+            check(ui{activity.inkView!!.currentPage!!.objects.isEmpty()},"One redo reapplies the complete erase contact")
+            motion(MotionEvent.ACTION_DOWN,650f,700f,0);motion(MotionEvent.ACTION_MOVE,700f,740f,0);motion(MotionEvent.ACTION_UP,750f,760f,0)
+            check(ui{activity.inkView!!.currentPage!!.objects.size==1},"The next button-free contact resumes ink")
             await("ink saved"){repository.page(page.id)?.objects?.size==1}
             motion(MotionEvent.ACTION_DOWN,200f,300f,0);motion(MotionEvent.ACTION_MOVE,250f,320f,0);motion(MotionEvent.ACTION_CANCEL,250f,320f,0)
             check(ui{activity.inkView!!.currentPage!!.objects.size==1},"Cancelled contact must not commit ink")
-            ui{activity.inkView!!.undo()}
-            check(ui{activity.inkView!!.currentPage!!.objects.size==2},"One undo restores both original strokes and removes resumed ink")
-            ui{activity.inkView!!.redo()}
-            check(ui{activity.inkView!!.currentPage!!.objects.size==1},"One redo restores mixed-contact erase and ink")
             motion(MotionEvent.ACTION_DOWN,200f,300f,0,MotionEvent.TOOL_TYPE_FINGER)
             motion(MotionEvent.ACTION_MOVE,250f,320f,0,MotionEvent.TOOL_TYPE_FINGER)
             motion(MotionEvent.ACTION_UP,250f,320f,0,MotionEvent.TOOL_TYPE_FINGER)
@@ -140,7 +281,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
                 activity.inkView!!.add(stroke("sparse",450))}
             motion(MotionEvent.ACTION_DOWN,500f,450f,32);motion(MotionEvent.ACTION_UP,500f,450f,32)
             check(ui{activity.inkView!!.currentPage!!.objects.size==3},"Precise eraser splits sparse stroke")
-            result.putString("stylus","PASS: hover, same-contact pen/eraser as one undo, cancel, finger rejection, partial erase")
+            result.putString("stylus","PASS: hover, contact-latched button eraser, next-contact ink, one-step undo, cancel, finger rejection, partial erase")
             await("partial erase persisted"){repository.page(page.id)?.objects?.size==3}
             ui{activity.inkView!!.undo()}
             await("partial erase undo persisted"){repository.page(page.id)?.objects?.size==2}
@@ -307,9 +448,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
             finally{bitmap.recycle()}
             return file.relativeTo(targetContext.filesDir).invariantSeparatorsPath}
         ui{activity.inkView!!.changeObjects(activity.inkView!!.currentPage!!.objects.toList(),emptyList());activity.inkView!!.tool=InkCanvasView.Tool.PEN;activity.inkView!!.scribbleErase=true;activity.inkView!!.resetZoom()}
-        if(activity.resources.configuration.screenWidthDp<=840){click("더 보기");click("페이지 번호로 이동")}
-        else click("페이지 사이드바")
-        click("목차");click("오디오");click("페이지");click("닫기")
+        PageManagementChecks.run(activity,this,result)
         click("도구 더보기");click("형광펜");check(ui{activity.inkView!!.tool==InkCanvasView.Tool.HIGHLIGHTER},"Highlighter accessible from original overflow")
         click("펜");click("펜 설정");click("완료")
         click("색상 추가");click("닫기")
@@ -355,7 +494,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
         result.putString("uiLocale","English_selected_rendered_persisted_reentered_then_Korean_restored")
         click("완료");click("신규");click("닫기")
         result.putString("uiScreenWidthDp",activity.resources.configuration.screenWidthDp.toString())
-        result.putString("classicUi","PASS: page/outline/audio sidebar; highlighter overflow; pen settings; color sheet; canonical Compose library/settings/new-note; original paper width")
+        result.putString("classicUi","PASS: page management consumer flow; highlighter overflow; pen settings; color sheet; canonical Compose library/settings/new-note; original paper width")
     }
     private fun migrateLegacyFixture(result:Bundle){
         val id=uid("legacy_fixture")
@@ -492,7 +631,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
         motion(MotionEvent.ACTION_DOWN,200f,200f,0);motion(MotionEvent.ACTION_UP,200f,200f,0)
         check(ids()==originalIds&&edits.get()==0,"Whole eraser must not hit heart interior")
         motion(MotionEvent.ACTION_DOWN,500f,300f,0);motion(MotionEvent.ACTION_UP,500f,300f,0)
-        check("target" !in ids()&&setOf("distant","locked","highlight","outline","sparse").all{it in ids()},
+        check("target" !in ids()&&"highlight" !in ids()&&setOf("distant","locked","outline","sparse").all{it in ids()},
             "Whole eraser must remove only touched, unlocked visible ink")
         check(edits.get()==1,"Whole-object eraser is one edit")
         ui{activity.inkView!!.undo()};check(ids()==originalIds,"Whole eraser undo restores target and order")
@@ -505,12 +644,11 @@ class NativeSmokeInstrumentation:Instrumentation(){
         motion(MotionEvent.ACTION_MOVE,500f,330f,MotionEvent.BUTTON_STYLUS_PRIMARY)
         motion(MotionEvent.ACTION_MOVE,600f,400f,0);motion(MotionEvent.ACTION_UP,700f,400f,0)
         val added=ui{activity.inkView!!.currentPage!!.objects.filter{it.optString("id") !in originalIds}}
-        check("target" !in ids()&&added.size==2&&edits.get()==1,"Pen-eraser-pen is one edit with two ink segments")
-        check(kotlin.math.abs(InkGeometry.points(added[0]).last().x-300f)<1f&&
-            kotlin.math.abs(InkGeometry.points(added[1]).first().x-600f)<1f,
-            "Batched old-mode sample and release ink start must both be retained")
-        ui{activity.inkView!!.undo()};check(ids()==originalIds,"One undo reverses entire mixed contact")
-        ui{activity.inkView!!.redo()};check("target" !in ids()&&ids().size==originalIds.size+1,"One redo restores entire mixed contact")
+        check("target" !in ids()&&added.size==1&&edits.get()==1,"Pen-to-eraser contact keeps only the pre-erase ink segment")
+        check(kotlin.math.abs(InkGeometry.points(added.single()).last().x-300f)<1f,
+            "Historical sample before the button press remains in the ink segment")
+        ui{activity.inkView!!.undo()};check(ids()==originalIds,"One undo reverses the entire latched contact")
+        ui{activity.inkView!!.redo()};check("target" !in ids()&&"highlight" !in ids()&&ids().size==originalIds.size-1,"One redo restores the latched contact")
         ui{activity.inkView!!.undo()};edits.set(0)
 
         val beforeCancel=ui{activity.inkView!!.currentPage!!.objects.map{it.toString()}}

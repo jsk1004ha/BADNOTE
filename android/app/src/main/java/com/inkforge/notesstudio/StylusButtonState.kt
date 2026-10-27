@@ -5,6 +5,7 @@ import android.view.MotionEvent
 class StylusButtonState{
     private var buttons=0
     fun getButtons()=buttons
+    fun reset(){buttons=0}
     fun update(action:Int,rawButtons:Int,actionButton:Int):Boolean{
         val previous=buttons;val mask=MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY
         buttons=rawButtons and mask

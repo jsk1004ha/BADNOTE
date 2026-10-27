@@ -18,6 +18,27 @@ class PdfTextSession private constructor(private var handle: Long) : Closeable {
         PdfiumBridge.call { nativePageText(handle, index) }
     }
 
+    /** PDFium maps matched character boxes through the crop/rotation-aware display transform. */
+    fun searchPage(index: Int, query: String, pageWidth: Float, pageHeight: Float): List<InkBounds> =
+        synchronized(PdfiumBridge.lock) {
+            require(handle != 0L) { "pdfSessionClosed" }
+            require(pageWidth.isFinite() && pageHeight.isFinite() && pageWidth > 0f && pageHeight > 0f)
+            if (query.isEmpty() || '\u0000' in query) return@synchronized emptyList()
+            val boxes = PdfiumBridge.call { nativeSearchPage(handle, index, query) }
+            check(boxes.size % 4 == 0) { "pdfInvalidSearchBounds" }
+            buildList(boxes.size / 4) {
+                var offset = 0
+                while (offset < boxes.size) {
+                    val left = boxes[offset++] * pageWidth
+                    val top = boxes[offset++] * pageHeight
+                    val right = boxes[offset++] * pageWidth
+                    val bottom = boxes[offset++] * pageHeight
+                    if (left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite() &&
+                        right > left && bottom > top) add(InkBounds(left, top, right, bottom))
+                }
+            }
+        }
+
     override fun close() = synchronized(PdfiumBridge.lock) {
         if (handle != 0L) {
             PdfiumBridge.nativeClose(handle)
@@ -40,6 +61,7 @@ internal object PdfiumBridge {
     external fun nativeOpen(path: String): Long
     external fun nativePageCount(handle: Long): Int
     external fun nativePageText(handle: Long, index: Int): String
+    external fun nativeSearchPage(handle: Long, index: Int, query: String): FloatArray
     external fun nativeClose(handle: Long)
 
     fun <T> call(block: PdfiumBridge.() -> T): T = try { block() } catch (error: IllegalStateException) {

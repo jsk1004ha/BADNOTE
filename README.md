@@ -1,88 +1,69 @@
-# bad note 4.1.3 beta — Kotlin native
+# BADNOTE 4.1.4 Beta 1
 
-갤럭시 탭·S Pen용 Android 필기 앱입니다. 라이브러리, 필기 편집기, 저장, PDF, 공유, OCR, 녹음과 설정을 Kotlin으로 전면 교체했습니다. 앱의 편집 화면에서 JavaScript나 WebView를 사용하지 않습니다. WebView는 기존 설치판의 IndexedDB를 읽는 일회성 이전에만 사용합니다.
+갤럭시 탭·S Pen용 Android 필기 앱입니다. 현재 작업 기준은 **4.1.4-beta.1 / versionCode 421**이며, 공개 v4.1.3-beta.2 이후의 텍스트·지우개·펜·올가미·페이지·OCR 개선을 모았습니다. 실제 버전 값은 [앱 빌드 설정](android/app/build.gradle)을 따릅니다. [Beta 1 변경 사항과 설치·검증 범위](docs/RELEASE-4.1.4-BETA.1-KO.md)를 확인하십시오.
 
-## 4.1.3 개발 베타
+**이 폴더가 최신 소스의 주 작업 폴더입니다.** 숨겨진 .worktrees/의 이전 사본과 docs/archive/의 구버전 기록을 현재 기준으로 사용하지 마십시오. 이전 로컬 수정 단계의 정리·백업은 [작업 기준과 복구 기록](docs/WORKSPACE-KO.md)에 있습니다.
 
-`4.1.3-beta.2`는 펜 입력의 중복 처리와 쓰는 획의 표시 전환을 개선합니다. [베타 릴리스](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.1.3-beta.2), [설치·지원 범위](docs/RELEASE-4.1.3-BETA.2-KO.md), [성능 검증](docs/PEN-4.1.3-PERFORMANCE-KO.md)을 확인해 주세요. 이전 베타의 OCR 경합·페이지 탐색 개선을 포함합니다. 베타는 자동 업데이트 대상에서 제외하며 [정식 4.0.1](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.0.1)을 유지합니다.
+## 최근 개선
 
-필기 OCR의 실제 인식률과 물리 Galaxy/S Pen 지연은 아직 측정하지 않았습니다. 구현과 검증 범위는 [네이티브 OCR 통합 기록](docs/OCR-NATIVE-IMPLEMENTATION-KO.md)에 정리했습니다.
+- 텍스트 UI는 iPad Goodnotes 자료를 기준으로 연속 도구막대·그룹형 팝오버·선택/입력별 손잡이로 다시 구성했습니다. 회전 상태의 폭 조절과 모서리 확대도 반대쪽 기준점을 유지합니다. [local.6 수정 내역](docs/TEXT-UI-LOCAL.6-KO.md) · [조사 근거와 범위](docs/GOODNOTES-IPAD-TEXT-REFERENCE.md).
+- 도형·텍스트·형광펜의 정밀 지우개 개선은 유지합니다. [local.5 지우개 수정과 검증](docs/TEXT-ERASER-LOCAL.5-KO.md).
 
-## 설치와 데이터 이전
+- 텍스트 도구에서 페이지를 탭하면 상자와 키보드를 열어 바로 입력합니다. 한글 조합·선택 범위와 커서 서식·상자 이동/크기 조절·저장을 연결했습니다. 텍스트·형광펜·도형에 지우개를 적용하고 손 도구의 축소 아이콘을 −로 바꿨습니다. [텍스트 입력 후속 수정과 검증](docs/TEXT-LOCAL.4-KO.md).
 
-빌드 결과는 `build/apk/`에 생성됩니다.
+- 페이지 관리 패널을 작은 미리보기 한 열로 줄였습니다. 상단 기본 도구 모음은 원래 위치를 유지하고, 펜 팔레트는 패널을 제외한 필기 영역에 맞춰 배치합니다. 페이지 선택 시 현재 배율을 유지하며 중앙 정렬합니다. 점 세 개 메뉴는 버튼 옆에 떠 있고, 누른 페이지만 추가 확인창 없이 삭제합니다. [local.4 변경과 검증](docs/PAGES-LOCAL.4-KO.md).
 
-- `bad-note-Android-4.1.3-beta.2-Update.apk`: `com.inkforge.note4` 업데이트
-- `bad-note-Android-4.1.3-beta.2-SideBySide.apk`: `com.inkforge.note5` 업데이트 또는 병행 설치
+- Android가 회수한 필기 표시 캐시를 다시 그리기 전에 복구합니다. 쓰는 중인 획과 확대·이동·지우개 중 기존 필기를 함께 보호하며, 원본 획·경로·타일 재사용은 유지합니다. 고밀도 지우기의 표시 지연은 남아 있으며 무끊김 검증은 완료되지 않았습니다. [local.3 수정과 검증](docs/INK-LOCAL.3-KO.md).
 
-기존 앱과 동일한 패키지·서명으로 업데이트하면 첫 실행에 노트, PDF 배경, 이미지, 녹음, 폴더와 설정을 이전합니다. 이전은 문서별 트랜잭션으로 처리하고, 완료한 문서는 재시도 시 건너뜁니다. 기존 IndexedDB는 삭제하지 않습니다. 다른 패키지의 데이터는 Android 격리 때문에 자동으로 읽을 수 없으므로 `.ifnote` 파일을 가져와야 합니다.
+- 상단 도구·펜 설정을 실제 너비에 맞춘 한 줄로 복원했습니다. 확대·지우기·도구 전환 중 기존 필기를 유지하고, 페이지 드래그 중 주변 페이지가 부드럽게 이동합니다. [이번 수정과 검증](docs/EDITOR-LOCAL.2-KO.md)을 참고하십시오.
 
-**4.0의 `.ifnote`는 ZIP 기반 버전 5입니다.** 원본 자산과 편집 가능한 페이지를 담습니다. 3.x의 JSON `.ifnote`도 가져올 수 있습니다. 4.0에서 내보낸 파일은 3.x에서 열 수 없으며, 4.0 데이터가 3.x 저장소로 역동기화되지는 않습니다. 업데이트 전 3.x 백업을 보관하십시오.
+- S Pen 버튼을 놓아도 현재 접촉은 펜을 뗄 때까지 지우개로 유지하고 다음 접촉에서 도구를 복원합니다.
+- 다중 획 올가미 이동은 드래그 중 표시 위치만 바꾸고 완료할 때 원본 좌표를 한 번 갱신합니다. 취소·실행 취소·메타데이터 보존을 포함합니다.
+- 한글·영문 혼합 필기의 실제 모델 후보와 단어 조합을 개선했습니다. 선택 영역 변환, 결과 교정·복사·원본 보존 삽입을 지원합니다.
+- 수식은 별도 명령으로 숫자·기본 연산·괄호·분수·지수·제한된 여러 줄을 처리합니다. 인식과 계산은 별도이며 복잡한 수학 OCR·범용 LaTeX 인식은 지원 범위 밖입니다.
+- 다획 필기·지우개는 변경된 명령 묶음과 공간 인덱스 항목만 갱신합니다. PDF 확대 중에는 기존 타일과 전체 페이지 미리보기를 유지하고 고해상도 타일로 교체합니다.
+- 문서 검색·현재 페이지 OCR은 편집기 상단에서 바로 실행합니다. 검색 결과를 누르면 좌표가 있는 일치 영역을 강조합니다. OCR 결과는 내부 진단 없이 한 편집란에서 줄바꿈·띄어쓰기를 유지하며 복사·교정·삽입합니다.
+- 큰 수식은 원본 획을 보존하고 모델 입력만 정규화·단순화합니다. 처리할 수 없는 일부 줄이 다른 줄의 결과를 버리지 않도록 했습니다.
 
-## 기능
-
-- Kotlin Canvas 필기: 필압·기울기·방향·historical samples, S Pen 버튼 지우개, 스타일러스 전용 입력, 손가락 팬·핀치 확대
-- 만년필·볼펜·젤펜·브러시·연필·파인라이너, 형광펜, 필압·색상·굵기·획 안정화·불투명도 설정
-- 획·정밀 지우개, 낙서 지우기, 올가미 이동·확대·축소·색 변경·복사·붙여넣기·잠금, 실행 취소·다시 실행
-- 텍스트·스티키 노트·이미지·도형·스티커·암기 가림 테이프·자·레이저 포인터
-- 연속/단일 페이지, 페이지 추가·복제·이동·삭제, 북마크·목차·문서 탭·최근 페이지 복원
-- 중첩 폴더, 즐겨찾기, 태그, 검색, 휴지통과 복원
-- 원본 PDF 보관 및 화면에 보이는 영역의 타일 렌더링, PDF 삽입, `.ifnote`/PDF/PNG/XFDF 내보내기
-- ML Kit 한글·영문 및 선택 언어 필기 OCR, 유휴 OCR 검색 색인, 이미지 OCR, 수식 직접 입력과 기기 내 계산(전용 손글씨 수식 엔진은 미지원)
-- 마이크 녹음·재생, 한국어·영어·일본어·중국어·포르투갈어 사전, 앱 업데이트 확인
-
-## 대용량 내보내기와 공유
-
-노트는 SQLite WAL에 문서 정보·페이지·객체를 분리해 저장하며, 대형 자산은 별도 파일입니다. `.ifnote` 내보내기는 페이지 단위 JSON과 자산을 `ZipOutputStream`에 64 KiB씩 기록합니다. 문서 전체 복제나 자산 base64 변환, 전체 결과 Blob 생성이 없습니다. PDF도 한 페이지씩 JPEG 임시 파일로 만든 뒤 최종 출력에 복사합니다.
-
-공유 파일을 디스크에 완성한 다음 Android `ACTION_SEND`와 FileProvider 읽기 권한으로 시스템 공유 창을 엽니다. Web Share API의 transient user activation에 의존하지 않습니다. 공유 파일은 수신 앱이 비동기로 읽을 수 있도록 유지하고, 7일이 지난 파일은 다음 내보내기 때 정리합니다.
+실제 사람의 필기 정확도와 물리 Galaxy/S Pen 지연은 측정하지 않았습니다. [OCR 구현·검증](docs/OCR-NATIVE-IMPLEMENTATION-KO.md), [펜·올가미 측정](docs/PEN-4.1.3-PERFORMANCE-KO.md), [현재 설치 범위](docs/RELEASE-4.1.4-BETA.1-KO.md)에 실행 단계와 결과를 구분해 기록했습니다.
 
 ## 빌드와 검증
 
-Java 17 이상, Android SDK 36 / Build Tools 36.1.0이 필요합니다. Gradle 8.14.5 wrapper, AGP 8.13.2, Kotlin 2.3.0을 사용합니다.
+Java 17 이상, Android SDK 36, Build Tools 36.1.0, NDK 28.2.13676358, CMake 3.22.1이 필요합니다. Gradle wrapper와 고정 PDFium 준비 도구를 사용합니다.
 
-```powershell
-python tools/test_native.py
-python tools/build_apk.py --variant both
-```
+    python tools/test_native.py
+    python tools/build_apk.py --variant both --ocr-beta
 
-릴리스 빌드는 `android/local.properties`의 SDK 경로와 `android/local-signing.properties`의 서명 설정이 필요합니다. 예제 서명 파일을 참고하십시오. 실제 비밀 값은 저장소에 포함하지 않습니다.
+SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/README-BUILD-KO.md)에 있습니다. Debug·release APK는 직접 Gradle을 실행해도 루트 build/apk/에 자동으로 모입니다. 계측용 테스트 APK는 build/apk/tests/에 생성됩니다.
 
-4.1.3 베타의 OCR 기능 플래그를 포함하는 배포 빌드는 `android/gradlew.bat -p android -PbadnoteOcrBeta=true :app:assembleUpdateRelease :app:assembleSideBySideRelease`로 생성합니다.
+| 산출물 접미사 | 패키지 | 용도 |
+| --- | --- | --- |
+| -Debug.apk | com.inkforge.note4.debug | 공개 앱과 분리한 검증 |
+| -Update.apk | com.inkforge.note4 | 기존 패키지 업데이트 |
+| -SideBySide.apk | com.inkforge.note5 | 병행 설치 또는 기존 병행 앱 업데이트 |
 
-에뮬레이터/테스트 기기를 명시해 네이티브 회귀 테스트를 실행할 수 있습니다. 테스트는 별도 `.debug` 패키지만 사용합니다.
+공개 업데이트 APK는 기존 배포 인증서와 일치해야 합니다. 로컬 검증용 서명은 공개 배포 키를 대체하지 않습니다. 공개 설치판을 유지하며 검증하려면 분리된 Debug 패키지를 사용하십시오. GitHub 베타는 prerelease로 게시하며 정식 Latest와 자동 업데이트 정책은 유지합니다.
 
-```powershell
-python tools/test_native.py --device emulator-5580 --adb "C:/Users/User/AppData/Local/Android/Sdk/platform-tools/adb.exe"
-python tools/verify_apk.py build/apk/bad-note-Android-4.1.3-beta.2-Update.apk --build-tools "C:/Users/User/AppData/Local/Android/Sdk/build-tools/36.1.0"
-```
+기존 노트는 ZIP v5 .ifnote로 내보내고 가져올 수 있으며 3.x JSON 가져오기와 명시적인 호환 JSON 내보내기도 지원합니다. 같은 패키지·서명 업데이트의 기존 데이터 이전과 다른 패키지 사이의 .ifnote 이전을 구분합니다.
 
-테스트에는 96 MiB JVM에서의 100/300 MiB 자산 왕복·SHA-256 검증, 100 MiB legacy base64 가져오기, 실제 Android 저장소의 300 MiB 내보내기·가져오기, S Pen MotionEvent, 데이터 이전, 공유 URI가 포함됩니다. 물리 Galaxy/S Pen의 지연·압력 특성·펌웨어 동작은 별도 실기기 확인이 필요합니다.
+## 폴더
 
-## 소스
+| 위치 | 역할 |
+| --- | --- |
+| android/app/ | Kotlin 편집기·Compose 화면·Room 저장소·네이티브 PDF |
+| android/ocr-contracts/ | OCR 입력·결과 계약 |
+| tools/ | 현재 빌드·APK·회귀·평가 도구 |
+| docs/ | 현재 버전의 안내·구현·검증 |
+| docs/archive/ | 과거 버전의 변경 기록·설계·배포 자료 |
+| legacy/web/ | 브러시·아이콘 비교에 사용하는 3.x 원본 |
+| build/ | 로컬 APK·의존성·검증 산출물 |
+| _delete_after_review/ | 사용자가 지워도 되는 중복 자산·폐기 도구 |
 
-- `android/app/src/main/java/com/inkforge/notesstudio/*.kt`: 네이티브 앱 전체
-- `android/app/src/nativeAssets/migration.html`: 이전용 로컬 IndexedDB 리더
-- `android/app/src/nativeAssets/locales/`: 네이티브 UI 번역 사전
-- `android/app/src/test/`: 기하·계산·스트리밍 파일 테스트
-- `android/app/src/androidTest/`: Android 저장소·입력·이전 회귀 테스트
-- `web/` 및 기존 `assets/public/`: 3.x 참고 소스와 호환 회귀 자료. **4.0 APK에는 포함하지 않습니다.**
-
-현재 범위와 호환 제약은 `docs/NATIVE-4.0-KO.md`에 정리했습니다.
-
-## 4.0.1 수정
-
-3.3.30 화면의 원본 벡터 아이콘, 어두운 라이브러리, 파란 편집 도구막대, 검은 도구 설정 막대, 페이지 사이드바와 각 설정 창을 네이티브 View로 재구성했습니다. 색상 조합기의 채도·명도 색상판과 색조 막대, 기존 용지 크기·격자 간격도 복원했습니다.
-
-낙서 지우기는 개별 입력점 사이의 이동량 대신 획의 주축과 왕복 구간으로 판정합니다. 촘촘한 S Pen historical samples, 수평·대각선·세로 왕복, 확대율 변화에서도 동일하게 처리하며 3회 이상 겹친 필기만 지웁니다. 잠긴 획, 숨긴 객체, 텍스트, 형광펜은 보존합니다.
-
-```powershell
-python tools/test_native.py --ui-only --device emulator-5580 --adb "C:/Users/User/AppData/Local/Android/Sdk/platform-tools/adb.exe"
-```
+현재 기능과 구조는 [네이티브 안내](docs/NATIVE-KO.md), 전체 문서 목록은 [문서 안내](docs/README.md)에 있습니다. 불필요한 사본과 삭제 대기 파일의 수동 정리는 [삭제 안내](docs/CLEANUP-KO.md)를 따르십시오.
 
 ## 기여자
 
 - 프로젝트 관리 및 개발: [jsk1004ha](https://github.com/jsk1004ha)
-- 4.0.1 개발: [greencow](https://github.com/grncow)
+- 초기 네이티브 개발: [greencow](https://github.com/grncow)
 - 포르투갈어 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
 - 아이콘: [Photon616](https://github.com/Photon616)
