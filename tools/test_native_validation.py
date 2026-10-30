@@ -6,7 +6,30 @@ import subprocess
 import tempfile
 from unittest.mock import patch
 
-from run_native_validation import compose_screen_contract, front_screen_contract, require_instrument_success, w3_upload_index, release_capture_inputs, transfer_private_fixture, digest, read_w3_ready
+from run_native_validation import compose_screen_contract, front_screen_contract, require_instrument_success, w3_upload_index, release_capture_inputs, transfer_private_fixture, digest, read_w3_ready, current_release_version
+
+
+class ReleaseVersionTest(unittest.TestCase):
+    def test_release_version_tracks_build_including_future_bumps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            android = Path(directory)
+            (android / "app").mkdir()
+            with patch("run_native_validation.ANDROID", android):
+                for code, name in ((421, "4.1.4-beta.1"), (422, "4.1.4-beta.2")):
+                    (android / "app/build.gradle").write_text(
+                        f"defaultConfig {{\n    versionCode {code}\n    versionName '{name}'\n}}\n",
+                        encoding="utf-8")
+                    self.assertEqual(current_release_version(), (code, name))
+
+    def test_missing_or_ambiguous_release_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            android = Path(directory)
+            (android / "app").mkdir()
+            with patch("run_native_validation.ANDROID", android):
+                for config in ("", "versionCode 421\n", "versionCode 421\nversionCode 422\nversionName 'beta'\n"):
+                    (android / "app/build.gradle").write_text(config, encoding="utf-8")
+                    with self.subTest(config=config), self.assertRaises(ValueError):
+                        current_release_version()
 
 
 class BinaryFixtureTransferTest(unittest.TestCase):

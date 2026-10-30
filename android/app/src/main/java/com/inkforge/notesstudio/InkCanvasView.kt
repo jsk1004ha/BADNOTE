@@ -286,7 +286,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     @androidx.annotation.RequiresApi(29)
     internal fun drawRetainedScene(canvas:Canvas){
         check(Build.VERSION.SDK_INT>=29&&canvas.isHardwareAccelerated)
-        maintainVisiblePages()
+        val visible=visiblePageGeometry()
+        maintainVisiblePages(visible)
         val generation=canonicalGeneration()
         var display=hardwareScene
         if(display==null||hardwareSceneGeneration!=generation){
@@ -294,7 +295,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             display=recordHardwareDisplay(width,height,children){
                 children.clear()
                 background.beginFrame(retainPrevious=sceneTiles.hasContent)
-                try{drawDocument(it,DrawMode.SCENE,rasterizing=true,hardwareCommands=true,retainedDisplays=children)}
+                try{drawDocument(it,DrawMode.SCENE,rasterizing=true,hardwareCommands=true,retainedDisplays=children,viewport=visible)}
                 finally{background.endFrame()}
             }
             hardwareScene=display;hardwareSceneGeneration=generation
@@ -341,6 +342,19 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun visiblePageIndices():IntRange {
         if(!continuous)return currentIndex..currentIndex
         return pageViewportRange(tops,bottoms,(-500f-originY)/scale,(height+500f-originY)/scale,pagePositionsOrdered)
+    }
+    private data class VisiblePage(val index:Int,val top:Float,val height:Float)
+    /** A document replay shares geometry across loading, cached-scene replay and its overlay. */
+    private fun visiblePageGeometry():List<VisiblePage> {
+        if(pageIds.isEmpty())return emptyList()
+        val visible=ArrayList<VisiblePage>()
+        for(index in visiblePageIndices()){
+            val top=originY+pageTop(index)*scale
+            val pageHeight=metadata.getOrNull(index)?.f("height",1414f)?:1414f
+            if(top>height+500||top+pageHeight*scale< -500)continue
+            visible.add(VisiblePage(index,top,pageHeight))
+        }
+        return visible
     }
     fun goTo(index:Int,center:Boolean=false){
         if(pageIds.isEmpty())return
@@ -492,18 +506,20 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         drawDocument(canvas,if(frontContact&&host?.presented==true)DrawMode.OVERLAY else DrawMode.LEGACY)
     }
     private fun drawDocument(canvas:Canvas,mode:DrawMode,rasterizing:Boolean=false,damage:List<Rect>?=null,
-                             hardwareCommands:Boolean=false,retainedDisplays:MutableList<CommandDisplay>?=null){
+                             hardwareCommands:Boolean=false,retainedDisplays:MutableList<CommandDisplay>?=null,
+                             viewport:List<VisiblePage>?=null){
+        val visible=viewport?:visiblePageGeometry()
         val scene=mode!=DrawMode.OVERLAY
-        if(scene&&!rasterizing&&pageIds.isNotEmpty())maintainVisiblePages()
+        if(scene&&!rasterizing&&pageIds.isNotEmpty())maintainVisiblePages(visible)
         if(scene&&!rasterizing&&moveLayers==null&&pageIds.isNotEmpty()){
             // Reconcile changed recordings before choosing dirty tiles; both old and new extents
             // matter when a stroke is replaced, split, deleted or restored by undo/cancel.
-            for(index in visiblePageIndices())pages[pageIds[index]]?.let{layersFor(it)}
+            for(page in visible)pages[pageIds[page.index]]?.let{layersFor(it)}
             if(sceneTiles.prepare(width,height,originX,originY,scale)){
                 background.beginFrame(retainPrevious=sceneTiles.hasContent)
-                sceneTiles.draw(canvas){target,dirty->drawDocument(target,DrawMode.SCENE,rasterizing=true,damage=dirty)}
+                sceneTiles.draw(canvas){target,dirty->drawDocument(target,DrawMode.SCENE,rasterizing=true,damage=dirty,viewport=visible)}
                 background.endFrame()
-                if(mode!=DrawMode.SCENE)drawDocument(canvas,DrawMode.OVERLAY)
+                if(mode!=DrawMode.SCENE)drawDocument(canvas,DrawMode.OVERLAY,viewport=visible)
                 return
             }
         }
@@ -512,10 +528,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         if(scene&&!rasterizing)background.beginFrame()
         if(pageIds.isEmpty()){if(scene&&!rasterizing)background.endFrame();return}
         val screenClip=canvas.clipBounds
-        val range=visiblePageIndices()
-        for(i in range){
-            val top=originY+pageTop(i)*scale;val pageHeight=metadata.getOrNull(i)?.f("height",1414f)?:1414f
-            if(top>height+500||top+pageHeight*scale< -500)continue
+        for(geometry in visible){
+            val i=geometry.index;val top=geometry.top;val pageHeight=geometry.height
             val id=pageIds[i]
             canvas.save();canvas.translate(originX,top);canvas.scale(scale,scale)
             if(scene){paint.color=Color.WHITE;paint.style=Paint.Style.FILL;canvas.drawRect(0f,0f,1000f,pageHeight,paint)}
@@ -604,12 +618,10 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             canvas.drawText(telemetryText,27*density,height-70*density,paint);paint.alpha=255
         }
     }
-    private fun maintainVisiblePages(){
+    private fun maintainVisiblePages(viewport:List<VisiblePage> = visiblePageGeometry()){
         val visible=HashSet<String>();var nearest=currentIndex;var distance=Float.MAX_VALUE
-        for(index in visiblePageIndices()){
-            val top=originY+pageTop(index)*scale
-            val bottom=top+(metadata.getOrNull(index)?.f("height",1414f)?:1414f)*scale
-            if(top>height+500||bottom< -500)continue
+        for(geometry in viewport){
+            val index=geometry.index;val top=geometry.top;val bottom=top+geometry.height*scale
             visible.add(pageIds[index]);requestPage(index)
             val d=maxOf(top-height/2f,height/2f-bottom,0f)
             if(d<distance){nearest=index;distance=d}
