@@ -5,8 +5,12 @@ import org.json.JSONArray
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /** Consumer-level checks using a real tiny PDF, stored OCR sidecars and ordinary text objects. */
@@ -19,6 +23,7 @@ internal object DocumentSearchChecks {
                 val asset = tinyPdf().inputStream().use { repository.storeAsset(it, "pdf") }
                 ownedAssets += asset
                 pdfChecks(repository, asset, ownedAssets)
+                cancellationAndSaveChecks(repository, asset)
                 positionedGlyphChecks(repository, fixtureContext, ownedAssets)
                 ocrAndObjectChecks(repository)
             }
@@ -26,6 +31,73 @@ internal object DocumentSearchChecks {
             ownedAssets.forEach { java.io.File(java.io.File(context.filesDir, "native-assets"), it).delete() }
             context.deleteDatabase(database)
         }
+    }
+
+    /** Real source pages must stop mid-traversal while the real persistence queue can save. */
+    private fun cancellationAndSaveChecks(repository: NoteRepository, asset: String) {
+        val document = repository.create("Cancellable source PDF search", "root", "blank")
+        val firstId = repository.pageIds(document.id).single()
+        val pages = 16
+        repeat(pages) { index ->
+            val page = NotePage(if (index == 0) firstId else uid("page"),
+                json("width" to 1000, "height" to 1294, "pdfSource" to "asset:$asset", "pdfPageNumber" to 1), mutableListOf())
+            if (index == 0) repository.putPage(document.id, page, index)
+            else repository.addPage(document.id, page, index)
+        }
+        try {
+            var fullTraversalChecks = 0
+            check(repository.searchDocumentPages(document.id, "alpha") { fullTraversalChecks++; false }.size == pages)
+            val halfway = fullTraversalChecks / 2
+            var cancelledChecks = 0
+            val cancelled = runCatching {
+                repository.searchDocumentPages(document.id, "alpha") { ++cancelledChecks >= halfway }
+            }.exceptionOrNull()
+            check(cancelled is CancellationException && cancelledChecks < fullTraversalChecks) {
+                "Obsolete PDF traversal completed or returned partial results: $cancelledChecks/$fullTraversalChecks:$cancelled"
+            }
+            check(runCatching { repository.searchDocumentPages(document.id, "alpha") { true } }
+                .exceptionOrNull() is CancellationException) { "Already cancelled search was started" }
+            // Repeat search after cancellation proves the sessions/lock were released normally.
+            check(repository.searchDocumentPages(document.id, "alpha").size == pages)
+
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val checkpoints = AtomicInteger()
+            val delivered = AtomicBoolean()
+            val worker = ScheduledThreadPoolExecutor(1)
+            val coordinator = DocumentSearchCoordinator(search = { id: String, term: String, token: () -> Boolean ->
+                repository.searchDocumentPages(id, term) {
+                    if (checkpoints.incrementAndGet() == halfway) {
+                        entered.countDown()
+                        // Pause a real traversal as a slow source-PDF call would, even if the
+                        // owning UI has interrupted it. Cancellation is checked on return.
+                        var interrupted = false
+                        while (true) {
+                            try { release.await(); break } catch (_: InterruptedException) { interrupted = true }
+                        }
+                        if (interrupted) Thread.currentThread().interrupt()
+                    }
+                    token()
+                }
+            }, dispatch = { it() }, debounceMillis = 0, worker = worker)
+            try {
+                coordinator.request(document.id, "alpha") { delivered.set(true) }
+                check(entered.await(10, TimeUnit.SECONDS)) { "Source PDF search did not begin traversal" }
+                val marker = "saved while source search was running"
+                val saved = repository.executor.submit<Boolean> {
+                    val meta = requireNotNull(repository.pageMeta(firstId)).put("searchSaveRegression", marker)
+                    repository.putPageMeta(firstId, meta)
+                    repository.pageMeta(firstId)?.optString("searchSaveRegression") == marker
+                }
+                check(saved.get(10, TimeUnit.SECONDS)) { "Persistence waited behind source-PDF traversal" }
+                coordinator.close()
+            } finally {
+                release.countDown(); coordinator.close()
+                check(worker.awaitTermination(10, TimeUnit.SECONDS)) { "Cancelled PDF worker did not release its sessions" }
+            }
+            check(!delivered.get()) { "Closed search delivered a stale result" }
+            check(checkpoints.get() < fullTraversalChecks) { "Closed search traversed all source pages" }
+        } finally { repository.deleteDocument(document.id) }
     }
 
     private fun pdfChecks(repository: NoteRepository, asset: String, ownedAssets: MutableList<String>) {

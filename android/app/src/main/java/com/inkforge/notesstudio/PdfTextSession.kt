@@ -13,22 +13,32 @@ class PdfTextSession private constructor(private var handle: Long) : Closeable {
         PdfiumBridge.nativePageCount(handle)
     }
 
-    fun pageText(index: Int): String = synchronized(PdfiumBridge.lock) {
-        require(handle != 0L) { "pdfSessionClosed" }
-        PdfiumBridge.call { nativePageText(handle, index) }
+    fun pageText(index: Int, cancelled: () -> Boolean = { false }): String {
+        checkSearchCancelled(cancelled)
+        return synchronized(PdfiumBridge.lock) {
+            checkSearchCancelled(cancelled)
+            require(handle != 0L) { "pdfSessionClosed" }
+            PdfiumBridge.call { nativePageText(handle, index) }.also { checkSearchCancelled(cancelled) }
+        }
     }
 
     /** PDFium maps matched character boxes through the crop/rotation-aware display transform. */
-    fun searchPage(index: Int, query: String, pageWidth: Float, pageHeight: Float): List<InkBounds> =
-        synchronized(PdfiumBridge.lock) {
+    fun searchPage(index: Int, query: String, pageWidth: Float, pageHeight: Float,
+                   cancelled: () -> Boolean = { false }): List<InkBounds> {
+        checkSearchCancelled(cancelled)
+        return synchronized(PdfiumBridge.lock) {
+            // A cancelled worker may have been waiting behind an import using PDFium.
+            checkSearchCancelled(cancelled)
             require(handle != 0L) { "pdfSessionClosed" }
             require(pageWidth.isFinite() && pageHeight.isFinite() && pageWidth > 0f && pageHeight > 0f)
             if (query.isEmpty() || '\u0000' in query) return@synchronized emptyList()
             val boxes = PdfiumBridge.call { nativeSearchPage(handle, index, query) }
+            checkSearchCancelled(cancelled)
             check(boxes.size % 4 == 0) { "pdfInvalidSearchBounds" }
             buildList(boxes.size / 4) {
                 var offset = 0
                 while (offset < boxes.size) {
+                    if (offset % 256 == 0) checkSearchCancelled(cancelled)
                     val left = boxes[offset++] * pageWidth
                     val top = boxes[offset++] * pageHeight
                     val right = boxes[offset++] * pageWidth
@@ -38,6 +48,7 @@ class PdfTextSession private constructor(private var handle: Long) : Closeable {
                 }
             }
         }
+    }
 
     override fun close() = synchronized(PdfiumBridge.lock) {
         if (handle != 0L) {
@@ -47,9 +58,15 @@ class PdfTextSession private constructor(private var handle: Long) : Closeable {
     }
 
     companion object {
-        fun open(file: File): PdfTextSession = synchronized(PdfiumBridge.lock) {
-            require(file.isFile) { "pdfFileMissing" }
-            PdfTextSession(PdfiumBridge.call { nativeOpen(file.canonicalPath) })
+        fun open(file: File, cancelled: () -> Boolean = { false }): PdfTextSession {
+            checkSearchCancelled(cancelled)
+            return synchronized(PdfiumBridge.lock) {
+                checkSearchCancelled(cancelled)
+                require(file.isFile) { "pdfFileMissing" }
+                val session = PdfTextSession(PdfiumBridge.call { nativeOpen(file.canonicalPath) })
+                try { checkSearchCancelled(cancelled); session }
+                catch (error: Exception) { session.close(); throw error }
+            }
         }
     }
 }

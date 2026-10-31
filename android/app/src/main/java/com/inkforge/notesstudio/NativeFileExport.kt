@@ -40,7 +40,7 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
                     "pdf"->StreamingPdf.write(repository,doc.id,file,{cancelled.get()})
                     "png"->StreamingPdf.render(repository,requireNotNull(repository.page(requireNotNull(currentPage))),1800).let{bmp->
                         try{file.outputStream().use{require(bmp.compress(Bitmap.CompressFormat.PNG,100,it))}}finally{bmp.recycle()}}
-                    "xfdf"->XfdfExport.write(repository,doc.id,file)
+                    "xfdf"->XfdfExport.write(repository,doc.id,file,{cancelled.get()})
                     "json"->{
                         val page=requireNotNull(repository.page(requireNotNull(currentPage))){"현재 페이지가 없습니다."}
                         val result=requireNotNull(repository.ocrResult(page.id)){"먼저 현재 페이지의 손글씨 OCR을 실행해 주세요."}
@@ -179,13 +179,20 @@ object StreamingPdf {
 }
 
 object XfdfExport{
-    private fun xml(s:String)=s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
-    fun write(repository:NoteRepository,id:String,file:File){
+    internal fun xml(s:String)=s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
+    fun write(repository:NoteRepository,id:String,file:File,cancelled:()->Boolean={false}){
+        fun checkCancelled(){if(cancelled())throw InterruptedIOException("내보내기를 취소했습니다.")}
         file.bufferedWriter().use{out->
+            checkCancelled()
             val source=repository.document(id)?.data?.optString("pdfSourceName","")?:""
             out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><f href=\"${xml(source)}\"/><annots>")
-            repository.pageIds(id).forEachIndexed{index,pageId->val page=requireNotNull(repository.page(pageId));val pw=page.meta.f("pdfPointWidth",595f);val ph=page.meta.f("pdfPointHeight",842f)
-                page.objects.filter{!it.optBoolean("hidden")&&it.optString("type")!="ocrIndex"}.forEach{obj->
+            repository.pageIds(id).forEachIndexed{index,pageId->checkCancelled();val page=requireNotNull(repository.page(pageId));val pw=page.meta.f("pdfPointWidth",595f);val ph=page.meta.f("pdfPointHeight",842f)
+                page.objects.filter{!it.optBoolean("hidden")&&it.optString("type")!="ocrIndex"}.forEach objectLoop@{obj->
+                    checkCancelled()
+                    if((obj.optJSONArray(ObjectEraseMask.KEY)?.length()?:0)>0){
+                        MaskedXfdfAnnotation.write(repository,page,obj,index,out,::checkCancelled)
+                        return@objectLoop
+                    }
                     val b=InkGeometry.bounds(obj)
                     fun x(v:Float)=v/page.width*pw
                     fun y(v:Float)=ph-v/page.height*ph

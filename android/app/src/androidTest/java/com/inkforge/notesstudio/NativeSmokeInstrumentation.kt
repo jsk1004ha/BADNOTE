@@ -115,6 +115,11 @@ class NativeSmokeInstrumentation:Instrumentation(){
                 result.putString("documentSearch","pdf_ocr_text_match_bounds_verified")
                 result.putString("passed","true");finish(0,result);return
             }
+            if(localChecks?.getString("xfdfExportOnly")=="true"){
+                XfdfExportChecks.run(targetContext,result)
+                result.putString("xfdfExport","masked_highlighter_shape_text_appearance_verified")
+                result.putString("passed","true");finish(0,result);return
+            }
             if(localChecks?.getString("ocrQuality")=="true"||localChecks?.getString("ocrQualityTextOnly")=="true"){
                 val receipt=if(localChecks?.getString("ocrQualityTextOnly")=="true")OcrQualityChecks.runTextOnly(targetContext) else OcrQualityChecks.run(targetContext)
                 result.putString("ocrQuality",receipt.toString());result.putString("passed","true");finish(0,result);return

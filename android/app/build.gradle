@@ -127,6 +127,8 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.11.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
+    // Independently import and render the XFDF appearance format in JVM regressions only.
+    testImplementation 'org.apache.pdfbox:pdfbox:3.0.5'
     implementation 'androidx.core:core:1.17.0'
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.webkit:webkit:1.14.0'

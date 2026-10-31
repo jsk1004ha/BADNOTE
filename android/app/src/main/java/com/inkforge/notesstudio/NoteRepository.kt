@@ -12,6 +12,7 @@ import org.json.JSONObject
 import java.io.*
 import java.security.DigestOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
@@ -764,8 +765,17 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             .mapTo(LinkedHashSet<String>()) { it.second }
     }
 
-    /** Search metadata and text objects, with source-PDF coordinates loaded only as needed. */
-    fun searchDocumentPages(documentId: String, query: String): List<DocumentSearchHit> {
+    /** Runs on the search worker; no transaction or persistence-queue task spans PDFium work. */
+    fun searchDocumentPages(documentId: String, query: String, cancelled: () -> Boolean = { false }): List<DocumentSearchHit> {
+        val isCancelled = { closed || cancelled() }
+        fun checkCancelled() = checkSearchCancelled(isCancelled)
+        fun <T> optionalPdfRead(read: () -> T): T? {
+            checkCancelled()
+            return try { read().also { checkCancelled() } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { checkCancelled(); null }
+        }
+        checkCancelled()
         val term = query.trim()
         if (term.isEmpty()) return emptyList()
         val objectText = HashMap<String, MutableList<JSONObject>>()
@@ -778,25 +788,38 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             arrayOf(documentId)
         ).use { cursor ->
             while (cursor.moveToNext()) {
+                checkCancelled()
                 val obj = JSONObject(cursor.getString(1))
                 objectText.getOrPut(cursor.getString(0)) { ArrayList() }.add(obj)
             }
         }
+        checkCancelled()
         val rows = readableDatabase.rawQuery(
             "SELECT id,body FROM pages WHERE document_id=? ORDER BY position,id", arrayOf(documentId)
         ).use { cursor -> buildList {
-            while (cursor.moveToNext()) add(cursor.getString(0) to JSONObject(cursor.getString(1)))
+            while (cursor.moveToNext()) {
+                checkCancelled()
+                add(cursor.getString(0) to JSONObject(cursor.getString(1)))
+            }
         } }
         val sessions = HashMap<String, PdfTextSession?>()
         fun session(source: String): PdfTextSession? {
-            if (!sessions.containsKey(source)) sessions[source] =
-                if (!source.startsWith("asset:")) null
-                else try { PdfTextSession.open(asset(source.removePrefix("asset:"))) }
-                catch (_: Exception) { null }
+            checkCancelled()
+            if (!sessions.containsKey(source)) {
+                if (!source.startsWith("asset:")) sessions[source] = null
+                else try {
+                    // Register ownership before another cancellation check, so a just-opened
+                    // document is always included in the outer finally's cleanup.
+                    sessions[source] = PdfTextSession.open(asset(source.removePrefix("asset:")), isCancelled)
+                    checkCancelled()
+                } catch (error: CancellationException) { throw error }
+                catch (_: Exception) { checkCancelled(); sessions[source] = null }
+            }
             return sessions[source]
         }
         try {
             return rows.mapIndexedNotNull { index, (pageId, meta) ->
+                checkCancelled()
                 val source = meta.optString("pdfSource")
                 val number = meta.optInt("pdfPageNumber", 1) - 1
                 val width = meta.f("width", 1000f).coerceIn(32f, 30000f)
@@ -806,17 +829,23 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 // Old Android extraction sometimes stored empty text or one character per line.
                 // Query the actual PDF character ranges independently; never join stored lines
                 // or require a match in that lossy index before consulting the retained source.
-                val pdfBounds = try { sourceSession?.searchPage(number, term, width, height).orEmpty() }
-                    catch (_: Exception) { emptyList() }
-                val sourceText = if (!storedPdfText.contains(term, ignoreCase = true))
-                    try { sourceSession?.pageText(number) } catch (_: Exception) { null } else null
+                val pdfBounds = optionalPdfRead {
+                    sourceSession?.searchPage(number, term, width, height, isCancelled).orEmpty()
+                }.orEmpty()
+                // Extraction is only needed for a proven source match's snippet. A miss must
+                // not load/search the same PDF page a second time; cached legacy text remains
+                // available even when the retained source is missing or has no native match.
+                val sourceText = if (pdfBounds.isNotEmpty() && !storedPdfText.contains(term, ignoreCase = true))
+                    optionalPdfRead { sourceSession?.pageText(number, isCancelled) } else null
                 val pdfText = when {
                     !meta.has("pdfText") -> sourceText.orEmpty()
                     sourceText?.contains(term, ignoreCase = true) == true -> sourceText
                     else -> storedPdfText
                 }
+                checkCancelled()
                 val ocr = currentOcrSearchResult(pageId)
                 val ocrText = ocr?.let(OcrResultPolicy::searchableText) ?: legacyOcrText(pageId)
+                checkCancelled()
                 val spans = ArrayList<DocumentSearchGeometry.Span>()
                 val text = buildString {
                     append(pdfText)
@@ -827,6 +856,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                         spans += it.copy(start = it.start + offset, end = it.end + offset)
                     }
                     objectText[pageId]?.forEach { obj ->
+                        checkCancelled()
                         val objectValue = listOf(obj.optString("text"), obj.optString("expression"))
                             .filter(String::isNotBlank).joinToString(" ")
                         if (objectValue.isNotBlank()) {
@@ -848,8 +878,9 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
                 // layout separators. In that case the proven match itself is the honest snippet.
                 val snippet = if (at >= 0)
                     text.substring(maxOf(0, at - 20), minOf(text.length, at + 80)).trim() else term
+                checkCancelled()
                 DocumentSearchHit(index, pageId, snippet, boxes.distinct())
-            }
+            }.also { checkCancelled() }
         } finally { sessions.values.forEach { it?.close() } }
     }
 

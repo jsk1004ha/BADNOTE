@@ -96,6 +96,7 @@ class MainActivity:ComponentActivity(){
     private var pageGrid:PageThumbnailGrid?=null
     private var sidebarTab="pages"
     private var searchDrawer:LinearLayout?=null
+    private var documentSearch:DocumentSearchCoordinator<List<DocumentSearchHit>>?=null
     private var globalSearchOpen=false
     private var selectionMode=false
     private val selectedDocuments=linkedSetOf<String>()
@@ -503,6 +504,7 @@ class MainActivity:ComponentActivity(){
         }
     }
     fun openDocument(id:String,index:Int?=null){
+        closeSearchDrawer()
         inkView?.finishContact()
         thumbnails.cancelPending()
         work("노트를 여는 중…",{
@@ -1010,6 +1012,7 @@ class MainActivity:ComponentActivity(){
         }
     }
     private fun closeSearchDrawer(){
+        documentSearch?.cancel()
         searchDrawer?.let{(it.parent as? ViewGroup)?.removeView(it)}
         searchDrawer=null
         inkView?.clearSearchHighlights()
@@ -1023,17 +1026,23 @@ class MainActivity:ComponentActivity(){
         val header=ui.row().apply{setPadding(dp(16),0,dp(12),0)};header.addView(ui.text("문서 검색",14f,ui.ink,true),LinearLayout.LayoutParams(0,-1,1f));header.addView(ui.iconButton("close","검색 닫기",width=34){closeSearchDrawer()});drawer.addView(header,LinearLayout.LayoutParams(-1,dp(58)));drawer.addView(ui.line(ui.color("#e3e5e9")))
         val input=ui.field("","PDF·손글씨·텍스트·수식 검색",42).apply{contentDescription=t("문서 검색어")};drawer.addView(input,LinearLayout.LayoutParams(-1,dp(42)).apply{setMargins(dp(14),dp(14),dp(14),dp(14))})
         val results=ui.col().apply{setPadding(dp(14),0,dp(14),dp(14))};drawer.addView(ScrollView(this).apply{addView(results)},LinearLayout.LayoutParams(-1,0,1f))
+        val searches=documentSearch?:DocumentSearchCoordinator<List<DocumentSearchHit>>(
+            search={id,term,cancelled->repository.searchDocumentPages(id,term,cancelled)},
+            dispatch={action->runOnUiThread(action)}).also{documentSearch=it}
         var generation=0
         input.addTextChangedListener(object:TextWatcher{override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){};override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){
-            val search=s.toString();val request=++generation;inkView?.clearSearchHighlights();results.removeAllViews();if(search.isBlank())return
-            repository.executor.execute{val matches=repository.searchDocumentPages(doc.id,search)
-                runOnUiThread{if(generation!=request||searchDrawer!==drawer||document?.id!=doc.id)return@runOnUiThread;results.removeAllViews();if(matches.isEmpty())results.addView(ui.text("검색 결과가 없습니다.",13f,ui.muted));matches.forEach{hit->menuItem(results,"${hit.index+1}페이지","search",hit.snippet){
+            val search=s.toString();val request=++generation;inkView?.clearSearchHighlights();results.removeAllViews()
+            searches.request(doc.id,search){result->
+                if(generation!=request||searchDrawer!==drawer||document?.id!=doc.id||isFinishing||isDestroyed)return@request
+                results.removeAllViews()
+                val matches=result.getOrElse{results.addView(ui.text("검색에 실패했습니다. 다시 시도해 주세요.",13f,ui.muted));return@request}
+                if(matches.isEmpty())results.addView(ui.text("검색 결과가 없습니다.",13f,ui.muted));matches.forEach{hit->menuItem(results,"${hit.index+1}페이지","search",hit.snippet){
                     if(generation==request&&searchDrawer===drawer&&document?.id==doc.id){
                         inkView?.goTo(hit.index);inkView?.showSearchHighlights(hit.pageId,hit.bounds)
                         input.clearFocus()
                         (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.hideSoftInputFromWindow(input.windowToken,0)
                     }
-                }}}}
+                }}}
         };override fun afterTextChanged(s:Editable?){} })
         surface.addView(drawer,FrameLayout.LayoutParams(dp(min(420,(resources.configuration.screenWidthDp*.92f).toInt())),-1,Gravity.RIGHT))
     }
@@ -1532,7 +1541,7 @@ class MainActivity:ComponentActivity(){
         if(::repository.isInitialized)repository.clearOcrMemoryCache()
         recognition.releaseIdle()
     }}
-    override fun onDestroy(){pageGrid?.dispose();pageGrid=null;thumbnails.close();ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
+    override fun onDestroy(){documentSearch?.close();documentSearch=null;pageGrid?.dispose();pageGrid=null;thumbnails.close();ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
         if(saveFailed){pendingRecordings.forEach(audio::discardPending);pendingRecordings.clear()}
         audio.close();recognition.close();network.shutdown();super.onDestroy()}
     companion object{
