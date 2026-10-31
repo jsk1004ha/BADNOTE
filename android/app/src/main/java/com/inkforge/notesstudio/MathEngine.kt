@@ -12,7 +12,7 @@ class MathEngine(private val variables:Map<String,Double> = emptyMap(),private v
         require(expression.length<=4096){"수식이 너무 깁니다."}
         text=normalize(expression);pos=0;depth=0
         var variable:String?=null
-        val assignment=Regex("^([A-Za-z][A-Za-z0-9_]*)=").find(text)
+        val assignment=ASSIGNMENT.find(text)
         if(assignment!=null){variable=assignment.groupValues[1];text=text.substring(assignment.value.length)}
         val value=sum();space();require(pos==text.length){"수식 확인: ${text.substring(pos)}"};require(value.isFinite()){ "계산 결과가 유한한 수가 아닙니다." }
         return Result(value,variable)
@@ -40,8 +40,16 @@ class MathEngine(private val variables:Map<String,Double> = emptyMap(),private v
     }
     private fun normalize(source:String):String{
         var s=source.trim().removeSuffix("=").replace("×","*").replace("·","*").replace("÷","/").replace("−","-").replace("π","pi").replace("\\cdot","*").replace("\\times","*").replace("\\left","").replace("\\right","")
-        repeat(12){s=s.replace(Regex("\\\\frac\\{([^{}]*)}\\{([^{}]*)}")){"((${it.groupValues[1]})/(${it.groupValues[2]}))"}}
-        s=s.replace(Regex("\\\\sqrt\\{([^{}]*)}")){"sqrt(${it.groupValues[1]})"}.replace("√(","sqrt(").replace('{','(').replace('}',')')
-        return s.replace(Regex("\\\\(sin|cos|tan|log|ln)")){it.groupValues[1]}
+        repeat(12){s=s.replace(FRACTION){"((${it.groupValues[1]})/(${it.groupValues[2]}))"}}
+        s=s.replace(SQUARE_ROOT){"sqrt(${it.groupValues[1]})"}.replace("√(","sqrt(").replace('{','(').replace('}',')')
+        return s.replace(FUNCTIONS){it.groupValues[1]}
+    }
+    private companion object {
+        val ASSIGNMENT=Regex("^([A-Za-z][A-Za-z0-9_]*)=")
+        // Android's ICU rejects an unescaped closing brace even where desktop java.util.regex
+        // accepts it as a literal. Escape both sides of every TeX argument explicitly.
+        val FRACTION=Regex("\\\\frac\\{([^{}]*)\\}\\{([^{}]*)\\}")
+        val SQUARE_ROOT=Regex("\\\\sqrt\\{([^{}]*)\\}")
+        val FUNCTIONS=Regex("\\\\(sin|cos|tan|log|ln)")
     }
 }

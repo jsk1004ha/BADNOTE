@@ -1,0 +1,7 @@
+# Preserve the original bytes of archived reference sources when moving them.
+legacy/web/app.js -text
+legacy/web/locales/en.js -text
+legacy/web/locales/ja.js -text
+legacy/web/locales/ko.js -text
+legacy/web/locales/pt.js -text
+legacy/web/locales/zh.js -text

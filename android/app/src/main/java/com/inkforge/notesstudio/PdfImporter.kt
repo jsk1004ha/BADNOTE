@@ -1,9 +1,7 @@
 package com.inkforge.notesstudio
 
 import android.graphics.pdf.PdfRenderer
-import android.os.Build
 import android.os.ParcelFileDescriptor
-import androidx.core.os.BuildCompat
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.Executors
@@ -64,8 +62,8 @@ object PdfImporter {
     /** A stopped process can resume unfinished imports from the retained source PDF and page marker. */
     fun resumePending(repository: NoteRepository) {
         repository.documents().forEach { document ->
-            repository.pageIds(document.id).forEach { pageId ->
-                val meta = repository.pageMeta(pageId) ?: return@forEach
+            repository.pageMetas(document.id).forEach { meta ->
+                val pageId = meta.getString("id")
                 if (!meta.optBoolean("pdfImportPending")) return@forEach
                 val source = meta.optString("pdfSource")
                 val importId = meta.optString("pdfImportId")
@@ -103,11 +101,12 @@ object PdfImporter {
         val source = "asset:${job.assetId}"
         val file = repository.asset(job.assetId)
         var imported = 1
+        var textError: String? = null
         try {
             check(!job.cancelled.get()) { "pdfImportCancelled" }
             val pageIds = HashMap<Int, String>()
-            repository.pageIds(job.documentId).forEach { id ->
-                val meta = repository.pageMeta(id) ?: return@forEach
+            repository.pageMetas(job.documentId).forEach { meta ->
+                val id = meta.getString("id")
                 if (meta.optString("pdfImportId") == job.importId && meta.optString("pdfSource") == source)
                     pageIds[meta.optInt("pdfPageNumber")] = id
             }
@@ -131,22 +130,24 @@ object PdfImporter {
                 }
                 if (job.cancelled.get()) throw IllegalStateException("pdfImportCancelled")
                 notify(job, true, null)
-                val native = if (Build.VERSION.SDK_INT >= 35 && BuildCompat.S_EXTENSION_INT >= 13)
-                    null else PdfTextSession.open(file)
-                try {
+                // Index the same character stream used by search on every API level.
+                PdfTextSession.open(file).use { native ->
                     for (index in 0 until job.totalPages) {
                         check(!job.cancelled.get()) { "pdfImportCancelled" }
                         if (repository.document(job.documentId) == null) return
-                        val text = if (Build.VERSION.SDK_INT >= 35 && BuildCompat.S_EXTENSION_INT >= 13)
-                            renderer.openPage(index).use { page -> page.textContents.joinToString(" ") { it.text } }
-                        else requireNotNull(native).pageText(index)
-                        val engine = if (native != null) "pdfium-8086" else "android-pdf-35"
-                        repository.mergePdfText(requireNotNull(pageIds[index + 1]), source, index + 1, text, engine)
+                        val text = try { native.pageText(index) } catch (error: PdfTextFailure) {
+                            // One damaged text page must not prevent later pages from being indexed.
+                            // Leave pdfText absent: search can retry the retained source on demand.
+                            if (textError == null) textError = error.code
+                            continue
+                        }
+                        repository.mergePdfText(requireNotNull(pageIds[index + 1]), source, index + 1,
+                            text, "pdfium-8086")
                     }
-                } finally { native?.close() }
+                }
             }
-            repository.pdfImportState(job.firstPageId, job.importId, source, false, imported)
-            notify(job, false, null)
+            repository.pdfImportState(job.firstPageId, job.importId, source, false, imported, textError)
+            notify(job, false, textError)
         } catch (error: Exception) {
             val code = (error as? PdfTextFailure)?.code ?: error.message.orEmpty().take(80).ifBlank { "pdfImportFailed" }
             repository.pdfImportState(job.firstPageId, job.importId, source, false, imported, code)

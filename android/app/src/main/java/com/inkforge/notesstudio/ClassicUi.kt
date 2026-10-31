@@ -117,6 +117,10 @@ private class OriginalIcon(svg:String,private val tint:Int):Drawable(){
 class NotePreview(context:Context):View(context){
     init{setBackgroundColor(Color.WHITE)}
     var loadBitmap:(()->Bitmap?)?=null
+    internal var onPreviewAttached:(()->Unit)?=null
+    internal var onPreviewDetached:(()->Unit)?=null
+    override fun onAttachedToWindow(){super.onAttachedToWindow();onPreviewAttached?.invoke()}
+    override fun onDetachedFromWindow(){onPreviewDetached?.invoke();super.onDetachedFromWindow()}
     var page:NotePage?=null;set(value){field=value;invalidate()}
     var coverColor:Int?=null;set(value){field=value;invalidate()}
     private val renderer=NoteRenderer()

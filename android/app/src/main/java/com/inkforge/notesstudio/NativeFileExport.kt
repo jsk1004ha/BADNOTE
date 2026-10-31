@@ -40,7 +40,7 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
                     "pdf"->StreamingPdf.write(repository,doc.id,file,{cancelled.get()})
                     "png"->StreamingPdf.render(repository,requireNotNull(repository.page(requireNotNull(currentPage))),1800).let{bmp->
                         try{file.outputStream().use{require(bmp.compress(Bitmap.CompressFormat.PNG,100,it))}}finally{bmp.recycle()}}
-                    "xfdf"->XfdfExport.write(repository,doc.id,file)
+                    "xfdf"->XfdfExport.write(repository,doc.id,file,{cancelled.get()})
                     "json"->{
                         val page=requireNotNull(repository.page(requireNotNull(currentPage))){"현재 페이지가 없습니다."}
                         val result=requireNotNull(repository.ocrResult(page.id)){"먼저 현재 페이지의 손글씨 OCR을 실행해 주세요."}
@@ -109,19 +109,23 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
 
 /** One raster page and one JPEG spool at a time, including at 300 MB total asset size. */
 object StreamingPdf {
-    fun render(repository:NoteRepository,page:NotePage,width:Int):Bitmap {
+    fun render(repository:NoteRepository,page:NotePage,width:Int,imageMaxDimension:Int=2400,cancelled:()->Boolean={false}):Bitmap {
         val height=(width*page.height/page.width).roundToInt().coerceIn(1,5000)
         val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
+        fun checkCancelled(){if(cancelled())throw InterruptedIOException("미리보기를 취소했습니다.")}
         try{
+            checkCancelled()
             val canvas=Canvas(bitmap);canvas.scale(width/page.width,height/page.height)
             val imageCache=mutableMapOf<String,Bitmap>()
             val renderer=NoteRenderer { ref->
                 if(!ref.startsWith("asset:"))null else imageCache.getOrPut(ref){
-                    BackgroundLoader.decodeImage(repository.asset(ref.removePrefix("asset:")),2000)?:error("이미지 자산을 읽지 못했습니다.")
+                    checkCancelled()
+                    BackgroundLoader.decodeImage(repository.asset(ref.removePrefix("asset:")),min(2000,imageMaxDimension))?:error("이미지 자산을 읽지 못했습니다.")
                 }
             }
             try{
                 renderer.template(canvas,page)
+                checkCancelled()
                 val pdfRef=page.meta.optString("pdfSource")
                 if(pdfRef.startsWith("asset:")){
                     PdfRenderer(ParcelFileDescriptor.open(repository.asset(pdfRef.removePrefix("asset:")),ParcelFileDescriptor.MODE_READ_ONLY)).use{pdf->
@@ -131,10 +135,10 @@ object StreamingPdf {
                                 canvas.drawBitmap(background,null,RectF(0f,0f,page.width,page.height),null)}finally{background.recycle()}
                         }}
                 }else if(page.meta.optString("backgroundImage").startsWith("asset:")){
-                    val bg=BackgroundLoader.decodeImage(repository.asset(page.meta.getString("backgroundImage").removePrefix("asset:")),2400)?:error("PDF 배경 자산을 읽지 못했습니다.")
+                    val bg=BackgroundLoader.decodeImage(repository.asset(page.meta.getString("backgroundImage").removePrefix("asset:")),imageMaxDimension)?:error("PDF 배경 자산을 읽지 못했습니다.")
                     try{canvas.drawBitmap(bg,null,RectF(0f,0f,page.width,page.height),null)}finally{bg.recycle()}
                 }
-                page.objects.forEach{obj->renderer.draw(canvas,obj)
+                page.objects.forEach{obj->checkCancelled();renderer.draw(canvas,obj)
                     // Images are consumed in order, so a page with hundreds of images stays bounded.
                     imageCache.values.forEach{it.recycle()};imageCache.clear()}
             }finally{imageCache.values.forEach{it.recycle()}}
@@ -175,13 +179,20 @@ object StreamingPdf {
 }
 
 object XfdfExport{
-    private fun xml(s:String)=s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
-    fun write(repository:NoteRepository,id:String,file:File){
+    internal fun xml(s:String)=s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
+    fun write(repository:NoteRepository,id:String,file:File,cancelled:()->Boolean={false}){
+        fun checkCancelled(){if(cancelled())throw InterruptedIOException("내보내기를 취소했습니다.")}
         file.bufferedWriter().use{out->
+            checkCancelled()
             val source=repository.document(id)?.data?.optString("pdfSourceName","")?:""
             out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><f href=\"${xml(source)}\"/><annots>")
-            repository.pageIds(id).forEachIndexed{index,pageId->val page=requireNotNull(repository.page(pageId));val pw=page.meta.f("pdfPointWidth",595f);val ph=page.meta.f("pdfPointHeight",842f)
-                page.objects.filter{!it.optBoolean("hidden")&&it.optString("type")!="ocrIndex"}.forEach{obj->
+            repository.pageIds(id).forEachIndexed{index,pageId->checkCancelled();val page=requireNotNull(repository.page(pageId));val pw=page.meta.f("pdfPointWidth",595f);val ph=page.meta.f("pdfPointHeight",842f)
+                page.objects.filter{!it.optBoolean("hidden")&&it.optString("type")!="ocrIndex"}.forEach objectLoop@{obj->
+                    checkCancelled()
+                    if((obj.optJSONArray(ObjectEraseMask.KEY)?.length()?:0)>0){
+                        MaskedXfdfAnnotation.write(repository,page,obj,index,out,::checkCancelled)
+                        return@objectLoop
+                    }
                     val b=InkGeometry.bounds(obj)
                     fun x(v:Float)=v/page.width*pw
                     fun y(v:Float)=ph-v/page.height*ph
