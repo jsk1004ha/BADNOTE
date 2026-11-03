@@ -1,0 +1,42 @@
+name: Asset cleanup regressions
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  asset-cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install build SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.1.0'
+      - name: Build test application and unit tests
+        working-directory: android
+        run: ./gradlew :app:assembleUpdateDebug :app:assembleUpdateDebugAndroidTest :app:testUpdateDebugUnitTest --no-daemon
+      - name: Allow emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - name: Verify asset cleanup with real SQLite and files
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: |
+            adb install -r android/app/build/outputs/apk/update/debug/app-update-debug.apk
+            adb install -r android/app/build/outputs/apk/androidTest/update/debug/app-update-debug-androidTest.apk
+            adb shell am instrument -w -r -e assetCleanupOnly true com.inkforge.note4.debug.test/com.inkforge.notesstudio.NativeSmokeInstrumentation | tee asset-cleanup-result.txt
+            grep -q 'INSTRUMENTATION_RESULT: passed=true' asset-cleanup-result.txt
