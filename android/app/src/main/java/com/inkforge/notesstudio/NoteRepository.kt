@@ -111,7 +111,58 @@ class NoteRepository(context: Context) : SQLiteOpenHelper(context, "badnote-nati
         require(pageIds(doc).size > 1) { "마지막 페이지는 삭제할 수 없습니다." }
         writableDatabase.delete("pages", "document_id=? AND id=?", arrayOf(doc, id))
     }
-    fun deleteDocument(id: String) { writableDatabase.delete("documents", "id=?", arrayOf(id)) }
+    fun deleteDocument(id: String, protectedAssets: Set<String> = emptySet()) {
+        transaction {
+            val pending = pendingAssetDeletions()
+            // Keep a durable candidate list before cascading away the only references.
+            // A global directory sweep would also remove imports, recordings or undo data.
+            readableDatabase.rawQuery("""
+                SELECT body FROM documents WHERE id=?
+                UNION ALL SELECT body FROM pages WHERE document_id=?
+                UNION ALL SELECT objects.body FROM objects JOIN pages ON pages.id=objects.page_id WHERE pages.document_id=?
+            """.trimIndent(), arrayOf(id, id, id)).use { cursor ->
+                while (cursor.moveToNext()) collectAssets(JSONObject(cursor.getString(0)), pending)
+            }
+            writableDatabase.delete("documents", "id=?", arrayOf(id))
+            setting(PENDING_ASSET_DELETIONS, JSONArray(pending.toList()).toString(), true)
+        }
+        // A caller's outer transaction may still roll back the document deletion.
+        if (!writableDatabase.inTransaction()) reclaimPendingAssets(protectedAssets)
+    }
+
+    /** Run on executor with writes; pass live clipboard references when an Activity is alive. */
+    fun reclaimPendingAssets(protectedAssets: Set<String> = emptySet()) {
+        if (writableDatabase.inTransaction()) return
+        try {
+            val pending = pendingAssetDeletions()
+            if (pending.isEmpty()) return
+            val unreferenced = pending.toMutableSet().apply { removeAll(protectedAssets) }
+            // Include trashed documents and every page/object, since assets can be shared.
+            // Finish the whole reference scan before deleting any file; malformed data
+            // leaves the candidate journal intact for a later retry.
+            readableDatabase.rawQuery("SELECT body FROM documents UNION ALL SELECT body FROM pages UNION ALL SELECT body FROM objects", null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val references = mutableSetOf<String>()
+                    collectAssets(JSONObject(cursor.getString(0)), references)
+                    unreferenced.removeAll(references)
+                }
+            }
+            for (id in unreferenced) {
+                val file = runCatching { asset(id) }.getOrNull() ?: continue
+                if (!file.exists() || (file.isFile && file.delete())) pending.remove(id)
+            }
+            // Shared/temporarily protected files and failed deletes stay queued. An app
+            // restart (no in-memory clipboard/history) or the next deletion retries them.
+            setting(PENDING_ASSET_DELETIONS, JSONArray(pending.toList()).toString(), true)
+        } catch (error: Exception) {
+            android.util.Log.w("NoteRepository", "Deferred asset cleanup; candidate journal retained", error)
+        }
+    }
+
+    private fun pendingAssetDeletions(): MutableSet<String> {
+        val ids = JSONArray(setting(PENDING_ASSET_DELETIONS, "[]"))
+        return (0 until ids.length()).mapTo(linkedSetOf()) { ids.getString(it) }
+    }
 
     fun asset(id: String): File {
         require(Regex("[A-Za-z0-9_.-]{1,160}").matches(id)) { "자산 경로가 잘못되었습니다." }
@@ -234,6 +285,7 @@ class NoteRepository(context: Context) : SQLiteOpenHelper(context, "badnote-nati
         return if (first == 80 && second == 75) importArchive(buffered, folder) else importLegacy(buffered, folder)
     }
     companion object {
+        private const val PENDING_ASSET_DELETIONS = "pending-permanent-delete-assets"
         fun extension(mime: String) = when (mime.substringBefore(';')) {
             "image/png" -> "png"; "image/jpeg" -> "jpg"; "image/webp" -> "webp"
             "audio/webm" -> "webm"; "audio/mp4" -> "m4a"; "audio/ogg" -> "ogg"

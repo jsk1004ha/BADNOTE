@@ -27,7 +27,8 @@ class NativeSmokeInstrumentation:Instrumentation(){
     private lateinit var repository:NoteRepository
     private var downTime=0L
     private var uiOnly=false
-    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);uiOnly=arguments?.getString("uiOnly")=="true";start()}
+    private var assetCleanupOnly=false
+    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);uiOnly=arguments?.getString("uiOnly")=="true";assetCleanupOnly=arguments?.getString("assetCleanupOnly")=="true";start()}
     private fun <T> ui(block:()->T):T{val value=AtomicReference<T>();val failure=AtomicReference<Throwable>();runOnMainSync{try{value.set(block())}catch(e:Throwable){failure.set(e)}};failure.get()?.let{throw it};return value.get()}
     private fun await(label:String,condition:()->Boolean){val end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(condition())return;SystemClock.sleep(50)};error("Timeout: $label")}
     private fun check(value:Boolean,message:String){if(!value)throw AssertionError(message)}
@@ -35,6 +36,11 @@ class NativeSmokeInstrumentation:Instrumentation(){
         val result=Bundle()
         try{
             check(targetContext.packageName.endsWith(".debug"),"Refusing to test a release app")
+            if(assetCleanupOnly){
+                AssetCleanupChecks.run(targetContext)
+                result.putString("assetCleanup","PASS: owned/shared/trash/clipboard assets, in-flight files, rollback and deferred retry")
+                result.putString("passed","true");finish(Activity.RESULT_OK,result);return
+            }
             NoteRepository(targetContext).use{it.setting("legacy-migration-complete","true",true);it.setting("preferences","{\"autoOcr\":false,\"drawHold\":false,\"scribbleErase\":false,\"stylusOnly\":true}",true)}
             activity=startActivitySync(Intent(Intent.ACTION_MAIN).setClassName(targetContext.packageName,MainActivity::class.java.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             repository=activity.repository
