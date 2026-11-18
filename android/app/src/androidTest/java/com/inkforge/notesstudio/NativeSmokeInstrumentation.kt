@@ -54,6 +54,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
     private var w3RunId:String?=null
     private var replayArguments:Bundle?=null
     private var localChecks:Bundle?=null
+    private var assetCleanupOnly=false
     override fun finish(resultCode:Int,results:Bundle?){
         try{
             val receipt=JSONObject()
@@ -61,7 +62,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
             File(targetContext.filesDir,"last-instrumentation-result.json").writeText(receipt.toString())
         }finally{super.finish(resultCode,results)}
     }
-    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);localChecks=arguments;penPresentationOnly=arguments?.getString("penPresentationOnly")=="true";penInputOnly=arguments?.getString("penInputOnly")=="true";viewportOnly=arguments?.getString("viewportOnly")=="true";writingOnly=arguments?.getString("writingOnly")=="true";writingBaseline=arguments?.getString("writingBaseline")=="true";uiOnly=arguments?.getString("uiOnly")=="true";migrationOnly=arguments?.getString("migrationOnly")=="true";ocrOnly=arguments?.getString("ocrOnly")=="true";pdfOnly=arguments?.getString("pdfOnly")=="true";s3Only=arguments?.getString("s3Only")=="true";s5aOnly=arguments?.getString("s5aOnly")=="true";s5bOnly=arguments?.getString("s5bOnly")=="true";s5aBitmapOnly=arguments?.getString("s5aBitmapOnly")=="true";brushRasterOnly=arguments?.getString("brushRasterOnly")=="true";brushRasterTransparent=arguments?.getString("brushRasterTransparent")=="true";s5cOnly=arguments?.getString("s5cOnly")=="true";mediaOnly=arguments?.getString("mediaOnly")=="true";pdfStressMiB=arguments?.getString("pdfStressMiB")?.toIntOrNull();pdfStressCancel=arguments?.getString("pdfStressCancel")=="true";w3Only=arguments?.getString("w3Only")=="true";w3RunId=arguments?.getString("w3RunId");replayArguments=arguments?.takeIf{it.containsKey("ocrInput")};legacyOnly=arguments?.getString("legacyOnly")=="true";start()}
+    override fun onCreate(arguments:Bundle?){super.onCreate(arguments);localChecks=arguments;penPresentationOnly=arguments?.getString("penPresentationOnly")=="true";penInputOnly=arguments?.getString("penInputOnly")=="true";viewportOnly=arguments?.getString("viewportOnly")=="true";writingOnly=arguments?.getString("writingOnly")=="true";writingBaseline=arguments?.getString("writingBaseline")=="true";uiOnly=arguments?.getString("uiOnly")=="true";migrationOnly=arguments?.getString("migrationOnly")=="true";ocrOnly=arguments?.getString("ocrOnly")=="true";pdfOnly=arguments?.getString("pdfOnly")=="true";s3Only=arguments?.getString("s3Only")=="true";s5aOnly=arguments?.getString("s5aOnly")=="true";s5bOnly=arguments?.getString("s5bOnly")=="true";s5aBitmapOnly=arguments?.getString("s5aBitmapOnly")=="true";brushRasterOnly=arguments?.getString("brushRasterOnly")=="true";brushRasterTransparent=arguments?.getString("brushRasterTransparent")=="true";s5cOnly=arguments?.getString("s5cOnly")=="true";mediaOnly=arguments?.getString("mediaOnly")=="true";pdfStressMiB=arguments?.getString("pdfStressMiB")?.toIntOrNull();pdfStressCancel=arguments?.getString("pdfStressCancel")=="true";w3Only=arguments?.getString("w3Only")=="true";w3RunId=arguments?.getString("w3RunId");replayArguments=arguments?.takeIf{it.containsKey("ocrInput")};legacyOnly=arguments?.getString("legacyOnly")=="true";assetCleanupOnly=arguments?.getString("assetCleanupOnly")=="true";start()}
     private fun <T> ui(block:()->T):T{val value=AtomicReference<T>();val failure=AtomicReference<Throwable>();runOnMainSync{try{value.set(block())}catch(e:Throwable){failure.set(e)}};failure.get()?.let{throw it};return value.get()}
     private fun await(label:String,condition:()->Boolean){val end=SystemClock.uptimeMillis()+30000;while(SystemClock.uptimeMillis()<end){if(condition())return;SystemClock.sleep(50)};error("Timeout: $label")}
     private fun check(value:Boolean,message:String){if(!value)throw AssertionError(message)}
@@ -106,6 +107,11 @@ class NativeSmokeInstrumentation:Instrumentation(){
         try{
             check(targetContext.packageName.endsWith(".debug"),"Refusing to test a release app")
             if(android.os.Build.VERSION.SDK_INT>=33)android.graphics.HardwareRenderer.setDrawingEnabled(true)
+            if(assetCleanupOnly){
+                AssetCleanupChecks.run(targetContext)
+                result.putString("assetCleanup","PASS: owned/shared/trash/clipboard assets, in-flight files, rollback and deferred retry")
+                result.putString("passed","true");finish(Activity.RESULT_OK,result);return
+            }
             if(localChecks?.getString("pdfZoomOnly")=="true"){
                 result.putString("pdfZoom",PdfZoomChecks.run(targetContext,this))
                 result.putString("passed","true");finish(0,result);return

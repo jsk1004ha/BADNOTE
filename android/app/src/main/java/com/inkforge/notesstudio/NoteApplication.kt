@@ -28,6 +28,9 @@ class NoteApplication : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
             override fun onActivityDestroyed(activity: Activity) = Unit
         })
+        // Run once per process before any user deletion can be queued. UI deletions retain their
+        // candidate journal until this point, protecting clipboard and undo assets in every window.
+        repository.executor.execute { repository.reclaimPendingAssets() }
         runCatching { BackupSchedule.restore(this) }.onFailure { error ->
             runCatching { BackupPreferences(this).status("자동 백업 예약 실패 · ${error.message}") }
         }

@@ -160,6 +160,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         fun beginTransaction() = db.beginTransaction()
         fun setTransactionSuccessful() = db.setTransactionSuccessful()
         fun endTransaction() = db.endTransaction()
+        fun inTransaction() = db.inTransaction()
     }
 
     private fun bumpGeneration(pageId: String, captureFloor: Long = 1) {
@@ -592,9 +593,26 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }
         stoppedImport?.let(PdfImporter::cancelImport)
     }
-    fun deleteDocument(id: String) {
+    fun deleteDocument(id: String, protectedAssets: Set<String> = emptySet(), reclaimAssets: Boolean = true) {
         PdfImporter.cancelDocument(id)
-        writableDatabase.delete("documents", "id=?", arrayOf(id))
+        transaction {
+            val pending = pendingAssetDeletions()
+            // Journal only assets reachable from the deleted document. This avoids sweeping
+            // in-flight imports, recordings, clipboard entries and undo-only objects.
+            readableDatabase.rawQuery("""
+                SELECT body FROM documents WHERE id=?
+                UNION ALL SELECT body FROM pages WHERE document_id=?
+                UNION ALL SELECT objects.body FROM objects JOIN pages ON pages.id=objects.page_id WHERE pages.document_id=?
+            """.trimIndent(), arrayOf(id, id, id)).use { cursor ->
+                while (cursor.moveToNext()) collectAssets(JSONObject(cursor.getString(0)), pending)
+            }
+            writableDatabase.delete("documents", "id=?", arrayOf(id))
+            setting(PENDING_ASSET_DELETIONS, JSONArray(pending.toList()).toString(), true)
+        }
+        // A caller's outer transaction may still roll back the document deletion. UI callers
+        // also defer reclamation until the next process start so every window's clipboard and
+        // undo history remain protected without copying those private histories across windows.
+        if (reclaimAssets && !writableDatabase.inTransaction()) reclaimPendingAssets(protectedAssets)
     }
 
     /** The result transaction rejects both an edited page and an Undo that restored old bytes. */
@@ -984,6 +1002,39 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             }, SQLiteDatabase.CONFLICT_REPLACE)
         }
     }
+    /** Run on executor with writes; pass live clipboard references when an Activity is alive. */
+    fun reclaimPendingAssets(protectedAssets: Set<String> = emptySet()) {
+        if (writableDatabase.inTransaction()) return
+        try {
+            val pending = pendingAssetDeletions()
+            if (pending.isEmpty()) return
+            val unreferenced = pending.toMutableSet().apply { removeAll(protectedAssets) }
+            // Include trashed documents and every page/object, since assets can be shared.
+            // Finish the whole reference scan before deleting any file; malformed data
+            // leaves the candidate journal intact for a later retry.
+            readableDatabase.rawQuery("SELECT body FROM documents UNION ALL SELECT body FROM pages UNION ALL SELECT body FROM objects", null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val references = mutableSetOf<String>()
+                    collectAssets(JSONObject(cursor.getString(0)), references)
+                    unreferenced.removeAll(references)
+                }
+            }
+            for (id in unreferenced) {
+                val file = runCatching { asset(id) }.getOrNull() ?: continue
+                if (!file.exists() || (file.isFile && file.delete())) pending.remove(id)
+            }
+            // Shared/temporarily protected files and failed deletes stay queued. An app
+            // restart (no in-memory clipboard/history) or the next deletion retries them.
+            setting(PENDING_ASSET_DELETIONS, JSONArray(pending.toList()).toString(), true)
+        } catch (error: Exception) {
+            android.util.Log.w("NoteRepository", "Deferred asset cleanup; candidate journal retained", error)
+        }
+    }
+
+    private fun pendingAssetDeletions(): MutableSet<String> {
+        val ids = JSONArray(setting(PENDING_ASSET_DELETIONS, "[]"))
+        return (0 until ids.length()).mapTo(linkedSetOf()) { ids.getString(it) }
+    }
 
     fun asset(id: String): File {
         require(Regex("[A-Za-z0-9_.-]{1,160}").matches(id)) { "자산 경로가 잘못되었습니다." }
@@ -1279,6 +1330,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
     }
     companion object {
         private val assetPublicationLock = Any()
+        private const val PENDING_ASSET_DELETIONS = "pending-permanent-delete-assets"
         /** Decode a bounded sample, not only the header; corrupt imports never reach the final name. */
         internal fun checkedImageSize(file: File): Pair<Int, Int> {
             RandomAccessFile(file, "r").use { source ->
@@ -1324,7 +1376,6 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
             finally { decoded.recycle() }
             return width to height
         }
-
         fun extension(mime: String) = when (mime.substringBefore(';')) {
             "image/png" -> "png"; "image/jpeg" -> "jpg"; "image/webp" -> "webp"
             "audio/webm" -> "webm"; "audio/mp4" -> "m4a"; "audio/ogg" -> "ogg"
