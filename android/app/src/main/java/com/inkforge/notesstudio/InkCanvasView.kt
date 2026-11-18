@@ -33,6 +33,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private var telemetryText="펜 입력 대기"
     var continuous=true
     var ruler=false
+    var pdfDarkMode=false
+        set(value){if(field!=value){finishContact();field=value;sceneChanged()}}
     var rulerAngle=0f
     var penSettings=JSONObject()
     var onPageChanged:(Int)->Unit={}
@@ -532,12 +534,13 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             val i=geometry.index;val top=geometry.top;val pageHeight=geometry.height
             val id=pageIds[i]
             canvas.save();canvas.translate(originX,top);canvas.scale(scale,scale)
-            if(scene){paint.color=Color.WHITE;paint.style=Paint.Style.FILL;canvas.drawRect(0f,0f,1000f,pageHeight,paint)}
+            val darkPdf=pdfDarkMode&&metadata.getOrNull(i)?.optString("pdfSource")?.startsWith("asset:")==true
+            if(scene){paint.color=if(darkPdf)PdfDisplayColors.PAPER else Color.WHITE;paint.style=Paint.Style.FILL;canvas.drawRect(0f,0f,1000f,pageHeight,paint)}
             val page=pages[id]
             if(page!=null){
                 canvas.save();canvas.clipRect(0f,0f,page.width,page.height)
                 if(scene){
-                    renderer.template(canvas,page)
+                    if(!darkPdf)renderer.template(canvas,page)
                     val visibleRect=InkBounds((screenClip.left-originX)/scale,(screenClip.top-top)/scale,
                         (screenClip.right-originX)/scale,(screenClip.bottom-top)/scale)
                     fun visible(bounds:InkBounds?,moving:Boolean):Boolean {
@@ -550,7 +553,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                         return damage.any{left<=it.right&&right>=it.left&&first<=it.bottom&&last>=it.top}
                     }
                     // Keep background sampling and Canvas clipping identical to the original viewport.
-                    background.draw(canvas,page,RectF(-originX/scale,-top/scale,(width-originX)/scale,(height-top)/scale),scale)
+                    background.draw(canvas,page,RectF(-originX/scale,-top/scale,(width-originX)/scale,(height-top)/scale),scale,darkPdf)
                     val layers=moveLayers?.takeIf{contactPage?.id==id}?:layersFor(page)
                     for(layer in layers){
                         if(layer.moving){canvas.save();canvas.translate(moveDx,moveDy)}

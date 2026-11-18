@@ -166,7 +166,7 @@ class BackgroundLoader(context: Context, private val repository: NoteRepository,
         return pdf
     }
 
-    fun draw(canvas: Canvas, page: NotePage, visible: RectF, scale: Float) {
+    fun draw(canvas: Canvas, page: NotePage, visible: RectF, scale: Float, darkPdf: Boolean = false) {
         if (closed) return
         val reference = page.meta.optString("pdfSource")
         if (!reference.startsWith("asset:")) {
@@ -203,9 +203,9 @@ class BackgroundLoader(context: Context, private val repository: NoteRepository,
             if (missing.isNotEmpty()) {
                 // The overview covers newly exposed areas; sharper cached buckets and exact tiles then win.
                 for (other in buckets.indices) if (other != bucket)
-                    drawTiles(canvas, buckets[other], left, top, right, bottom)
+                    drawTiles(canvas, buckets[other], left, top, right, bottom, darkPdf)
             }
-            drawTiles(canvas, buckets[bucket], left, top, right, bottom)
+            drawTiles(canvas, buckets[bucket], left, top, right, bottom, darkPdf)
             canvas.restore()
         }
         missing.sortBy(Tile::priority)
@@ -241,14 +241,15 @@ class BackgroundLoader(context: Context, private val repository: NoteRepository,
     }
 
     private fun drawTiles(canvas: Canvas, tiles: Map<String, CachedBitmap>?,
-                          left: Float, top: Float, right: Float, bottom: Float) {
+                          left: Float, top: Float, right: Float, bottom: Float, darkPdf: Boolean) {
         if (tiles == null) return
         for ((key, value) in tiles) {
             val tile = requireNotNull(value.tile)
             if (tile.left >= right || tile.top >= bottom || tile.left + tile.width <= left || tile.top + tile.height <= top) continue
             cache.get(key) // Keep the fallback currently being displayed inside the same bounded LRU.
             destination.set(tile.left, tile.top, tile.left + tile.width, tile.top + tile.height)
-            canvas.drawBitmap(value.bitmap, null, destination, bitmapPaint)
+            canvas.drawBitmap(value.bitmap, null, destination,
+                PdfDisplayColors.paint(darkPdf) ?: bitmapPaint)
         }
     }
 

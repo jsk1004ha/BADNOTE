@@ -1,6 +1,6 @@
-# BADNOTE 4.1.4 Beta 1
+# BADNOTE 4.2.1
 
-갤럭시 탭·S Pen용 Android 필기 앱입니다. 현재 작업 기준은 **4.1.4-beta.1 / versionCode 421**이며, 공개 v4.1.3-beta.2 이후의 텍스트·지우개·펜·올가미·페이지·OCR 개선을 모았습니다. 실제 버전 값은 [앱 빌드 설정](android/app/build.gradle)을 따릅니다. [Beta 1 변경 사항과 설치·검증 범위](docs/RELEASE-4.1.4-BETA.1-KO.md)를 확인하십시오.
+갤럭시 탭·S Pen용 Android 필기 앱입니다. [정식 4.2.1 변경 사항](docs/RELEASE-4.2.1-KO.md)과 [설치 파일](https://github.com/jsk1004ha/BADNOTE/releases/latest)을 확인할 수 있습니다.
 
 **프로젝트 루트의 android/가 현재 앱 소스입니다.** docs/archive/의 구버전 기록은 현재 작업 기준으로 사용하지 마십시오.
 
@@ -25,14 +25,32 @@
 - 문서 검색·현재 페이지 OCR은 편집기 상단에서 바로 실행합니다. 검색 결과를 누르면 좌표가 있는 일치 영역을 강조합니다. OCR 결과는 내부 진단 없이 한 편집란에서 줄바꿈·띄어쓰기를 유지하며 복사·교정·삽입합니다.
 - 큰 수식은 원본 획을 보존하고 모델 입력만 정규화·단순화합니다. 처리할 수 없는 일부 줄이 다른 줄의 결과를 버리지 않도록 했습니다.
 
-실제 사람의 필기 정확도와 물리 Galaxy/S Pen 지연은 측정하지 않았습니다. [OCR 구현·검증](docs/OCR-NATIVE-IMPLEMENTATION-KO.md), [펜·올가미 측정](docs/PEN-4.1.3-PERFORMANCE-KO.md), [현재 설치 범위](docs/RELEASE-4.1.4-BETA.1-KO.md)에 실행 단계와 결과를 구분해 기록했습니다.
+실제 사람의 필기 정확도와 물리 Galaxy/S Pen 지연은 측정하지 않았습니다. [OCR 구현·검증](docs/OCR-NATIVE-IMPLEMENTATION-KO.md), [펜·올가미 측정](docs/PEN-4.1.3-PERFORMANCE-KO.md), [4.1.4 개발 기록](docs/RELEASE-4.1.4-BETA.1-KO.md)에 실행 단계와 결과를 구분해 기록했습니다.
+
+## 기능
+
+- Kotlin Canvas 필기: 필압·기울기·방향·historical samples, S Pen 버튼 지우개, 스타일러스 전용 입력, 손가락 팬·핀치 확대
+- 만년필·볼펜·젤펜·브러시·연필·파인라이너, 형광펜, 필압·색상·굵기·획 안정화·불투명도 설정
+- 획·정밀 지우개, 낙서 지우기, 올가미 이동·확대·축소·색 변경·복사·붙여넣기·잠금, 실행 취소·다시 실행
+- 텍스트·스티키 노트·이미지·도형·스티커·암기 가림 테이프·자·레이저 포인터
+- 연속/단일 페이지, 페이지 추가·복제·이동·삭제, 북마크·목차·문서 탭·최근 페이지 복원
+- 중첩 폴더, 즐겨찾기, 태그, 검색, 휴지통과 복원
+- 원본 PDF 보관 및 화면에 보이는 영역의 타일 렌더링, PDF 삽입, `.ifnote`/PDF/PNG/XFDF 내보내기
+- ML Kit 한글·영문 및 선택 언어 필기 OCR, 유휴 OCR 검색 색인, 이미지 OCR, 수식 직접 입력과 기기 내 계산(전용 손글씨 수식 엔진은 미지원)
+- 마이크 녹음·재생, 한국어·영어·일본어·중국어·포르투갈어 사전, 앱 업데이트 확인
+
+## 대용량 내보내기와 공유
+
+노트는 SQLite WAL에 문서 정보·페이지·객체를 분리해 저장하며, 대형 자산은 별도 파일입니다. `.ifnote` 내보내기는 페이지 단위 JSON과 자산을 `ZipOutputStream`에 64 KiB씩 기록합니다. 문서 전체 복제나 자산 base64 변환, 전체 결과 Blob 생성이 없습니다. PDF는 한 페이지씩 네이티브 Canvas로 벡터 PDF를 생성·종료한 뒤 64 KiB 단위로 병합합니다. 가져온 PDF 배경은 래스터로 유지하며, 이미지 기록 예산을 넘는 페이지와 API 29 미만의 연필·형광펜 페이지는 래스터 방식으로 대체합니다. [구조·범위·검증](docs/VECTOR-PDF-REFACTOR-KO.md)을 참고하십시오.
+
+공유 파일을 디스크에 완성한 다음 Android `ACTION_SEND`와 FileProvider 읽기 권한으로 시스템 공유 창을 엽니다. Web Share API의 transient user activation에 의존하지 않습니다. 공유 파일은 수신 앱이 비동기로 읽을 수 있도록 유지하고, 7일이 지난 파일은 다음 내보내기 때 정리합니다.
 
 ## 빌드와 검증
 
 Java 17 이상, Android SDK 36, Build Tools 36.1.0, NDK 28.2.13676358, CMake 3.22.1이 필요합니다. Gradle wrapper와 고정 PDFium 준비 도구를 사용합니다.
 
     python tools/test_native.py
-    python tools/build_apk.py --variant both --ocr-beta
+    python tools/build_apk.py --variant both
 
 SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/README-BUILD-KO.md)에 있습니다. Debug·release APK는 직접 Gradle을 실행해도 루트 build/apk/에 자동으로 모입니다. 계측용 테스트 APK는 build/apk/tests/에 생성됩니다.
 
@@ -42,7 +60,7 @@ SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/RE
 | -Update.apk | com.inkforge.note4 | 기존 패키지 업데이트 |
 | -SideBySide.apk | com.inkforge.note5 | 병행 설치 또는 기존 병행 앱 업데이트 |
 
-공개 업데이트 APK는 기존 배포 인증서와 일치해야 합니다. 로컬 검증용 서명은 공개 배포 키를 대체하지 않습니다. 공개 설치판을 유지하며 검증하려면 분리된 Debug 패키지를 사용하십시오. GitHub 베타는 prerelease로 게시하며 정식 Latest와 자동 업데이트 정책은 유지합니다.
+공개 업데이트 APK는 기존 배포 인증서와 일치해야 합니다. 로컬 검증용 서명은 공개 배포 키를 대체하지 않습니다. 공개 설치판을 유지하며 검증하려면 분리된 Debug 패키지를 사용하십시오. GitHub Releases의 Latest에서 정식 업데이트를 확인할 수 있습니다.
 
 기존 노트는 ZIP v5 .ifnote로 내보내고 가져올 수 있으며 3.x JSON 가져오기와 명시적인 호환 JSON 내보내기도 지원합니다. 같은 패키지·서명 업데이트의 기존 데이터 이전과 다른 패키지 사이의 .ifnote 이전을 구분합니다.
 
@@ -66,3 +84,7 @@ SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/RE
 - 초기 네이티브 개발: [greencow](https://github.com/grncow)
 - 포르투갈어 번역 및 UI 개선: [dyduq12](https://github.com/dyduq12)
 - 아이콘: [Photon616](https://github.com/Photon616)
+
+### 태블릿 부가 기능
+
+문서별 창, SAF 자동 백업, 숫자 도구 단축키, PDF 배경 다크 모드의 사용법·저장 범위·검증은 [태블릿 부가 기능 문서](docs/TABLET-PRODUCTIVITY-KO.md)에 정리했습니다.
