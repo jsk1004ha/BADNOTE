@@ -20,10 +20,10 @@ internal object DocumentSearchChecks {
         val ownedAssets = ArrayList<String>()
         try {
             NoteRepository(context, database).use { repository ->
-                val asset = tinyPdf().inputStream().use { repository.storeAsset(it, "pdf") }
-                ownedAssets += asset
-                pdfChecks(repository, asset, ownedAssets)
-                cancellationAndSaveChecks(repository, asset)
+                val pdf = tinyPdf()
+                fun storePdf() = pdf.inputStream().use { repository.storeAsset(it, "pdf") }.also { ownedAssets += it }
+                pdfChecks(repository, storePdf(), ownedAssets)
+                cancellationAndSaveChecks(repository, storePdf())
                 positionedGlyphChecks(repository, fixtureContext, ownedAssets)
                 ocrAndObjectChecks(repository)
             }
@@ -185,8 +185,6 @@ internal object DocumentSearchChecks {
         repository.addPage(document.id, failedText, 5)
         check(repository.searchDocumentPages(document.id, "annotation after extraction failure").single().bounds ==
             listOf(InkBounds(40f, 50f, 340f, 110f)))
-        repository.deleteDocument(document.id)
-
         val complete = CountDownLatch(1)
         val failure = AtomicReference<String?>()
         val imported = repository.asset(asset).inputStream().use {
@@ -202,6 +200,7 @@ internal object DocumentSearchChecks {
         check(repository.searchDocumentPages(imported.id, "alpha").single().bounds == alpha.bounds)
         check(repository.searchDocumentPages(imported.id, "Rotated").single().bounds == turned.bounds)
         repository.deleteDocument(imported.id)
+        repository.deleteDocument(document.id)
     }
 
     /** Observed synthetic Skia Type3 PDF: glyph Td operators induce false PDFium CR/LF. */

@@ -99,12 +99,14 @@ internal object S5cOcrChecks {
             changedOnce.objects[0].array("points").getJSONObject(0).put("x",444)
             repository.putPage(doc.id,changedOnce,0)
             check(repository.ocrText(page.id).isEmpty())
-            check(repository.searchDocumentPages(doc.id, "user correction").map { it.index } == listOf(1)) {
+            check(repository.searchDocumentPages(doc.id, "copied correction").map { it.index } == listOf(1)) {
                 "Search must exclude the stale original while retaining its unchanged duplicate"
             }
-            check(doc.id in repository.searchOcrDocuments("user correction"))
-            repository.removePage(doc.id, copy.id)
+            check(repository.searchDocumentPages(doc.id, "user correction").isEmpty())
             check(doc.id !in repository.searchOcrDocuments("user correction"))
+            check(doc.id in repository.searchOcrDocuments("copied correction"))
+            repository.removePage(doc.id, copy.id)
+            check(doc.id !in repository.searchOcrDocuments("copied correction"))
             repository.putPage(doc.id,beforeUndo,0)
             check(OcrInput.pageDigest(requireNotNull(repository.page(page.id)),"ko-primary") == pageDigest)
             check(!repository.putOcrResult(doc.id,page.id,snapshot.generation,pageDigest,"ko-primary",differentEngine)) {

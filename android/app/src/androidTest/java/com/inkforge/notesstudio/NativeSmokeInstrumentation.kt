@@ -109,8 +109,8 @@ class NativeSmokeInstrumentation:Instrumentation(){
             if(android.os.Build.VERSION.SDK_INT>=33)android.graphics.HardwareRenderer.setDrawingEnabled(true)
             if(assetCleanupOnly){
                 AssetCleanupChecks.run(targetContext)
-                result.putString("assetCleanup","PASS: owned/shared/trash/clipboard assets, in-flight files, rollback and deferred retry")
-                result.putString("passed","true");finish(Activity.RESULT_OK,result);return
+                result.putString("assetCleanup","owned_shared_trash_clipboard_rollback_deferred_retry_verified")
+                result.putString("passed","true");finish(0,result);return
             }
             if(localChecks?.getString("pdfZoomOnly")=="true"){
                 result.putString("pdfZoom",PdfZoomChecks.run(targetContext,this))

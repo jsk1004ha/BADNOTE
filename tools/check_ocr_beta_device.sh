@@ -18,7 +18,7 @@ for mode, marker in (
     ('viewportOnly','INSTRUMENTATION_RESULT: viewport=pan_pinch_auto_gate_bounded_draw_verified'),
     ('documentSearchOnly','INSTRUMENTATION_RESULT: documentSearch=pdf_ocr_text_match_bounds_verified'),
     ('xfdfExportOnly','INSTRUMENTATION_RESULT: xfdfExport=masked_highlighter_shape_text_appearance_verified'),
-    ('assetCleanupOnly','INSTRUMENTATION_RESULT: assetCleanup=PASS:'),
+    ('assetCleanupOnly','INSTRUMENTATION_RESULT: assetCleanup=owned_shared_trash_clipboard_rollback_deferred_retry_verified'),
 ):
     require_instrument_success(Path(f'build/ocr-beta/{mode}.log').read_text(),marker)
 PY
