@@ -25,7 +25,7 @@ def main() -> None:
     wrapper = ANDROID / ("gradlew.bat" if os.name == "nt" else "gradlew")
     parser.add_argument("--gradle", default=os.environ.get("GRADLE", str(wrapper) if wrapper.exists() else "gradle"))
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--ocr-beta", action="store_true", help="Enable the current beta OCR paths in release APKs")
+    parser.add_argument("--ocr-beta", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if not (ANDROID / "local.properties").exists() and not (os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")):

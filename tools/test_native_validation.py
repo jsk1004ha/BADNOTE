@@ -15,7 +15,7 @@ class ReleaseVersionTest(unittest.TestCase):
             android = Path(directory)
             (android / "app").mkdir()
             with patch("run_native_validation.ANDROID", android):
-                for code, name in ((421, "4.1.4-beta.1"), (422, "4.1.4-beta.2")):
+                for code, name in ((422, "4.1.4"), (431, "4.2.1")):
                     (android / "app/build.gradle").write_text(
                         f"defaultConfig {{\n    versionCode {code}\n    versionName '{name}'\n}}\n",
                         encoding="utf-8")

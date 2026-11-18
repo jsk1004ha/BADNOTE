@@ -1,6 +1,6 @@
-# BADNOTE 4.1.4 Beta 1
+# BADNOTE 4.1.4
 
-4.1.3 Beta 2 이후의 텍스트 편집·정밀 지우개·필기 표시·페이지 관리·OCR 개선을 모은 베타입니다.
+4.1.3 Beta 2 이후의 텍스트 편집·정밀 지우개·필기 표시·페이지 관리·OCR 개선을 정식 릴리스로 묶었습니다.
 
 - 텍스트를 페이지 위에서 바로 입력하고 한글 조합, 선택 범위·커서 서식, 글꼴·색상·크기·정렬·간격·목록·상자 스타일을 편집합니다. 선택·입력 상태에 맞는 플로팅 도구막대와 팝오버를 구성했습니다.
 - 텍스트 상자 이동·폭 변경·비율 확대·회전 손잡이를 정리했습니다. 회전 상태의 크기 변경에서도 반대쪽 기준점을 유지하며, 메뉴는 키보드와 화면 경계에 맞춰 배치합니다.
@@ -15,16 +15,16 @@
 
 ## 설치
 
-- `bad-note-Android-4.1.4-beta.1-Update.apk`: 기존 `com.inkforge.note4` 업데이트용.
-- `bad-note-Android-4.1.4-beta.1-SideBySide.apk`: `com.inkforge.note5` 병행 설치용. 기존 병행 설치 앱은 업데이트합니다.
-- 버전 `4.1.4-beta.1`, versionCode **421**, 최소 Android 6.0(API 23).
+- `bad-note-Android-4.1.4-Update.apk`: 기존 `com.inkforge.note4` 업데이트용.
+- `bad-note-Android-4.1.4-SideBySide.apk`: `com.inkforge.note5` 병행 설치용. 기존 병행 설치 앱은 업데이트합니다.
+- 버전 `4.1.4`, versionCode **422**, 최소 Android 6.0(API 23).
 - 공개 APK는 이전 베타의 배포 인증서와 일치하는 파일만 첨부합니다. 로컬 검증용 인증서로 서명한 APK는 공개판 업데이트에 사용할 수 없습니다.
-- GitHub prerelease 형식을 사용하며 정식 Latest와 자동 업데이트 정책은 유지합니다. 배포 빌드는 `-PbadnoteOcrBeta=true`로 OCR 베타 경로를 활성화합니다.
+- GitHub 정식 릴리스로 게시합니다. 베타 기간에 검증한 OCR 경로는 정식 Release 빌드에서 기본 활성화됩니다.
 - GitHub Source code ZIP/TAR.GZ와 별도로 APK 두 개를 제공합니다. 기존 Room 스키마와 ZIP v5 `.ifnote` 구조를 유지합니다.
 
 ## 검증 범위
 
-4.1.4 Beta 1 소스의 JVM 검사 **187개 / 28 suites**가 실패·오류·건너뜀 없이 통과했습니다. Android lint는 Error/Fatal 0개, Warning 144개입니다. Python 도구 회귀 5개 묶음, Debug·계측 APK 빌드와 Debug APK의 버전·패키지·서명·ZIP/64비트 ELF 16KiB 정렬·고정 PDFium 검증이 통과했습니다. [PR 검증과 화면](VALIDATION-4.1.4-BETA.1-KO.md)에 범위를 기록했습니다. 배포 워크플로는 별도로 원래 배포 키로 서명한 두 Release APK를 검증한 뒤 게시합니다.
+정식 승격 소스에서 JVM 검사 **196개**와 Python 도구 회귀 **45개**가 실패·오류·건너뜀 없이 통과했습니다. 두 Release APK의 패키지·버전·서명·ZIP/64비트 ELF 16KiB 정렬·고정 PDFium도 다시 검증했습니다. Beta 1의 Debug·계측 APK와 Android 화면 검증 범위는 [PR 검증과 화면](VALIDATION-4.1.4-BETA.1-KO.md)에 기록되어 있습니다. 물리 기기 검증 범위는 이 기록을 넘겨 확대해서 해석하지 않습니다.
 
 새 버전의 API 35 분리 Debug 앱(1202dp 가로 화면)에서 실제 터치 검사를 다시 통과했습니다. 한글 조합·범위 서식·팝오버·이동·폭 변경·비율 확대·회전·저장/재열기·실행 취소/다시 실행과 텍스트·도형·형광펜 정밀 지우개 픽셀 검사를 포함합니다. 페이지·OCR·검색·필기 캐시의 누적 검증은 각 구현 기록에 실행 단계와 함께 남겼습니다.
 

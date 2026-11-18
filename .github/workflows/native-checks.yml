@@ -1,10 +1,10 @@
-name: Native checks and beta release
+name: Native checks for stable 4.1.4
 
 on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [codex/release-4.1.4-beta.1]
+    branches: [codex/stable-4.1.4]
 
 permissions:
   contents: read
@@ -17,8 +17,6 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    outputs:
-      signed: ${{ steps.signing.outputs.ready }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -80,48 +78,6 @@ jobs:
           target: google_apis
           disable-animations: true
           script: bash tools/check_ocr_beta_device.sh
-      - name: Prepare the existing public release signer
-        id: signing
-        if: github.repository == 'jsk1004ha/BADNOTE' && github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/release-4.1.4-beta.1'
-        env:
-          BADNOTE_KEYSTORE_BASE64: ${{ secrets.BADNOTE_KEYSTORE_BASE64 }}
-          BADNOTE_KEYSTORE_PASSWORD: ${{ secrets.BADNOTE_KEYSTORE_PASSWORD }}
-          BADNOTE_KEY_ALIAS: ${{ secrets.BADNOTE_KEY_ALIAS }}
-          BADNOTE_KEY_PASSWORD: ${{ secrets.BADNOTE_KEY_PASSWORD }}
-        run: python3 tools/prepare_release_signing.py
-      - name: Build both signed distribution APKs
-        if: steps.signing.outputs.ready == 'true'
-        run: python3 tools/build_apk.py --variant both --ocr-beta
-      - name: Verify distribution version and public certificate
-        if: steps.signing.outputs.ready == 'true'
-        run: |
-          set -euo pipefail
-          mkdir -p build/beta-release
-          for pair in 'Update com.inkforge.note4' 'SideBySide com.inkforge.note5'; do
-            read -r suffix package <<< "$pair"
-            apk="build/apk/bad-note-Android-4.1.4-beta.1-$suffix.apk"
-            python3 tools/verify_apk.py "$apk" \
-              --build-tools "$ANDROID_HOME/build-tools/36.1.0" \
-              --expected-package "$package" --expected-min-sdk 23 --expected-target-sdk 36 \
-              --expected-version-code 421 --expected-version-name 4.1.4-beta.1 \
-              --expected-certificate 45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847 \
-              --pdfium-manifest build/dependencies/pdfium-8086/verification.json \
-              > "build/beta-release/$suffix-verification.json"
-            cp "$apk" build/beta-release/
-          done
-          sha256sum build/beta-release/*.apk > build/beta-release/SHA256SUMS
-      - name: Remove temporary signing files
-        if: always() && steps.signing.outcome != 'skipped'
-        run: |
-          rm -f android/local-signing.properties
-          rm -rf "$RUNNER_TEMP/badnote-release-signing"
-      - name: Upload verified distribution artifacts
-        if: steps.signing.outputs.ready == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: badnote-4.1.4-beta.1-distribution
-          path: build/beta-release/
-          if-no-files-found: error
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -132,49 +88,3 @@ jobs:
             android/app/build/reports/tests/
             android/app/build/reports/lint-results-*.xml
           if-no-files-found: warn
-
-  publish:
-    needs: verify
-    if: github.repository == 'jsk1004ha/BADNOTE' && github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/release-4.1.4-beta.1' && needs.verify.outputs.signed == 'true'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Download this run's verified APKs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name badnote-4.1.4-beta.1-distribution --dir build/beta-release
-      - name: Publish the beta with the existing release format
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag=v4.1.4-beta.1
-          update=build/beta-release/bad-note-Android-4.1.4-beta.1-Update.apk
-          side=build/beta-release/bad-note-Android-4.1.4-beta.1-SideBySide.apk
-          test -s "$update" && test -s "$side"
-          sha256sum --check build/beta-release/SHA256SUMS
-          python3 - <<'PY'
-          import os, pathlib, re
-          source = pathlib.Path('docs/RELEASE-4.1.4-BETA.1-KO.md').read_text(encoding='utf-8')
-          root = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/blob/v4.1.4-beta.1/docs/"
-          source = re.sub(r'\]\(([^():]+\.md)\)', lambda match: '](' + root + match[1] + ')', source)
-          pathlib.Path('build/beta-release/notes.md').write_text(source, encoding='utf-8')
-          PY
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            existing=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')
-            test "$existing" = "$GITHUB_SHA" || { echo 'Refusing to replace a beta built from another commit.'; exit 1; }
-            draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
-            test "$draft" = true || { echo 'This commit already has a published beta; leaving it unchanged.'; exit 0; }
-          else
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title 'BADNOTE 4.1.4 Beta 1' --draft --prerelease --latest=false \
-              --notes-file build/beta-release/notes.md
-          fi
-          gh release upload "$tag" "$update" "$side" --repo "$GITHUB_REPOSITORY" --clobber
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isPrerelease \
-            --jq 'if .isPrerelease and (.assets | map(.name) | sort) == ["bad-note-Android-4.1.4-beta.1-SideBySide.apk", "bad-note-Android-4.1.4-beta.1-Update.apk"] then "Verified two APK assets." else error("Unexpected beta release assets") end'
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false \
-            --title 'BADNOTE 4.1.4 Beta 1' --notes-file build/beta-release/notes.md

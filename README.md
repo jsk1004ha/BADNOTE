@@ -1,6 +1,6 @@
-# BADNOTE 4.1.4 Beta 1
+# BADNOTE 4.1.4
 
-갤럭시 탭·S Pen용 Android 필기 앱입니다. 현재 작업 기준은 **4.1.4-beta.1 / versionCode 421**이며, 공개 v4.1.3-beta.2 이후의 텍스트·지우개·펜·올가미·페이지·OCR 개선을 모았습니다. 실제 버전 값은 [앱 빌드 설정](android/app/build.gradle)을 따릅니다. [Beta 1 변경 사항과 설치·검증 범위](docs/RELEASE-4.1.4-BETA.1-KO.md)를 확인하십시오.
+갤럭시 탭·S Pen용 Android 필기 앱입니다. 현재 작업 기준은 **4.1.4 / versionCode 422**이며, 공개 v4.1.3-beta.2 이후의 텍스트·지우개·펜·올가미·페이지·OCR 개선을 정식 릴리스로 묶었습니다. 실제 버전 값은 [앱 빌드 설정](android/app/build.gradle)을 따릅니다. [4.1.4 변경 사항과 설치·검증 범위](docs/RELEASE-4.1.4-KO.md)를 확인하십시오.
 
 **프로젝트 루트의 android/가 현재 앱 소스입니다.** docs/archive/의 구버전 기록은 현재 작업 기준으로 사용하지 마십시오.
 
@@ -25,14 +25,14 @@
 - 문서 검색·현재 페이지 OCR은 편집기 상단에서 바로 실행합니다. 검색 결과를 누르면 좌표가 있는 일치 영역을 강조합니다. OCR 결과는 내부 진단 없이 한 편집란에서 줄바꿈·띄어쓰기를 유지하며 복사·교정·삽입합니다.
 - 큰 수식은 원본 획을 보존하고 모델 입력만 정규화·단순화합니다. 처리할 수 없는 일부 줄이 다른 줄의 결과를 버리지 않도록 했습니다.
 
-실제 사람의 필기 정확도와 물리 Galaxy/S Pen 지연은 측정하지 않았습니다. [OCR 구현·검증](docs/OCR-NATIVE-IMPLEMENTATION-KO.md), [펜·올가미 측정](docs/PEN-4.1.3-PERFORMANCE-KO.md), [현재 설치 범위](docs/RELEASE-4.1.4-BETA.1-KO.md)에 실행 단계와 결과를 구분해 기록했습니다.
+실제 사람의 필기 정확도와 물리 Galaxy/S Pen 지연은 측정하지 않았습니다. [OCR 구현·검증](docs/OCR-NATIVE-IMPLEMENTATION-KO.md), [펜·올가미 측정](docs/PEN-4.1.3-PERFORMANCE-KO.md), [현재 설치 범위](docs/RELEASE-4.1.4-KO.md)에 실행 단계와 결과를 구분해 기록했습니다.
 
 ## 빌드와 검증
 
 Java 17 이상, Android SDK 36, Build Tools 36.1.0, NDK 28.2.13676358, CMake 3.22.1이 필요합니다. Gradle wrapper와 고정 PDFium 준비 도구를 사용합니다.
 
     python tools/test_native.py
-    python tools/build_apk.py --variant both --ocr-beta
+    python tools/build_apk.py --variant both
 
 SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/README-BUILD-KO.md)에 있습니다. Debug·release APK는 직접 Gradle을 실행해도 루트 build/apk/에 자동으로 모입니다. 계측용 테스트 APK는 build/apk/tests/에 생성됩니다.
 
@@ -42,7 +42,7 @@ SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/RE
 | -Update.apk | com.inkforge.note4 | 기존 패키지 업데이트 |
 | -SideBySide.apk | com.inkforge.note5 | 병행 설치 또는 기존 병행 앱 업데이트 |
 
-공개 업데이트 APK는 기존 배포 인증서와 일치해야 합니다. 로컬 검증용 서명은 공개 배포 키를 대체하지 않습니다. 공개 설치판을 유지하며 검증하려면 분리된 Debug 패키지를 사용하십시오. GitHub 베타는 prerelease로 게시하며 정식 Latest와 자동 업데이트 정책은 유지합니다.
+공개 업데이트 APK는 기존 배포 인증서와 일치해야 합니다. 로컬 검증용 서명은 공개 배포 키를 대체하지 않습니다. 공개 설치판을 유지하며 검증하려면 분리된 Debug 패키지를 사용하십시오. 정식 릴리스는 prerelease 플래그 없이 게시합니다.
 
 기존 노트는 ZIP v5 .ifnote로 내보내고 가져올 수 있으며 3.x JSON 가져오기와 명시적인 호환 JSON 내보내기도 지원합니다. 같은 패키지·서명 업데이트의 기존 데이터 이전과 다른 패키지 사이의 .ifnote 이전을 구분합니다.
 
