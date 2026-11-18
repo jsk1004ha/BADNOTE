@@ -1609,7 +1609,7 @@ open class MainActivity:ComponentActivity(){
     }
     override fun dispatchTouchEvent(event:MotionEvent):Boolean{textEditor?.onOutsideTouch(event);return super.dispatchTouchEvent(event)}
     private fun navigateBack(){if(modal!=null){closeSheet();return};if(textEditor?.active==true){textEditor?.finish(returnToLasso=true);return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){backupCancel?.set(true);fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
-    override fun dispatchKeyEvent(event:KeyEvent):Boolean{
+    private fun handleEditorShortcut(event:KeyEvent):Boolean{
         val key=when(event.keyCode){KeyEvent.KEYCODE_Z->"Z";KeyEvent.KEYCODE_Y->"Y";KeyEvent.KEYCODE_S->"S"
             in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9->(event.keyCode-KeyEvent.KEYCODE_0).toString();else->""}
         val action=EditorShortcuts.resolve(key,event.isCtrlPressed,event.isShiftPressed,event.isAltPressed,event.isMetaPressed,
@@ -1618,7 +1618,7 @@ open class MainActivity:ComponentActivity(){
             if(event.repeatCount==0)applyShortcut(action)
             return true
         }
-        return super.dispatchKeyEvent(event)
+        return false
     }
     private fun applyShortcut(action:EditorShortcuts.Action){
         val view=inkView?:return
@@ -1632,8 +1632,10 @@ open class MainActivity:ComponentActivity(){
         if(textEditor?.active==true&&event.isCtrlPressed&&keyCode in listOf(KeyEvent.KEYCODE_S,KeyEvent.KEYCODE_ENTER)){textEditor?.finish();return true}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(true);return true}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY){inkView?.undo();return true}
-        return super.onKeyDown(keyCode,event)
+        return handleEditorShortcut(event)||super.onKeyDown(keyCode,event)
     }
+    override fun onKeyShortcut(keyCode:Int,event:KeyEvent):Boolean =
+        handleEditorShortcut(event)||super.onKeyShortcut(keyCode,event)
     override fun onKeyUp(keyCode:Int,event:KeyEvent):Boolean{
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(false);return true}
         return super.onKeyUp(keyCode,event)
