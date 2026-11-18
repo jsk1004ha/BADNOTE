@@ -25,6 +25,7 @@ def main() -> None:
     wrapper = ANDROID / ("gradlew.bat" if os.name == "nt" else "gradlew")
     parser.add_argument("--gradle", default=os.environ.get("GRADLE", str(wrapper) if wrapper.exists() else "gradle"))
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--ocr-beta", action="store_true", help="Enable the current beta OCR paths in release APKs")
     args = parser.parse_args()
 
     if not (ANDROID / "local.properties").exists() and not (os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")):
@@ -40,6 +41,8 @@ def main() -> None:
     command = [gradle, "--no-daemon", "--console=plain"]
     if args.offline:
         command.append("--offline")
+    if args.ocr_beta:
+        command.append("-PbadnoteOcrBeta=true")
     command.extend(tasks)
     run(command)
 

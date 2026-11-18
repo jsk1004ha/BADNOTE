@@ -13,16 +13,18 @@ object AssetCleanupChecks {
         val isolated = IsolatedContext(context)
         try {
             NoteRepository(isolated).use { repository ->
-                deferredEditorCleanup(repository)
                 sharedAndTransientAssets(repository)
                 rollbackDoesNotRemoveAssets(repository)
                 failedCleanupRetries(repository, isolated)
             }
+            NoteRepository(isolated, deferAssetReclamation = true).use(::deferredEditorCleanup)
             // The candidate journal survives repository/process recreation.
             NoteRepository(isolated).use { repository ->
                 val pending = repository.setting("cleanup-test-pending")
                 check(repository.asset(pending).isFile, "Clipboard protection did not survive the original deletion")
                 repository.reclaimPendingAssets()
+                val editorPending = repository.setting("cleanup-test-editor-pending")
+                check(!repository.asset(editorPending).exists(), "Deferred editor asset outlived the next startup sweep")
                 check(!repository.asset(pending).exists(), "Unpinned candidate was not reclaimed after reopening")
             }
         } finally {
@@ -36,10 +38,9 @@ object AssetCleanupChecks {
         val document = repository.create("active editor", "root", "blank")
         val id = asset(repository, "live undo or another window clipboard")
         attach(repository, document.id, id)
-        repository.deleteDocument(document.id, reclaimAssets = false)
+        repository.deleteDocument(document.id)
         check(repository.asset(id).isFile, "Editor deletion reclaimed an in-memory asset before process restart")
-        repository.reclaimPendingAssets()
-        check(!repository.asset(id).exists(), "Deferred editor asset was not reclaimed by startup cleanup")
+        repository.setting("cleanup-test-editor-pending", id, true)
     }
 
     private fun sharedAndTransientAssets(repository: NoteRepository) {

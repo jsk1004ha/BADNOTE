@@ -1,6 +1,6 @@
-# Android 빌드 — 4.1.4 Beta 1
+# Android 빌드 — 4.2.1
 
-현재 버전은 **4.1.4-beta.1 / versionCode 421**입니다. 실제 값은 [app/build.gradle](app/build.gradle)에서 읽습니다. 프로젝트 루트에서 실행하며 .worktrees/ 사본을 빌드하지 않습니다.
+현재 버전은 **4.2.1 / versionCode 431**입니다. 실제 값은 [app/build.gradle](app/build.gradle)에서 읽습니다. 프로젝트 루트에서 실행하며 .worktrees/ 사본을 빌드하지 않습니다.
 
 ## 요구 사항
 
@@ -17,7 +17,7 @@ android/local.properties 또는 ANDROID_SDK_ROOT로 SDK 경로를 설정합니�
 
     python tools/test_native.py
 
-JVM 검사와 Update Debug APK를 빌드합니다. 최종 설치 파일은 build/apk/bad-note-Android-4.1.4-beta.1-Debug.apk이며 패키지는 com.inkforge.note4.debug입니다. 기기에 설치하려면 명시적인 테스트 기기를 지정합니다.
+JVM 검사와 Update Debug APK를 빌드합니다. 최종 설치 파일은 build/apk/bad-note-Android-4.2.1-Debug.apk이며 패키지는 com.inkforge.note4.debug입니다. 기기에 설치하려면 명시적인 테스트 기기를 지정합니다.
 
     python tools/test_native.py --device <adb-serial> --adb <adb-path>
 
@@ -27,29 +27,25 @@ JVM 검사와 Update Debug APK를 빌드합니다. 최종 설치 파일은 build
 
 android/local-signing.properties.example을 참고해 android/local-signing.properties와 키스토어를 준비합니다. 비밀 값은 저장소에 포함하지 않습니다.
 
-    python tools/build_apk.py --variant both --ocr-beta
+    python tools/build_apk.py --variant both
 
---ocr-beta는 release의 badnoteOcrBeta 플래그를 켭니다. Debug는 두 OCR 플래그가 기본으로 켜집니다. 산출물 이름은 Gradle의 versionName에서 정합니다.
+정식 배포판과 Debug 빌드는 새 OCR 레이아웃과 혼합 OCR 소스를 사용합니다. 산출물 이름은 Gradle의 versionName에서 정합니다.
 
-- build/apk/bad-note-Android-4.1.4-beta.1-Update.apk — com.inkforge.note4
-- build/apk/bad-note-Android-4.1.4-beta.1-SideBySide.apk — com.inkforge.note5
+- build/apk/bad-note-Android-4.2.1-Update.apk — com.inkforge.note4
+- build/apk/bad-note-Android-4.2.1-SideBySide.apk — com.inkforge.note5
 
 직접 Gradle을 사용할 경우에도 성공한 assemble 결과를 루트 build/apk/에 자동으로 복사합니다. SideBySide Debug는 -SideBySide-Debug.apk, 계측용 테스트 APK는 build/apk/tests/의 -AndroidTest.apk로 구분합니다. Android 모듈의 기본 출력은 빌드·설치 도구가 계속 사용합니다.
 
-    android/gradlew.bat -p android -PbadnoteOcrBeta=true :app:assembleUpdateRelease :app:assembleSideBySideRelease
+    android/gradlew.bat -p android :app:assembleUpdateRelease :app:assembleSideBySideRelease
 
-현재 로컬 인증서는 공개 Beta 2 인증서와 다릅니다. 공개 설치판 위의 업데이트에는 원래 배포 키가 필요합니다. 분리된 Debug 앱으로 검증할 수 있습니다. 자세한 설치 범위는 [현재 수정판 안내](../docs/RELEASE-4.1.4-BETA.1-KO.md)를 참고하십시오.
+공개 APK를 업데이트하려면 같은 패키지 ID와 공개 배포 인증서가 필요합니다. 로컬 검증에는 분리된 Debug 앱을 사용합니다.
 
-## GitHub 베타 게시
+## GitHub 릴리스 검증
 
-`Native checks and beta release` 워크플로는 PR에서 네이티브·도구·기기 검사를 실행합니다. 원본 저장소 `jsk1004ha/BADNOTE`의 `codex/release-4.1.4-beta.1` 브랜치 push에서만 서명된 공개 베타 게시까지 진행합니다. 포크와 PR에서는 배포 키를 사용하거나 릴리스를 게시하지 않습니다.
-
-저장소 관리자가 검토한 PR 커밋을 원본 저장소의 해당 브랜치로 가져오면 같은 커밋의 검사 후 배포합니다. 기존 `BADNOTE_KEYSTORE_BASE64`, `BADNOTE_KEYSTORE_PASSWORD`, `BADNOTE_KEY_ALIAS`, `BADNOTE_KEY_PASSWORD` Actions secrets가 필요합니다. `prepare_release_signing.py`가 공개 배포 인증서와 일치를 확인하며 누락·불일치 때 로컬 키로 대체하지 않습니다.
-
-버전·패키지·서명·16KiB 정렬·PDFium 검증을 통과한 Update·SideBySide 두 APK를 릴리스 초안에 올린 뒤 prerelease로 공개합니다. 제목은 `BADNOTE 4.1.4 Beta 1`, 태그는 `v4.1.4-beta.1`, 본문은 [릴리스 문서](../docs/RELEASE-4.1.4-BETA.1-KO.md)를 사용하며 정식 Latest는 바꾸지 않습니다. 기존 태그가 다른 커밋을 가리키면 덮어쓰지 않습니다.
+Native Android regressions 워크플로는 도구·JVM·lint·에뮬레이터 검사를 실행합니다. 벡터 PDF와 태블릿 기능의 API 23·35 계측은 각각의 워크플로에서 실행합니다. 서명된 배포용 APK는 APK 확인 절차로 검증한 뒤 GitHub Releases에 올립니다.
 
 ## APK 확인
 
-    python tools/verify_apk.py build/apk/bad-note-Android-4.1.4-beta.1-Update.apk --build-tools <SDK>/build-tools/36.1.0 --expected-package com.inkforge.note4 --expected-version-code 421 --expected-version-name 4.1.4-beta.1 --pdfium-manifest build/dependencies/pdfium-8086/verification.json
+    python tools/verify_apk.py build/apk/bad-note-Android-4.2.1-Update.apk --build-tools <SDK>/build-tools/36.1.0 --expected-package com.inkforge.note4 --expected-version-code 431 --expected-version-name 4.2.1 --expected-certificate 45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847 --pdfium-manifest build/dependencies/pdfium-8086/verification.json
 
 현재 네이티브 구조와 자료 구분은 [네이티브 안내](../docs/NATIVE-KO.md), [문서 안내](../docs/README.md)를 참고하십시오.

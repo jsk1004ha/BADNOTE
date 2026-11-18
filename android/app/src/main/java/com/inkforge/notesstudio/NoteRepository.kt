@@ -17,7 +17,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
 /** Room owns the single database connection and its schema; opaque JSON stays intact. */
-class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAME) : Closeable {
+class NoteRepository(
+    context: Context,
+    databaseName: String = NativeDatabase.NAME,
+    private val deferAssetReclamation: Boolean = false,
+) : Closeable {
     private val room = NativeDatabase.open(context, databaseName)
     private val lowMemory = (context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass <= 128
     private val memoryCacheBudget = if (lowMemory) 1024 * 1024 else 2 * 1024 * 1024
@@ -593,7 +597,9 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         }
         stoppedImport?.let(PdfImporter::cancelImport)
     }
-    fun deleteDocument(id: String, protectedAssets: Set<String> = emptySet(), reclaimAssets: Boolean = true) {
+    fun deleteDocument(id: String) = deleteDocument(id, emptySet())
+
+    fun deleteDocument(id: String, protectedAssets: Set<String>) {
         PdfImporter.cancelDocument(id)
         transaction {
             val pending = pendingAssetDeletions()
@@ -612,7 +618,7 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         // A caller's outer transaction may still roll back the document deletion. UI callers
         // also defer reclamation until the next process start so every window's clipboard and
         // undo history remain protected without copying those private histories across windows.
-        if (reclaimAssets && !writableDatabase.inTransaction()) reclaimPendingAssets(protectedAssets)
+        if (!deferAssetReclamation && !writableDatabase.inTransaction()) reclaimPendingAssets(protectedAssets)
     }
 
     /** The result transaction rejects both an edited page and an Undo that restored old bytes. */
@@ -1007,18 +1013,20 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         if (writableDatabase.inTransaction()) return
         try {
             val pending = pendingAssetDeletions()
-            if (pending.isEmpty()) return
             val unreferenced = pending.toMutableSet().apply { removeAll(protectedAssets) }
+            if (unreferenced.isEmpty()) return
             // Include trashed documents and every page/object, since assets can be shared.
             // Finish the whole reference scan before deleting any file; malformed data
             // leaves the candidate journal intact for a later retry.
             readableDatabase.rawQuery("SELECT body FROM documents UNION ALL SELECT body FROM pages UNION ALL SELECT body FROM objects", null).use { cursor ->
-                while (cursor.moveToNext()) {
-                    val references = mutableSetOf<String>()
+                val references = HashSet<String>()
+                while (unreferenced.isNotEmpty() && cursor.moveToNext()) {
                     collectAssets(JSONObject(cursor.getString(0)), references)
                     unreferenced.removeAll(references)
+                    references.clear()
                 }
             }
+            if (unreferenced.isEmpty()) return
             for (id in unreferenced) {
                 val file = runCatching { asset(id) }.getOrNull() ?: continue
                 if (!file.exists() || (file.isFile && file.delete())) pending.remove(id)

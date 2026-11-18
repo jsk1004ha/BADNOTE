@@ -2,7 +2,7 @@ name: Tablet productivity regressions
 
 on:
   push:
-    branches: [codex/tablet-productivity]
+    branches: [codex/tablet-productivity, codex/release-4.2.1]
   pull_request:
     branches: [main, codex/vector-pdf-export]
   workflow_dispatch:

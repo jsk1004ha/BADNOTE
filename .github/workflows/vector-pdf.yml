@@ -2,7 +2,7 @@ name: Native vector PDF regressions
 
 on:
   push:
-    branches: [codex/vector-pdf-export]
+    branches: [codex/vector-pdf-export, codex/release-4.2.1]
   pull_request:
     branches: [main, codex/ocr-4.1.2-beta.1]
   workflow_dispatch:

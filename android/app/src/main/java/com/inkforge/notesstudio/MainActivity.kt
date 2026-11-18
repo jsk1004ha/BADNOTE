@@ -510,7 +510,7 @@ open class MainActivity:ComponentActivity(){
     private fun documentMenu(doc:DocumentInfo){
         val options=if(doc.trashed)listOf("복원","영구 삭제")else listOf("이름 변경","폴더로 이동","태그","복제","파일 내보내기","기기 공유","휴지통으로 이동","다른 창에서 열기")
         choose(doc.title,options){i->if(doc.trashed){if(i==0)mutateDocument(doc){put("trashed",false)}else confirm("영구 삭제",doc.title){
-            work("삭제 중…",{repository.deleteDocument(doc.id,reclaimAssets=false)}){showLibrary()}}}
+            work("삭제 중…",{repository.deleteDocument(doc.id)}){showLibrary()}}}
             else when(i){
                 0->prompt("노트 이름",doc.title){value->mutateDocument(doc){put("title",value)}}
                 1->{val choices=listOf(json("id" to "root","title" to "문서"))+folders.objects().filter{it.optString("id")!="root"};choose("폴더로 이동",choices.map{it.optString("title")}){n->mutateDocument(doc){put("folderId",choices[n].getString("id"))}}}

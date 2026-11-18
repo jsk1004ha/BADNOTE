@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** All windows and backup jobs share the same ordered database writer. */
 class NoteApplication : Application() {
-    val repository by lazy { NoteRepository(this) }
+    val repository by lazy { NoteRepository(this, deferAssetReclamation = true) }
     internal val windows = WindowClaims<MainActivity>()
     private val visible = AtomicInteger()
     private val saves = AtomicInteger()
