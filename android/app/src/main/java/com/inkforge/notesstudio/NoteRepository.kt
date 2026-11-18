@@ -750,14 +750,12 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
     fun searchOcrDocuments(query: String): Set<String> {
         val term = query.trim()
         if (term.isEmpty()) return emptySet()
+        // JSON escapes and SQLite's ASCII-only lower() cannot safely prefilter decoded Unicode text.
         val candidates = readableDatabase.rawQuery(
             """SELECT o.page_id,o.document_id FROM ocr_page_state o
                 LEFT JOIN page_generation g ON g.page_id=o.page_id
-                WHERE o.generation=COALESCE(g.generation,0) AND
-                  (instr(lower(o.body),lower(?))>0 OR EXISTS (
-                    SELECT 1 FROM ocr_corrections c WHERE c.page_id=o.page_id
-                      AND instr(lower(c.body),lower(?))>0))""".trimIndent(),
-            arrayOf(term, term)
+                WHERE o.generation=COALESCE(g.generation,0)""".trimIndent(),
+            null
         ).use { cursor ->
             buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) }
         }
