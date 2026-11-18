@@ -2,8 +2,6 @@ package com.inkforge.notesstudio
 
 import android.content.Context
 import android.content.ContextWrapper
-import android.database.DatabaseErrorHandler
-import android.database.sqlite.SQLiteDatabase
 import org.json.JSONArray
 import java.io.File
 
@@ -12,14 +10,14 @@ object AssetCleanupChecks {
     fun run(context: Context) {
         val isolated = IsolatedContext(context)
         try {
-            NoteRepository(isolated).use { repository ->
+            NoteRepository(isolated, isolated.databaseName).use { repository ->
                 sharedAndTransientAssets(repository)
                 rollbackDoesNotRemoveAssets(repository)
                 failedCleanupRetries(repository, isolated)
             }
-            NoteRepository(isolated, deferAssetReclamation = true).use(::deferredEditorCleanup)
+            NoteRepository(isolated, isolated.databaseName, deferAssetReclamation = true).use(::deferredEditorCleanup)
             // The candidate journal survives repository/process recreation.
-            NoteRepository(isolated).use { repository ->
+            NoteRepository(isolated, isolated.databaseName).use { repository ->
                 val pending = repository.setting("cleanup-test-pending")
                 check(repository.asset(pending).isFile, "Clipboard protection did not survive the original deletion")
                 repository.reclaimPendingAssets()
@@ -115,14 +113,14 @@ object AssetCleanupChecks {
         val id = asset(repository, "preserve until reference scan succeeds")
         attach(repository, document.id, id)
         val malformed = repository.create("unreadable metadata", "root", "blank")
-        context.openOrCreateDatabase("badnote-native.db", Context.MODE_PRIVATE, null).use { database ->
+        context.openOrCreateDatabase(context.databaseName, Context.MODE_PRIVATE, null).use { database ->
             database.execSQL("UPDATE documents SET body=? WHERE id=?", arrayOf("{", malformed.id))
         }
         // Unknown references in another document must defer all candidate deletion.
         val pinned = repository.setting("cleanup-test-pending")
         repository.deleteDocument(document.id, setOf(pinned))
         check(repository.asset(id).isFile, "Cleanup removed a file despite an incomplete reference scan")
-        context.openOrCreateDatabase("badnote-native.db", Context.MODE_PRIVATE, null).use { database ->
+        context.openOrCreateDatabase(context.databaseName, Context.MODE_PRIVATE, null).use { database ->
             database.execSQL("UPDATE documents SET body=? WHERE id=?", arrayOf(malformed.data.toString(), malformed.id))
         }
         repository.reclaimPendingAssets(setOf(pinned))
@@ -147,10 +145,5 @@ object AssetCleanupChecks {
         val databaseName = prefix + "badnote-native.db"
         override fun getFilesDir() = File(baseContext.filesDir, prefix).apply { mkdirs() }
         override fun getCacheDir() = File(baseContext.cacheDir, prefix).apply { mkdirs() }
-        override fun getDatabasePath(name: String) = baseContext.getDatabasePath(prefix + name)
-        override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?): SQLiteDatabase =
-            baseContext.openOrCreateDatabase(prefix + name, mode, factory)
-        override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?, errorHandler: DatabaseErrorHandler?): SQLiteDatabase =
-            baseContext.openOrCreateDatabase(prefix + name, mode, factory, errorHandler)
     }
 }
