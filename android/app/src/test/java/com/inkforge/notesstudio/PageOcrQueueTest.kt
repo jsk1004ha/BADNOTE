@@ -206,4 +206,29 @@ class PageOcrQueueTest {
         } finally { queue.close(); worker.shutdownNow() }
     }
 
+    @Test fun scopedMathCarriesImmutableSelectionThroughManualWritingGate() {
+        val worker = Executors.newSingleThreadExecutor()
+        val release = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        var actual: OcrRequestQueue.Request? = null
+        val queue = OcrRequestQueue(worker) { request ->
+            actual = request
+            PageOcrCoordinator.Receipt(true, null)
+        }
+        try {
+            worker.execute { release.await(3, TimeUnit.SECONDS) }
+            val selected = linkedSetOf("original")
+            queue.setWriting(true)
+            queue.request("d", "p", "en", false, expectedDigest = null,
+                progress = { _, _, _ -> }, complete = { completed.countDown() },
+                math = true, selectedIds = selected)
+            selected.clear(); selected += "changed"
+            release.countDown()
+            assertTrue(completed.await(3, TimeUnit.SECONDS))
+            assertEquals(setOf("original"), actual?.selectedIds)
+            assertEquals(true, actual?.math)
+            assertFalse(actual!!.automatic)
+        } finally { release.countDown(); queue.close(); worker.shutdownNow() }
+    }
+
 }

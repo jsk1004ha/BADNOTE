@@ -130,7 +130,7 @@ async def render(args: argparse.Namespace) -> dict:
         raise ValueError("Reference output must be a new directory beneath workspace/build")
     if output.exists():
         raise ValueError("Refusing to overwrite an existing brush reference")
-    source = workspace / "web/app.js"
+    source = workspace / "legacy/web/app.js"
     fixture, cases = load_cases(args.fixtures, source)
     chrome = args.chromium or shutil.which("chrome") or shutil.which("chromium")
     if not chrome:
@@ -168,7 +168,7 @@ async def render(args: argparse.Namespace) -> dict:
     manifest = {
         "schemaVersion": 1, "purpose": "Synthetic original-JS drawing-command raster reference",
         "method": "Captured original JS operations replayed in actual Chrome Canvas 2D",
-        "source": "web/app.js", "sourceSha256": sha256(source),
+        "source": "legacy/web/app.js", "sourceSha256": sha256(source),
         "fixturesSha256": sha256(args.fixtures), "generatorSha256": sha256(pathlib.Path(__file__)),
         "browser": {"executable": str(chrome), "version": version},
         "raster": ({**RASTER, "transparent": True} if args.transparent else RASTER), "cases": cases,

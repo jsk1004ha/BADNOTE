@@ -43,13 +43,46 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
         if(obj.optBoolean("hidden")||obj.optString("type")=="ocrIndex")return
         withRotation(canvas, obj) { drawUnrotated(canvas, obj,renderScale) }
     }
+    /** Unknown non-stroke extents deliberately disable culling rather than clip overflowing text. */
+    internal fun drawMeasured(canvas: Canvas,obj: JSONObject,renderScale:Double): InkBounds? {
+        if(obj.optBoolean("hidden")||obj.optString("type")=="ocrIndex")return InkBounds(0f,0f,0f,0f)
+        if(obj.optString("type")!="stroke"){draw(canvas,obj,renderScale);return null}
+        var bounds:InkBounds?=null
+        withRotation(canvas,obj){bounds=legacyBrush.drawMeasured(canvas,obj,renderScale)}
+        val b=checkNotNull(bounds)
+        if(obj.f("rotation")==0f)return b
+        val pivot=InkGeometry.unrotatedBounds(obj)
+        val matrix=Matrix().apply{setRotate(Math.toDegrees(obj.f("rotation").toDouble()).toFloat(),
+            (pivot.left+pivot.right)/2,(pivot.top+pivot.bottom)/2)}
+        val rotated=RectF(b.left,b.top,b.right,b.bottom);matrix.mapRect(rotated)
+        return InkBounds(rotated.left,rotated.top,rotated.right,rotated.bottom)
+    }
     private fun withRotation(canvas: Canvas, obj: JSONObject, draw: () -> Unit) {
+        val angle=obj.f("rotation")
+        if(angle==0f&&!obj.has(ObjectEraseMask.KEY)){draw();return}
         val saved = canvas.save()
         try {
             val b = InkGeometry.unrotatedBounds(obj)
-            canvas.rotate(Math.toDegrees(obj.f("rotation").toDouble()).toFloat(), (b.left+b.right)/2, (b.top+b.bottom)/2)
+            canvas.rotate(Math.toDegrees(angle.toDouble()).toFloat(), (b.left+b.right)/2, (b.top+b.bottom)/2)
+            clipErased(canvas,obj)
             draw()
         } finally { canvas.restoreToCount(saved) }
+    }
+    companion object {
+        /** Difference clipping affects only this object's draw, never content underneath it. */
+        internal fun clipErased(canvas:Canvas,obj:JSONObject) {
+            val masks=obj.optJSONArray(ObjectEraseMask.KEY)?:return
+            val b=InkGeometry.unrotatedBounds(obj);val w=b.width.coerceAtLeast(1f);val h=b.height.coerceAtLeast(1f)
+            val path=Path()
+            for(i in 0 until masks.length()) {
+                val m=masks.optJSONObject(i)?:continue
+                val x=b.left+m.f("x")*w;val y=b.top+m.f("y")*h
+                val rx=m.f("rx")*w;val ry=m.f("ry")*h
+                path.addOval(x-rx,y-ry,x+rx,y+ry,Path.Direction.CW)
+            }
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path,Region.Op.DIFFERENCE)
+        }
     }
     fun drawImage(canvas: Canvas, obj: JSONObject, bitmap: Bitmap) {
         withRotation(canvas, obj) {
@@ -60,6 +93,7 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
         }
     }
     private fun drawUnrotated(canvas: Canvas,obj: JSONObject,renderScale:Double) {
+        if(obj.optString("type")=="text"&&obj.optInt("textLayoutVersion")>=1){TextBoxLayout.draw(canvas,obj);return}
         paint.reset();paint.isAntiAlias=true;paint.color=color(obj.optString("color","#172033"));paint.alpha=(obj.f("opacity",1f)*255).toInt().coerceIn(0,255)
         val type=obj.optString("type")
         when(type) {

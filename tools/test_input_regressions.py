@@ -281,7 +281,7 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--web", type=pathlib.Path, default=pathlib.Path("web"))
+    parser.add_argument("--web", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1] / "legacy/web")
     parser.add_argument("--chromium", default=None)
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()

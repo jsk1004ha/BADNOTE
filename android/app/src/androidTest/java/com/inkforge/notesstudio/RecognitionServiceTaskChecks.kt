@@ -11,12 +11,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object RecognitionServiceTaskChecks {
     fun run() {
+        MathEngineAndroidChecks.run()
         timedOutTaskKeepsPermitThenRecoversAfterActualCompletion()
         failedTaskReleasesPermitForNextRealTask()
         inactiveServiceRejectsNewTaskWithoutReleasingRunningTask()
         renderedImageDigestTracksPixelsAndPolicy()
         timeoutDoesNotRecycleBitmapLeaseBeforeActualCompletion()
-        mathUnavailableDoesNotStartTextRecognition()
+        emptyMathInputDoesNotStartTextRecognition()
     }
     private fun timeoutDoesNotRecycleBitmapLeaseBeforeActualCompletion() {
         val service = RecognitionService()
@@ -35,13 +36,13 @@ object RecognitionServiceTaskChecks {
             lease.close(); check(released.get() == 1)
         } finally { if (!task.task.isComplete) task.setResult("cleanup"); service.close(); workers.shutdownNow() }
     }
-    private fun mathUnavailableDoesNotStartTextRecognition() {
+    private fun emptyMathInputDoesNotStartTextRecognition() {
         val service = RecognitionService()
         var modelTouched = false
         service.onModelState = { _,_ -> modelTouched = true }
         try {
             val error = runCatching { service.handwriting(emptyList(),1000f,1414f,"en",true) }.exceptionOrNull()
-            check(error?.message == "mathEngineUnavailable" && !modelTouched)
+            check(error?.message == "noInk" && !modelTouched)
         } finally { service.close() }
     }
     private fun timedOutTaskKeepsPermitThenRecoversAfterActualCompletion() {

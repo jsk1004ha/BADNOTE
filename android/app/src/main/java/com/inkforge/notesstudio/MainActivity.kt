@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.WindowCompat
+import androidx.core.view.ViewCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -37,6 +38,7 @@ class MainActivity:ComponentActivity(){
     lateinit var repository:NoteRepository;private set
     var inkView:InkCanvasView?=null;private set
     private var inkFrontBuffer:View?=null
+    private var textEditor:InlineTextEditor?=null
     private lateinit var root:FrameLayout
     private lateinit var body:LinearLayout
     private lateinit var status:TextView
@@ -72,7 +74,6 @@ class MainActivity:ComponentActivity(){
     private var previousReadOnly=false
     private var ocrTask:Runnable?=null
     private val pageEditEpoch=HashMap<String,Long>()
-    @Volatile private var recognitionBusy=false
     private val openTabs=linkedSetOf<String>()
     private data class Save(val block:()->Unit,val complete:()->Unit,val reportSaved:()->Boolean={true})
     private val saves=ArrayDeque<Save>()
@@ -86,18 +87,20 @@ class MainActivity:ComponentActivity(){
     private val ui by lazy { ClassicUi(this,::t) }
     private var modal:FrameLayout?=null
     private var editorSurface:FrameLayout?=null
+    private var editorWorkspace:LinearLayout?=null
     private var editorNavbar:LinearLayout?=null
     private var activeDock:LinearLayout?=null
     private var undoPill:LinearLayout?=null
     private var zoomLabel:TextView?=null
     private var pageSidebar:LinearLayout?=null
+    private var pageGrid:PageThumbnailGrid?=null
     private var sidebarTab="pages"
     private var searchDrawer:LinearLayout?=null
+    private var documentSearch:DocumentSearchCoordinator<List<DocumentSearchHit>>?=null
     private var globalSearchOpen=false
     private var selectionMode=false
     private val selectedDocuments=linkedSetOf<String>()
-    private val thumbnailCache=object:android.util.LruCache<String,android.graphics.Bitmap>(8*1024*1024){override fun sizeOf(key:String,value:android.graphics.Bitmap)=value.allocationByteCount}
-    private val thumbnailPending=mutableSetOf<String>()
+    private lateinit var thumbnails:ThumbnailLoader
     private val classicTemplates=listOf("blank" to "무지","lined" to "줄 노트","grid" to "격자","dotted" to "도트","cornell" to "코넬","planner" to "플래너")
 
     override fun onCreate(savedInstanceState:Bundle?){
@@ -110,10 +113,15 @@ class MainActivity:ComponentActivity(){
             override fun handleOnBackPressed(){navigateBack()}
         })
         repository=NoteRepository(this)
+        thumbnails=ThumbnailLoader(repository,::afterSaved)
         pageOcr=PageOcrCoordinator(repository,recognition)
-        recognition.onModelState={tag,state->runOnUiThread{if(manualOcrPageId!=null&&editorNavbar!=null)
-            showOcrStatus("인식 모델 $tag · ${when(state){
-                "checking"->"설치 상태 확인 중";"notDownloaded"->"기기에 없음";"downloading"->"다운로드 중";"ready"->"준비됨";else->"준비 실패"}}",true)}}
+        recognition.onModelState={_,state->runOnUiThread{if(manualOcrPageId!=null&&editorNavbar!=null)
+            showOcrStatus(when(state){
+                "downloading"->"인식에 필요한 파일을 다운로드하고 있습니다."
+                "ready"->"필기를 인식하고 있습니다."
+                "notDownloaded","checking"->"손글씨 인식을 준비하고 있습니다."
+                else->"손글씨 인식을 준비하지 못했습니다. 다시 시도해 주세요."
+            },true)}}
         repository.executor.execute{repository.migrateLegacyOcr();PdfImporter.resumePending(repository)}
         audio=AudioController(this,repository)
         audio.onPlaybackError=::message
@@ -175,6 +183,7 @@ class MainActivity:ComponentActivity(){
         showOcrStatus(label)
     }
     private fun setBusy(value:Boolean,label:String="처리 중…"){
+        if(value)textEditor?.finish()
         busy=value;blockerLabel.text=t(label);blocker.visibility=if(value)View.VISIBLE else View.GONE
         if(value){previousReadOnly=inkView?.readOnly?:false;inkView?.finishContact();inkView?.readOnly=true}else inkView?.readOnly=previousReadOnly||saveFailed
     }
@@ -225,11 +234,14 @@ class MainActivity:ComponentActivity(){
         }}
     }
     private fun clearScreen(){
+        textEditor?.finish();textEditor=null
+        pageGrid?.dispose();pageGrid=null;thumbnails.cancelPending()
         librarySearchTask?.let{handler.removeCallbacks(it)}
         librarySearchGeneration++
         cancelManualOcr("손글씨 인식을 취소했습니다.")
         ocrStatusRow=null;ocrStatusText=null;ocrCancelButton=null
-        closeSheet();editorSurface=null;editorNavbar=null;activeDock=null;undoPill=null;pageSidebar=null;searchDrawer=null;zoomLabel=null;pageLabel=null;selectionBar=null
+        closeSearchDrawer()
+        closeSheet();editorSurface=null;editorWorkspace=null;editorNavbar=null;activeDock=null;undoPill=null;pageSidebar=null;searchDrawer=null;zoomLabel=null;pageLabel=null;selectionBar=null
         ocrTask?.let{handler.removeCallbacks(it)};inkView?.finishContact();inkView?.close();inkView=null;inkFrontBuffer=null;body.removeAllViews()
         (status.parent as? ViewGroup)?.removeView(status)
     }
@@ -312,8 +324,9 @@ class MainActivity:ComponentActivity(){
         searchOcrMatches(query)
         repository.executor.execute{
             val docs=repository.documents()
+            val pageCounts=repository.pageCounts()
             val counts=docs.filter{!it.trashed}.groupingBy{it.folder}.eachCount()
-            val rows=docs.map{LibraryDocumentUi(it,formatDocumentDate(it.data),repository.pageIds(it.id).size)}
+            val rows=docs.map{LibraryDocumentUi(it,formatDocumentDate(it.data),pageCounts[it.id]?:0)}
             runOnUiThread{if(generation==libraryGeneration&&document==null){
                 documentState.value=rows
                 state.value=state.value.copy(folders=allFolders.map{it.copy(count=counts[it.id]?:0)})
@@ -381,7 +394,7 @@ class MainActivity:ComponentActivity(){
         val list=ui.col();main.addView(list)
         fun render(){
             val generation=++libraryGeneration
-            repository.executor.execute{val docs=repository.documents();runOnUiThread{
+            repository.executor.execute{val docs=repository.documents();val pageCounts=repository.pageCounts();runOnUiThread{
                 if(generation!=libraryGeneration||document!=null)return@runOnUiThread
                 list.removeAllViews();folderStrip.removeAllViews()
                 val children=if(libraryFilter=="all"&&query.isBlank())folders.objects().filter{it.optString("id")!="root"&&it.optString("parentId","root")==folder}else emptyList()
@@ -413,7 +426,7 @@ class MainActivity:ComponentActivity(){
                 val columns=if(settings.optBoolean("listMode"))1 else if(narrow)2 else ((available+gap)/(164+gap)).coerceAtLeast(1)
                 val cardWidth=(available-gap*(columns-1))/columns
                 visible.chunked(columns).forEach{group->val line=ui.row().apply{gravity=Gravity.TOP}
-                    group.forEachIndexed{n,doc->line.addView(documentCard(doc,cardWidth,settings.optBoolean("listMode")),LinearLayout.LayoutParams(dp(cardWidth),-2).apply{if(n>0)leftMargin=dp(gap)})}
+                    group.forEachIndexed{n,doc->line.addView(documentCard(doc,cardWidth,settings.optBoolean("listMode"),pageCounts[doc.id]?:0),LinearLayout.LayoutParams(dp(cardWidth),-2).apply{if(n>0)leftMargin=dp(gap)})}
                     list.addView(line,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(if(settings.optBoolean("listMode"))8 else if(narrow)25 else 34)})
                 }
                 if(selectionMode&&selectedDocuments.isNotEmpty())list.addView(ui.button("선택한 문서를 휴지통으로 이동",ui.color("#4a2020"),Color.WHITE){
@@ -426,7 +439,7 @@ class MainActivity:ComponentActivity(){
             listOf(Triple("folder","문서","all"),Triple("star","즐겨찾기","favorite"),Triple("plus-circle","신규","new"),Triple("store","템플릿","templates"),Triple("settings","설정","settings")).forEach{(icon,label,key)->val item=ui.col().apply{gravity=Gravity.CENTER;setOnClickListener{when(key){"new"->newNote();"settings"->showSettings();else->filter(key)}}};val tint=if(key==libraryFilter)ui.color("#55b8f5")else ui.color("#8d8d91");item.addView(ui.icon(icon,tint,23));item.addView(ui.text(label,10f,tint),LinearLayout.LayoutParams(-2,-2).apply{topMargin=dp(3)});mobile.addView(item,LinearLayout.LayoutParams(0,dp(64),1f))};body.addView(mobile)}
         render()
     }
-    private fun documentCard(doc:DocumentInfo,width:Int,listMode:Boolean):View{
+    private fun documentCard(doc:DocumentInfo,width:Int,listMode:Boolean,pageCount:Int):View{
         val card=if(listMode)ui.row()else ui.col();card.contentDescription="${doc.title} 열기"
         card.setOnClickListener{if(selectionMode){if(!selectedDocuments.add(doc.id))selectedDocuments.remove(doc.id);showLibrary()}else openDocument(doc.id)}
         val cover=FrameLayout(this).apply{background=ui.rounded(Color.WHITE,12f);clipToOutline=true;elevation=dp(5).toFloat()}
@@ -435,8 +448,7 @@ class MainActivity:ComponentActivity(){
         cover.addView(favorite,FrameLayout.LayoutParams(dp(32),dp(32),Gravity.TOP or Gravity.RIGHT).apply{topMargin=dp(7);rightMargin=dp(7)})
         card.addView(cover,LinearLayout.LayoutParams(dp(if(listMode)72 else width),dp(if(listMode)96 else (width/.72f).roundToInt())))
         val meta=ui.col();val title=ui.row();title.addView(ui.text(doc.title,if(listMode)15f else 14f,ui.color("#f2f2f2"),true).apply{maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END},LinearLayout.LayoutParams(0,-2,1f));title.addView(ui.iconButton("chevron-down","문서 메뉴",ui.color("#aaaaaa"),24,24,17){documentMenu(doc)})
-        meta.addView(title);val subtitle=ui.row();val date=ui.text(formatDocumentDate(doc.data),11f,ui.color("#777777"));subtitle.addView(date,LinearLayout.LayoutParams(0,-2,1f));val pages=ui.text("",11f,ui.color("#777777"));subtitle.addView(pages);meta.addView(subtitle,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
-        repository.executor.execute{val count=repository.pageIds(doc.id).size;runOnUiThread{pages.text="${count}페이지"}}
+        meta.addView(title);val subtitle=ui.row();val date=ui.text(formatDocumentDate(doc.data),11f,ui.color("#777777"));subtitle.addView(date,LinearLayout.LayoutParams(0,-2,1f));val pages=ui.text("${pageCount}페이지",11f,ui.color("#777777"));subtitle.addView(pages);meta.addView(subtitle,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
         card.addView(meta,if(listMode)LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(14)}else LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
         return card
     }
@@ -445,16 +457,8 @@ class MainActivity:ComponentActivity(){
         val date=if(value is Number)java.util.Date(value.toLong())else runCatching{java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss",java.util.Locale.US).parse(value.toString())}.getOrNull()
         return date?.let{java.text.SimpleDateFormat("yyyy. M. d.",java.util.Locale.getDefault()).format(it)}?:""
     }
-    private fun thumbnail(documentId:String?,pageId:String?):NotePreview{
-        val view=NotePreview(this);val key=pageId?:"doc:$documentId"
-        view.loadBitmap={
-            val bitmap=thumbnailCache.get(key)
-            if(bitmap==null&&thumbnailPending.add(key))repository.executor.execute{
-                val image=runCatching{val id=pageId?:repository.pageIds(requireNotNull(documentId)).firstOrNull();id?.let{repository.page(it)}?.let{StreamingPdf.render(repository,it,220)}}.getOrNull()
-                runOnUiThread{thumbnailPending.remove(key);if(image!=null){thumbnailCache.put(key,image);view.invalidate()}}
-            };bitmap
-        };return view
-    }
+    private fun thumbnail(documentId:String?,pageId:String?):NotePreview=
+        NotePreview(this).also{thumbnails.bind(it,documentId,pageId)}
     private fun newNote(initialTemplate:String="grid"){
         var template=initialTemplate;val content=showSheet("새 문서","노트 템플릿 선택",680)
         content.addView(ui.text("노트 제목",12f,ui.color("#5d626a"),true),LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(7)})
@@ -500,11 +504,13 @@ class MainActivity:ComponentActivity(){
         }
     }
     fun openDocument(id:String,index:Int?=null){
+        closeSearchDrawer()
         inkView?.finishContact()
+        thumbnails.cancelPending()
         work("노트를 여는 중…",{
             val doc=requireNotNull(repository.document(id)){"노트를 찾을 수 없습니다."}
-            val pageIds=repository.pageIds(id);require(pageIds.isNotEmpty()){"페이지가 없습니다."}
-            Triple(doc,pageIds,pageIds.map{requireNotNull(repository.pageMeta(it))})
+            val pageMetas=repository.pageMetas(id);require(pageMetas.isNotEmpty()){"페이지가 없습니다."}
+            Triple(doc,pageMetas.map{it.getString("id")},pageMetas)
         }){(doc,pageIds,pageMetas)->
             document=doc;ids=pageIds;metas=pageMetas;openTabs+=id
             val remembered=doc.data.optString("lastPageId");val found=pageIds.indexOf(remembered)
@@ -529,7 +535,7 @@ class MainActivity:ComponentActivity(){
             tabs.addView(horizontal(tabList),LinearLayout.LayoutParams(0,dp(29),1f));tabs.addView(ui.iconButton("plus","새 문서",Color.WHITE,40,32,19){newNote()});body.addView(tabs,LinearLayout.LayoutParams(-1,dp(34)))
         }
         val navbar=ui.row().apply{setPadding(dp(if(narrow)4 else 12),0,dp(if(narrow)4 else 12),0);setBackgroundColor(ui.blue)}
-        editorNavbar=navbar;body.addView(navbar,LinearLayout.LayoutParams(-1,dp(if(narrow)58 else 62)))
+        editorNavbar=navbar;body.addView(navbar,LinearLayout.LayoutParams(-1,dp(62)))
         val ocrRow=ui.row().apply{setBackgroundColor(ui.color("#edf3f8"));visibility=View.GONE}
         ocrStatusRow=ocrRow
         val ocrLabel=ui.text("",12f,ui.ink).apply{setPadding(dp(16),dp(5),dp(4),dp(5));
@@ -540,15 +546,18 @@ class MainActivity:ComponentActivity(){
             cancelManualOcr("손글씨 인식을 취소했습니다.")
         }.also{it.visibility=View.GONE;ocrRow.addView(it,LinearLayout.LayoutParams(dp(30),dp(30)).apply{rightMargin=dp(8)})}
         body.addView(ocrRow,LinearLayout.LayoutParams(-1,dp(34)))
-        val surface=FrameLayout(this);editorSurface=surface;body.addView(surface,LinearLayout.LayoutParams(-1,0,1f))
+        val workspace=ui.row().apply{gravity=Gravity.TOP};editorWorkspace=workspace
+        body.addView(workspace,LinearLayout.LayoutParams(-1,0,1f))
+        val surface=FrameLayout(this);editorSurface=surface;workspace.addView(surface,LinearLayout.LayoutParams(0,-1,1f))
         val canvas=InkCanvasView(this,repository);inkView=canvas
+        canvas.beforePageRead=::afterSaved
         applySettings(canvas)
         canvas.tool=runCatching{InkCanvasView.Tool.valueOf(settings.optString("activeTool","LASSO"))}.getOrDefault(InkCanvasView.Tool.LASSO)
         if(canvas.tool==InkCanvasView.Tool.HIGHLIGHTER)canvas.inkColor=settings.optString("highlighterColor","#f5df39")
         if(canvas.tool==InkCanvasView.Tool.TAPE)canvas.inkColor=settings.optString("tapeColor","#4c91dd")
         canvas.onPageChanged={position->if(manualOcrPageId!=null&&canvas.currentPage?.id!=manualOcrPageId)
             cancelManualOcr("다른 페이지로 이동해 인식을 취소했습니다.")
-            updatePageLabel();rememberPosition(position);scheduleOcr()}
+            updatePageLabel();rememberPosition(position);renderSidebar();scheduleOcr()}
         canvas.onContactChanged={writing->if(inkView===canvas){
             pageOcr.setWriting(writing)
             if(writing){ocrTask?.let{handler.removeCallbacks(it)};ocrTask=null}else scheduleOcr()
@@ -556,19 +565,22 @@ class MainActivity:ComponentActivity(){
         canvas.onEdit={pageId,change,positions->
             invalidateOcr(pageId)
             val documentId=doc.id;enqueueSave({repository.commit(documentId,pageId,change,positions)})
-            thumbnailCache.remove(pageId);thumbnailCache.remove("doc:$documentId");scheduleOcr();updateUndoPill()
+            thumbnails.invalidatePage(documentId,pageId);scheduleOcr();updateUndoPill()
         }
         canvas.onInsert={tool,x,y->insertObject(tool,x,y)}
+        canvas.onTextTap={x,y,fullPage->textEditor?.newBox(x,y,fullPage)}
+        canvas.onBeforePageChange={textEditor?.finish()}
         canvas.onSelection={selection->showSelection(selection)}
         canvas.onObjectTap={obj->objectMenu(obj)}
         canvas.onStatus=::message
         canvas.onAppendPage={addPage()}
         var previousTool=canvas.tool
         canvas.onToolChanged={
+            textEditor?.onToolChanged()
             if(previousTool!=canvas.tool){settings.put(when(previousTool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},canvas.inkColor);canvas.inkColor=settings.optString(when(canvas.tool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},when(canvas.tool){InkCanvasView.Tool.HIGHLIGHTER->"#f5df39";InkCanvasView.Tool.TAPE->"#4c91dd";else->"#111827"});previousTool=canvas.tool}
             renderEditorToolbar();renderActiveDock();settings.put("activeTool",canvas.tool.name);saveSettings()
         }
-        canvas.onViewportChanged={updatePageLabel()}
+        canvas.onViewportChanged={updatePageLabel();textEditor?.reposition()}
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S){
             val front=InkFrontBuffer(this,{canvas.frontBufferPresented(it)},{canvas.frontBufferRecreated()})
             inkFrontBuffer=front
@@ -576,24 +588,48 @@ class MainActivity:ComponentActivity(){
             surface.addView(front,FrameLayout.LayoutParams(-1,-1))
         }
         surface.addView(canvas,FrameLayout.LayoutParams(-1,-1))
+        textEditor=InlineTextEditor(this,surface,canvas,ui,
+            defaults={settings.optJSONObject("textStyle")?:json("fontSize" to 28,"color" to "#172033")},
+            saveDefault={settings.put("textStyle",it);saveSettings()},
+            copyObject={clipboard=listOf(it)},
+            changed={
+                val active=textEditor?.active==true
+                if(activeDock?.visibility!=(if(active)View.GONE else View.VISIBLE))renderActiveDock()
+                else textEditor?.refreshControls()
+            })
         val pill=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(4),0,dp(4),0);background=ui.rounded(ui.color("#bf575758"),20f);elevation=dp(8).toFloat()};undoPill=pill
         surface.addView(pill,FrameLayout.LayoutParams(dp(if(narrow)102 else 146),dp(if(narrow)48 else 68),if(narrow)Gravity.BOTTOM or Gravity.LEFT else Gravity.TOP or Gravity.LEFT).apply{leftMargin=dp(if(narrow)8 else 13);if(narrow)bottomMargin=dp(12)else topMargin=dp(18)})
         fun hud():TextView=ui.text("",12f,Color.WHITE,true).apply{gravity=Gravity.CENTER;setPadding(dp(13),0,dp(13),0);background=ui.rounded(ui.color("#b326292e"),17f)}
-        pageLabel=hud().apply{setOnClickListener{jumpPage()}};zoomLabel=hud().apply{minimumWidth=dp(62);setOnClickListener{canvas.resetZoom()}}
-        surface.addView(pageLabel,FrameLayout.LayoutParams(-2,dp(34),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(14)})
+        pageLabel=hud().apply{isFocusable=true;setOnClickListener{openPages()}};zoomLabel=hud().apply{minimumWidth=dp(62);setOnClickListener{canvas.resetZoom()}}
+        surface.addView(pageLabel,FrameLayout.LayoutParams(-2,dp(48),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(7)})
         surface.addView(zoomLabel,FrameLayout.LayoutParams(-2,dp(34),Gravity.BOTTOM or Gravity.RIGHT).apply{bottomMargin=dp(14);rightMargin=dp(14)})
         selectionBar=ui.row().apply{setPadding(dp(5),dp(5),dp(5),dp(5));background=ui.rounded(ui.color("#f5181819"),15f);visibility=View.GONE;elevation=dp(12).toFloat()}
         surface.addView(selectionBar,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(62)})
         renderEditorToolbar();renderActiveDock();updateUndoPill()
         canvas.open(ids,metas,index);applyHudOpacity();updatePageLabel()
+        surface.addOnLayoutChangeListener{_,left,_,right,_,oldLeft,_,oldRight,_->
+            if(right-left!=oldRight-oldLeft)surface.post{
+                if(editorSurface===surface){
+                    updateUndoPill();renderActiveDock()
+                    if(oldRight>oldLeft)canvas.goTo(canvas.currentIndex,center=true)
+                }
+            }
+        }
     }
+    private fun editorWidth():Int=editorSurface?.width?.takeIf{it>0}?:
+        (resources.displayMetrics.widthPixels-root.paddingLeft-root.paddingRight-(pageSidebar?.layoutParams?.width?:0))
     private fun renderEditorToolbar(){
-        val bar=editorNavbar?:return;val view=inkView?:return;val narrow=resources.configuration.screenWidthDp<=840;bar.removeAllViews()
+        val bar=editorNavbar?:return;val view=inkView?:return
+        val narrow=resources.configuration.screenWidthDp<=840;bar.removeAllViews()
+        bar.setPadding(dp(if(narrow)4 else 12),0,dp(if(narrow)4 else 12),0)
+        // The tools scroll within the remaining width. A tablet/window breakpoint must
+        // never create a second row when the actual bar still has room.
+        bar.orientation=LinearLayout.HORIZONTAL
         val left=ui.row();val center=ui.row();val right=ui.row().apply{gravity=Gravity.RIGHT or Gravity.CENTER_VERTICAL}
-        val size=if(narrow)42 else 48
+        val size=48
         fun icon(parent:LinearLayout,name:String,label:String,active:Boolean=false,action:()->Unit){parent.addView(ui.iconButton(name,label,Color.WHITE,size,size,if(narrow)23 else 25,active,ui.color("#d9e4ef"),if(name=="pen")ui.color("#1d677b")else ui.color("#162b44"),action),LinearLayout.LayoutParams(dp(size),dp(size)).apply{if(parent.childCount>0)leftMargin=dp(if(parent==center)5 else 4)})}
         icon(left,"home","라이브러리"){showLibrary()}
-        if(!narrow){left.addView(ui.divider());icon(left,"sidebar","페이지 사이드바",pageSidebar!=null){togglePages()};icon(left,"sparkles","학습 도우미"){assistantMenu()}}
+        if(!narrow)icon(left,"sparkles","학습 도우미"){assistantMenu()}
         fun tool(name:String,label:String,value:InkCanvasView.Tool){icon(center,name,label,view.tool==value){if(value==InkCanvasView.Tool.PEN&&view.tool==value)penSettingsSheet()else{view.tool=value;if(value==InkCanvasView.Tool.IMAGE)insertObject(value,100f,150f)}}}
         tool("lasso","올가미",InkCanvasView.Tool.LASSO);tool("pen","펜",InkCanvasView.Tool.PEN);tool("eraser","지우개",InkCanvasView.Tool.ERASER);tool("text","텍스트",InkCanvasView.Tool.TEXT)
         if(!narrow){tool("sticky","스티키 노트",InkCanvasView.Tool.STICKY);tool("image","이미지",InkCanvasView.Tool.IMAGE)}
@@ -601,22 +637,37 @@ class MainActivity:ComponentActivity(){
         if(!narrow)center.addView(ui.divider())
         icon(center,"ruler","자",view.ruler){view.ruler=!view.ruler;view.invalidate();renderEditorToolbar()}
         icon(center,"mic","오디오 녹음",audio.recording){toggleRecording();renderEditorToolbar()}
-        icon(right,"page-plus","새 페이지"){addPage()};if(!narrow)icon(right,"share","공유와 내보내기"){exportMenu(document?:return@icon,true)}
-        if(!narrow)icon(right,"ocr","손글씨 인식"){recognize(false,false)}
+        if(!narrow)icon(right,"share","공유와 내보내기"){exportMenu(document?:return@icon,true)}
+        icon(right,"search","문서 검색"){searchDocument()}
+        icon(right,"ocr","현재 페이지 손글씨 인식"){recognize(false,false)}
+        icon(right,"sidebar","페이지 관리",pageSidebar!=null){togglePages()}
+        ViewCompat.setTooltipText(right.getChildAt(right.childCount-1),t("페이지 관리"))
         icon(right,"more","더 보기"){editorMenu()}
-        if(narrow){bar.addView(left);bar.addView(horizontal(center).apply{getChildAt(0).layoutParams=FrameLayout.LayoutParams(-2,-1)},LinearLayout.LayoutParams(0,-1,1f));bar.addView(right)}
-        else {bar.addView(left,LinearLayout.LayoutParams(0,-1,1f));bar.addView(center);bar.addView(right,LinearLayout.LayoutParams(0,-1,1f))}
+        val tools=horizontal(center).apply{isHorizontalScrollBarEnabled=true;getChildAt(0).layoutParams=FrameLayout.LayoutParams(-2,-1)}
+        bar.addView(left);bar.addView(tools,LinearLayout.LayoutParams(0,-1,1f));bar.addView(right)
     }
     private fun updateUndoPill(){
-        val pill=undoPill?:return;val view=inkView?:return;val narrow=resources.configuration.screenWidthDp<=840;pill.removeAllViews()
-        val undo=ui.iconButton("undo","실행 취소",Color.WHITE,if(narrow)42 else 57,if(narrow)40 else 52){view.undo();updateUndoPill()}.apply{isEnabled=view.canUndo;alpha=if(isEnabled)1f else .32f}
-        val redo=ui.iconButton("redo","다시 실행",Color.WHITE,if(narrow)42 else 57,if(narrow)40 else 52){view.redo();updateUndoPill()}.apply{isEnabled=view.canRedo;alpha=if(isEnabled)1f else .32f}
+        val pill=undoPill?:return;val view=inkView?:return;val narrow=editorWidth()/ui.density<=840;pill.removeAllViews()
+        pill.layoutParams=(pill.layoutParams as FrameLayout.LayoutParams).apply{width=dp(if(narrow)102 else 146);height=dp(if(narrow)48 else 68)}
+        val undo=ui.iconButton("undo","실행 취소",Color.WHITE,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.undo();updateUndoPill()}.apply{isEnabled=view.canUndo;alpha=if(isEnabled)1f else .32f}
+        val redo=ui.iconButton("redo","다시 실행",Color.WHITE,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.redo();updateUndoPill()}.apply{isEnabled=view.canRedo;alpha=if(isEnabled)1f else .32f}
         pill.addView(undo);pill.addView(redo,LinearLayout.LayoutParams(dp(if(narrow)42 else 57),dp(if(narrow)40 else 52)).apply{leftMargin=dp(6)})
     }
     private fun renderActiveDock(){
         val surface=editorSurface?:return;val view=inkView?:return;activeDock?.let{surface.removeView(it)}
-        val narrow=resources.configuration.screenWidthDp<=840
-        val dock=ui.row().apply{gravity=Gravity.CENTER;clipChildren=false;clipToPadding=false};activeDock=dock
+        if(view.tool==InkCanvasView.Tool.TEXT) {
+            val dock=ui.row().apply{gravity=Gravity.CENTER;visibility=if(textEditor?.active==true)View.GONE else View.VISIBLE};activeDock=dock
+            val controls=textEditor?.toolbar()?:return
+            val available=(surface.width.takeIf{it>0}?:resources.displayMetrics.widthPixels)-dp(24)
+            controls.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(dp(48),View.MeasureSpec.EXACTLY))
+            val scroll=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=false;clipToOutline=true;background=ui.rounded(0xfff4f4f6.toInt(),14f,0xffd9d9df.toInt());elevation=dp(8).toFloat();addView(controls,ViewGroup.LayoutParams(-2,dp(48)))}
+            dock.addView(scroll,LinearLayout.LayoutParams(min(controls.measuredWidth,available),dp(48)))
+            surface.addView(dock,FrameLayout.LayoutParams(-2,dp(48),Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply{topMargin=dp(10)})
+            undoPill?.layoutParams=(undoPill?.layoutParams as? FrameLayout.LayoutParams)?.apply{gravity=Gravity.BOTTOM or Gravity.LEFT;topMargin=0;bottomMargin=dp(18)}
+            return
+        }
+        val narrow=editorWidth()/ui.density<=840
+        val dock=ui.row().apply{gravity=Gravity.CENTER;clipChildren=false;clipToPadding=false;visibility=if(textEditor?.active==true)View.GONE else View.VISIBLE};activeDock=dock
         val menu=ui.row().apply{gravity=Gravity.CENTER_VERTICAL;setPadding(dp(if(narrow)7 else 10),dp(6),dp(if(narrow)7 else 10),dp(6));background=ui.rounded(ui.color("#f7171717"),if(narrow)18f else 21f);elevation=0f}
         fun add(item:View,width:Int?=null,height:Int=45){menu.addView(item,LinearLayout.LayoutParams(if(width==null)item.layoutParams?.width?:-2 else dp(width),dp(height)).apply{if(menu.childCount>0)leftMargin=dp(7)})}
         fun divider(){if(narrow)return;add(ui.divider().apply{setPadding(0,0,0,0)},7,36);(menu.getChildAt(menu.childCount-1) as View).background=ui.rounded(Color.TRANSPARENT);val last=menu.getChildAt(menu.childCount-1);last.setBackgroundColor(0x21ffffff);last.scaleX=1f/7f}
@@ -648,34 +699,16 @@ class MainActivity:ComponentActivity(){
             InkCanvasView.Tool.ERASER->{named("eraser","획",!view.preciseEraser&&!view.wholeEraser){view.preciseEraser=false;view.wholeEraser=false;renderActiveDock()};named("lasso","정밀",view.preciseEraser){view.preciseEraser=true;view.wholeEraser=false;renderActiveDock()};named("trash","전체",view.wholeEraser){view.wholeEraser=true;view.preciseEraser=false;renderActiveDock()};divider();listOf(12f,26f,48f).forEach(::width);slider();icon("trash","페이지 지우기"){clearPage()}}
             InkCanvasView.Tool.LASSO->{named("lasso","자유형 선택",true){};icon("check-circle","전체 선택"){view.selectAll()};icon("copy","붙여넣기"){pasteSelection()};divider();label("필기 · 텍스트 · 이미지")}
             InkCanvasView.Tool.SHAPE->{listOf("line","curve","arc","rectangle","rounded-rectangle","square","ellipse","circle","triangle","diamond","pentagon","hexagon","starshape","trapezoid","parallelogram","heartshape","cloudshape","speech","arrow","double-arrow").forEach{shape->icon(shape,shape,view.shape==shape){view.shape=shape;renderActiveDock()}};divider();listOf(2f,4f,8f).forEach(::width);slider();colors(palette.take(5),view.inkColor){view.inkColor=it}}
-            InkCanvasView.Tool.TEXT->{named("text","텍스트 추가",true){insertObject(InkCanvasView.Tool.TEXT,100f,150f)};divider();label("페이지를 탭해 입력");icon("search","검색"){searchDocument()}}
+            InkCanvasView.Tool.TEXT->{named("text","텍스트 추가",true){textEditor?.finish();message("페이지를 탭해 입력")};divider();textEditor?.toolbar()?.let{add(it)} }
             InkCanvasView.Tool.STICKY->{named("sticky","스티키 노트",true){};divider();colors(listOf("#ffe58d","#ffd2dc","#cfefff","#d8f5ce","#ddd2ff"),settings.optString("stickyColor","#ffe58d")){settings.put("stickyColor",it)};label("페이지를 탭해 추가")}
             InkCanvasView.Tool.TAPE->{named("tape","암기 테이프",true){};divider();colors(listOf("#4c91dd","#cf5b74","#6f63c7","#2c9878","#d38a32"),view.inkColor){view.inkColor=it};label("탭하면 정답 보기")}
-            InkCanvasView.Tool.HAND->{named("hand","손 도구",true){};icon("close","축소"){view.zoomBy(.8f);renderActiveDock()};label("${view.zoomPercent()}%");icon("plus","확대"){view.zoomBy(1.25f);renderActiveDock()};icon("fit","페이지 맞춤"){view.resetZoom();renderActiveDock()}}
+            InkCanvasView.Tool.HAND->{named("hand","손 도구",true){};icon("minus","축소"){view.zoomBy(.8f);renderActiveDock()};label("${view.zoomPercent()}%");icon("plus","확대"){view.zoomBy(1.25f);renderActiveDock()};icon("fit","페이지 맞춤"){view.resetZoom();renderActiveDock()}}
             InkCanvasView.Tool.LASER->{named("laser","레이저 포인터",true){};divider();label("표시는 저장되지 않습니다")}
             InkCanvasView.Tool.IMAGE->{named("image","이미지 선택",true){insertObject(InkCanvasView.Tool.IMAGE,100f,150f)};divider();label("사진을 페이지에 삽입")}
         }
-        val position=settings.optString("dock","top")
-        if(narrow){
-            // Wrap complete controls into rows, rather than showing half of a horizontal menu.
-            val available=((if(surface.width>0)surface.width else resources.displayMetrics.widthPixels-root.paddingLeft-root.paddingRight)-dp(24)).coerceAtLeast(dp(160))
-            val rowWidth=available-menu.paddingLeft-menu.paddingRight
-            val children=(0 until menu.childCount).map{menu.getChildAt(it)};menu.removeAllViews();menu.orientation=LinearLayout.VERTICAL;menu.gravity=Gravity.CENTER_HORIZONTAL
-            var row=ui.row().apply{gravity=Gravity.CENTER};var used=0
-            fun flush(){if(row.childCount>0){menu.addView(row,LinearLayout.LayoutParams(-1,-2).apply{if(menu.childCount>0)topMargin=dp(6)});row=ui.row().apply{gravity=Gravity.CENTER};used=0}}
-            children.forEach{child->val params=child.layoutParams as LinearLayout.LayoutParams
-                child.measure(View.MeasureSpec.makeMeasureSpec(max(0,params.width),if(params.width>0)View.MeasureSpec.EXACTLY else View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(params.height,View.MeasureSpec.EXACTLY))
-                val childWidth=child.measuredWidth;val gap=if(row.childCount>0)dp(7)else 0
-                if(used+gap+childWidth>rowWidth)flush()
-                params.leftMargin=if(row.childCount>0)dp(7)else 0;used+=params.leftMargin+childWidth;row.addView(child,params)}
-            flush();menu.measure(View.MeasureSpec.makeMeasureSpec(available,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
-            val height=min(menu.measuredHeight,dp(min(220,resources.configuration.screenHeightDp/3).coerceAtLeast(100)))
-            val scroll=ScrollView(this).apply{isVerticalScrollBarEnabled=true;clipToOutline=true;background=ui.rounded(ui.color("#f7171717"),18f);addView(menu,ViewGroup.LayoutParams(-1,-2))}
-            dock.addView(scroll,LinearLayout.LayoutParams(-1,-1))
-            surface.addView(dock,FrameLayout.LayoutParams(-1,height,if(position=="bottom")Gravity.BOTTOM else Gravity.TOP).apply{leftMargin=dp(12);rightMargin=dp(12);topMargin=dp(8);bottomMargin=dp(18)})
-            undoPill?.layoutParams=(undoPill?.layoutParams as? FrameLayout.LayoutParams)?.apply{gravity=Gravity.BOTTOM or Gravity.LEFT;topMargin=0;bottomMargin=dp(12)}
-            return
-        }
+        val position=settings.optString("dock","top").let{if(view.tool==InkCanvasView.Tool.TEXT||narrow&&it in listOf("left","right"))"top" else it}
+        val availableWidth=if(surface.width>0)surface.width else
+            resources.displayMetrics.widthPixels-root.paddingLeft-root.paddingRight
         fun grip():View=FrameLayout(this).apply{
             contentDescription="활성 도구 메뉴 위치 변경";alpha=.55f;isClickable=true
             listOf(7,14).forEach{x->addView(View(this@MainActivity).apply{background=ui.rounded(ui.color("#53565c"),3f)},FrameLayout.LayoutParams(dp(4),dp(22),Gravity.CENTER_VERTICAL or Gravity.LEFT).apply{leftMargin=dp(x)})}
@@ -694,13 +727,13 @@ class MainActivity:ComponentActivity(){
             undoPill?.layoutParams=(undoPill?.layoutParams as? FrameLayout.LayoutParams)?.apply{gravity=Gravity.BOTTOM or Gravity.LEFT;topMargin=0;bottomMargin=dp(18)}
             return
         }
-        val maxWidth=dp(min(960,resources.configuration.screenWidthDp-64));menu.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(dp(60),View.MeasureSpec.EXACTLY))
+        val maxWidth=(availableWidth-dp(if(narrow)24 else 64)).coerceAtLeast(dp(160));menu.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(dp(60),View.MeasureSpec.EXACTLY))
         val scroll=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=true;clipToOutline=true;background=ui.rounded(ui.color("#f7171717"),21f);elevation=dp(8).toFloat();addView(menu,ViewGroup.LayoutParams(-2,dp(60)))}
-        dock.addView(scroll,LinearLayout.LayoutParams(if(narrow)dp(resources.configuration.screenWidthDp-54)else min(menu.measuredWidth,maxWidth),dp(60)))
+        dock.addView(scroll,LinearLayout.LayoutParams(min(menu.measuredWidth,maxWidth),dp(60)))
         if(!narrow)dock.addView(grip(),LinearLayout.LayoutParams(dp(24),dp(44)).apply{leftMargin=dp(7)})
         val gravity=when(position){"bottom"->Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL;"left"->Gravity.CENTER_VERTICAL or Gravity.LEFT;"right"->Gravity.CENTER_VERTICAL or Gravity.RIGHT;else->Gravity.TOP or Gravity.CENTER_HORIZONTAL}
         surface.addView(dock,FrameLayout.LayoutParams(-2,dp(60),gravity).apply{topMargin=dp(if(narrow)6 else 10);bottomMargin=dp(18);leftMargin=dp(if(position=="left")14 else 0);rightMargin=dp(if(position=="right")14 else 0)})
-        val collide=narrow||((resources.configuration.screenWidthDp-(min(menu.measuredWidth,maxWidth)/ui.density+31))/2<172)
+        val collide=narrow||((availableWidth/ui.density-(min(menu.measuredWidth,maxWidth)/ui.density+31))/2<172)
         undoPill?.layoutParams=(undoPill?.layoutParams as? FrameLayout.LayoutParams)?.apply{this.gravity=if(collide)Gravity.BOTTOM or Gravity.LEFT else Gravity.TOP or Gravity.LEFT;topMargin=if(collide)0 else dp(18);bottomMargin=dp(if(narrow)12 else 18)}
     }
     private fun currentWidth():Float=inkView?.let{when(it.tool){InkCanvasView.Tool.ERASER->it.eraserRadius;InkCanvasView.Tool.HIGHLIGHTER->it.highlighterWidth;else->it.inkWidth}}?:4.2f
@@ -714,19 +747,58 @@ class MainActivity:ComponentActivity(){
         view.eraserRadius=settings.f("eraserRadius",22f);view.highlighterWidth=settings.f("highlighterWidth",22f);view.penSettings=settings.optJSONObject("penSettings")?:defaultPenSettings(view.brush);view.preciseEraser=settings.optBoolean("preciseEraser",false)
         status.alpha=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f)
     }
-    private fun updatePageLabel(){pageLabel?.text="${(inkView?.currentIndex?:0)+1} / ${ids.size}";zoomLabel?.text="${inkView?.zoomPercent()?:100}%";updateUndoPill()}
+    private fun updatePageLabel(){pageLabel?.text="${(inkView?.currentIndex?:0)+1} / ${ids.size}";pageLabel?.contentDescription="${t("페이지 관리")}, ${(inkView?.currentIndex?:0)+1} / ${ids.size}";zoomLabel?.text="${inkView?.zoomPercent()?:100}%";updateUndoPill()}
     private fun rememberPosition(index:Int){val doc=document?:return;val id=ids.getOrNull(index)?:return
+        if(doc.data.optString("lastPageId")==id&&doc.data.optInt("lastPageIndex",-1)==index)return
         doc.data.put("lastPageId",id).put("lastPageIndex",index)
         enqueueSave({repository.document(doc.id)?.let{it.data.put("lastPageId",id).put("lastPageIndex",index);repository.putDocument(it)}})}
     private fun addPage(){val doc=document?:return;val index=(inkView?.currentIndex?:0)+1;val template=inkView?.currentPage?.meta?.optString("template","grid")?:"grid"
         work("페이지 추가 중…",{repository.addPage(doc.id,NotePage.blank(template),index)}){refreshPages(index)}}
-    private fun refreshPages(index:Int){val doc=document?:return;work("페이지를 불러오는 중…",{val pages=repository.pageIds(doc.id);pages to pages.map{requireNotNull(repository.pageMeta(it))}}){(pages,meta)->
-        ids=pages;metas=meta;inkView?.updatePages(ids,metas,index.coerceIn(0,ids.lastIndex));updatePageLabel();renderSidebar()}}
-    private fun jumpPage(){prompt("페이지 번호",((inkView?.currentIndex?:0)+1).toString()){value->value.toIntOrNull()?.let{inkView?.goTo(it-1)}}}
-    private fun pageMenu(){
-        val doc=document?:return;val current=inkView?.currentIndex?:0;val pageId=ids.getOrNull(current)?:return
-        val content=showSheet("페이지 레이아웃","${current+1}페이지")
-        menuItem(content,"이 페이지로 이동","eye"){inkView?.goTo(current)}
+    private fun addPageBeside(pageId:String,after:Boolean){
+        val doc=document?:return;val canvas=inkView?:return
+        val meta=metas.getOrNull(ids.indexOf(pageId))?:return
+        val page=NotePage.blank(meta.optString("template","grid"),meta.f("width",1000f),meta.f("height",1414f))
+        canvas.finishContact()
+        work("페이지 추가 중…",{
+            val anchor=repository.pageIds(doc.id).indexOf(pageId)
+            require(anchor>=0){"페이지를 찾을 수 없습니다."}
+            repository.addPage(doc.id,page,anchor+if(after)1 else 0)
+            repository.pageMetas(doc.id)
+        }){metadata->
+            if(document?.id!=doc.id||inkView!==canvas)return@work
+            ids=metadata.map{it.getString("id")};metas=metadata
+            val selected=ids.indexOf(page.id)
+            canvas.updatePages(ids,metas,selected)
+            if(pageSidebar!=null)canvas.goTo(selected,center=true)
+            rememberPosition(selected);thumbnails.invalidateDocument(doc.id);updatePageLabel();renderSidebar()
+        }
+    }
+    private fun refreshPages(index:Int){val doc=document?:return;work("페이지를 불러오는 중…",{repository.pageMetas(doc.id)}){meta->
+        ids=meta.map{it.getString("id")};metas=meta;val selected=index.coerceIn(0,ids.lastIndex);inkView?.updatePages(ids,metas,selected);rememberPosition(selected);thumbnails.invalidateDocument(doc.id);updatePageLabel();renderSidebar()}}
+    private fun deletePage(pageId:String){
+        val doc=document?:return;val canvas=inkView?:return;val position=ids.indexOf(pageId)
+        if(position<0)return
+        if(ids.size<=1){message("마지막 페이지는 삭제할 수 없습니다.");return}
+        canvas.finishContact()
+        val selected=ids.getOrNull(canvas.currentIndex)
+        invalidateOcr(pageId)
+        work("페이지 삭제 중…",{
+            repository.removePage(doc.id,pageId);repository.pageMetas(doc.id)
+        }){metadata->
+            if(document?.id!=doc.id||inkView!==canvas)return@work
+            ids=metadata.map{it.getString("id")};metas=metadata
+            val next=ids.indexOf(selected).takeIf{it>=0}?:position.coerceIn(0,ids.lastIndex)
+            thumbnails.invalidatePage(doc.id,pageId)
+            canvas.updatePages(ids,metas,next)
+            if(pageSidebar!=null)canvas.goTo(next,center=true)
+            rememberPosition(next);updatePageLabel();renderSidebar()
+        }
+    }
+    private fun pageMenu(pageId:String,anchor:View){
+        val doc=document?:return;val current=ids.indexOf(pageId);if(current<0)return
+        val content=showPagePopover(anchor,"${t("페이지")} ${current+1}")
+        menuItem(content,"앞 페이지 추가","page-plus"){addPageBeside(pageId,false)}
+        menuItem(content,"뒷 페이지 추가","page-plus"){addPageBeside(pageId,true)}
         menuItem(content,if(metas[current].optBoolean("bookmarked"))"북마크 해제"else"북마크","bookmark"){
             val bookmarked=!metas[current].optBoolean("bookmarked")
             var committed:JSONObject?=null
@@ -739,9 +811,20 @@ class MainActivity:ComponentActivity(){
                 }
             }}
         menuItem(content,"페이지 복제","duplicate"){work("페이지 복제 중…",{repository.duplicatePage(doc.id,pageId,current+1)}){refreshPages(current+1)}}
-        fun move(delta:Int){val next=(current+delta).coerceIn(0,ids.lastIndex);if(next!=current){val order=ids.toMutableList().apply{add(next,removeAt(current))};work("페이지 이동 중…",{repository.reorder(doc.id,order)}){refreshPages(next)}}}
-        menuItem(content,"앞으로 이동","arrow-up"){move(-1)};menuItem(content,"뒤로 이동","arrow-down"){move(1)}
-        menuItem(content,"페이지 삭제","trash"){confirm("페이지 삭제","현재 페이지를 삭제할까요?"){work("페이지 삭제 중…",{repository.removePage(doc.id,pageId)}){refreshPages(current)}}}
+        menuItem(content,"페이지 삭제","trash",if(ids.size==1)"마지막 페이지는 삭제할 수 없습니다."else"",enabled=ids.size>1){deletePage(pageId)}
+    }
+    private fun reorderPages(docId:String,canvas:InkCanvasView,original:List<String>,order:List<String>){
+        if(document?.id!=docId||inkView!==canvas||ids!==original||order==original)return
+        work("페이지 이동 중…",{
+            val reordered=try{repository.reorder(docId,order);true}catch(_:IllegalArgumentException){false}
+            reordered to repository.pageMetas(docId)
+        }){(reordered,metadata)->
+            if(document?.id!=docId||inkView!==canvas)return@work
+            ids=metadata.map{it.getString("id")};metas=metadata
+            canvas.refreshPageList(ids,metas)
+            rememberPosition(canvas.currentIndex);updatePageLabel();renderSidebar()
+            if(!reordered)message("페이지 목록이 변경되어 이동을 취소했습니다.")
+        }
     }
     private fun loadOutline(complete:(List<JSONObject>)->Unit){val doc=document?:return
         work("목차를 읽는 중…",{doc.outlineEntries(repository.pageIds(doc.id).asSequence().mapNotNull{repository.page(it)})}){entries->
@@ -808,6 +891,7 @@ class MainActivity:ComponentActivity(){
         slider("굵기",((if(highlight)view.highlighterWidth else view.inkWidth)*10).toInt(),5,if(highlight)600 else 200){n->if(highlight)view.highlighterWidth=n/10f else{view.inkWidth=n/10f;settings.put("inkWidth",view.inkWidth);saveSettings()}}}
     private fun eraserMenu(){choose("지우개",listOf("획 지우개","정밀 지우개","지우개 크기")){i->if(i<2){inkView?.preciseEraser=i==1;settings.put("preciseEraser",i==1);saveSettings()}else slider("지우개 크기",inkView?.eraserRadius?.toInt()?:22,3,80){inkView?.eraserRadius=it.toFloat()}}}
     private fun insertObject(tool:InkCanvasView.Tool,x:Float,y:Float){
+        if(tool==InkCanvasView.Tool.TEXT){textEditor?.newBox(x,y);return}
         if(tool==InkCanvasView.Tool.IMAGE){pendingInsert=Triple(tool,x,y);pick("image");return}
         prompt(if(tool==InkCanvasView.Tool.STICKY)"스티키 노트"else"텍스트",""){value->inkView?.add(json("id" to uid("text"),"type" to if(tool==InkCanvasView.Tool.STICKY)"sticky"else"text","x" to x,"y" to y,"w" to if(tool==InkCanvasView.Tool.STICKY)310 else 700,"h" to if(tool==InkCanvasView.Tool.STICKY)230 else 100,"text" to value,"fontSize" to 28,"color" to if(tool==InkCanvasView.Tool.STICKY)settings.optString("stickyColor","#ffe58d")else(inkView?.inkColor?:"#172033"))) }
     }
@@ -817,6 +901,10 @@ class MainActivity:ComponentActivity(){
             val item=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(9),0,dp(9),0);contentDescription=t(label);setOnClickListener{clicked()}}
             val tint=if(danger)ui.color("#ff8c8c")else Color.WHITE;item.addView(ui.icon(icon,tint,18));item.addView(ui.text(label,11f,tint,true),LinearLayout.LayoutParams(-2,-2).apply{leftMargin=dp(5)})
             bar.addView(item,LinearLayout.LayoutParams(-2,dp(38)).apply{if(bar.childCount>0)leftMargin=dp(4)})
+        }
+        if(objects.any{it.optString("type")=="stroke"})action("필기 변환","ocr"){
+            val selected=inkView?.selected()?.filter{it.optString("type")=="stroke"}?.map{it.optString("id")}?.toSet().orEmpty()
+            if(selected.isNotEmpty())choose("필기 변환",listOf("텍스트로 변환","수식으로 변환")){mode->recognize(mode==1,false,selected)}
         }
         action("잘라내기","cut"){clipboard=inkView?.selected()?.filter{!it.optBoolean("locked")}?.map{it.copyJson()}?:emptyList();inkView?.deleteSelection()}
         action("복사","copy"){clipboard=inkView?.selected()?.map{it.copyJson()}?:emptyList();message("복사했습니다.")}
@@ -828,6 +916,7 @@ class MainActivity:ComponentActivity(){
             bar.layoutParams=(bar.layoutParams as FrameLayout.LayoutParams).apply{gravity=Gravity.TOP or Gravity.LEFT;leftMargin=(view.left+point.x).toInt().coerceIn(dp(10),max(dp(10),surface.width-bar.width-dp(10)));topMargin=if(point.y>bar.height+dp(12))point.y.toInt()-bar.height-dp(10)else min(surface.height-bar.height-dp(10),view.screenPoint(left,bottom).y.toInt()+dp(10));bottomMargin=0}}
     }
     private fun objectMenu(obj:JSONObject){
+        if(obj.optString("type")=="text"){textEditor?.select(obj);return}
         if(obj.optString("type")=="tape"){inkView?.toggleTape(obj);return}
         if(obj.optString("type") in listOf("text","sticky","sticker"))choose("텍스트",listOf("내용 편집","글자 크기","굵게/보통","삭제")){i->
             if(obj.optBoolean("locked")){message("잠긴 객체입니다.");return@choose}
@@ -844,11 +933,8 @@ class MainActivity:ComponentActivity(){
     private fun editorMenu(){
         val doc=document?:return;val view=inkView?:return;val content=showSheet(doc.title,"문서 옵션")
         menuItem(content,"파일 내보내기","export","노트 파일 또는 PDF로 저장합니다."){exportMenu(doc,false)}
-        menuItem(content,"문서 검색","search","입력한 텍스트, 수식, 제목을 찾습니다."){searchDocument()}
-        menuItem(content,"손글씨 OCR","ocr","현재 페이지 필기를 영역별로 인식하고 교정할 수 있습니다."){recognize(false,false)}
         menuItem(content,if(doc.favorite)"파일 즐겨찾기 해제"else"파일 즐겨찾기","star","라이브러리 즐겨찾기와 목록 상단에 고정합니다."){mutateDocument(doc){put("favorite",!doc.favorite)}}
-        menuItem(content,"페이지 번호로 이동","arrow","페이지 창에서 원하는 페이지 번호를 입력합니다."){if(pageSidebar==null)togglePages()}
-        menuItem(content,"손글씨 수식 계산","math","현재 화면의 필기 수식을 한 번 인식해 결과를 표시합니다."){recognize(true,false)}
+        menuItem(content,"수식으로 변환","math","숫자·기본 연산·괄호·분수·지수를 인식합니다. 결과를 확인한 뒤 계산하세요."){recognize(true,false)}
         menuItem(content,if(view.readOnly)"편집 모드로 전환"else"읽기 모드",if(view.readOnly)"eye-off"else"read","실수로 필기되지 않도록 편집을 잠급니다."){view.readOnly=!view.readOnly;if(view.readOnly)view.tool=InkCanvasView.Tool.HAND}
         menuItem(content,if(view.continuous)"한 페이지 보기"else"연속 페이지 보기","sidebar"){changePageMode(!view.continuous)}
         menuItem(content,"페이지 맞춤","fit"){view.resetZoom()}
@@ -906,9 +992,10 @@ class MainActivity:ComponentActivity(){
     private fun pdfImportChanged(documentId:String,pagesChanged:Boolean,error:String?){
         if(error!=null){message(when(error){"pdfImportCancelled"->"PDF 가져오기를 중단했습니다.";"pdfTextTooLarge"->"PDF 원문 텍스트가 너무 큽니다.";
             else->"PDF 가져오기 또는 원문 색인에 실패했습니다: $error"});return}
+        if(pagesChanged)thumbnails.invalidateDocument(documentId)
         if(pagesChanged&&document?.id==documentId){
-            repository.executor.execute{val pageIds=repository.pageIds(documentId);val metadata=pageIds.mapNotNull{repository.pageMeta(it)}
-                runOnUiThread{if(document?.id==documentId&&pageIds.size==metadata.size){ids=pageIds;metas=metadata;inkView?.refreshPageList(ids,metas);updatePageLabel();renderSidebar()}}}
+            repository.executor.execute{val metadata=repository.pageMetas(documentId)
+                runOnUiThread{if(document?.id==documentId){ids=metadata.map{it.getString("id")};metas=metadata;inkView?.refreshPageList(ids,metas);updatePageLabel();renderSidebar()}}}
         }
     }
     @Deprecated("Uses platform result contracts for API 23 compatibility")
@@ -924,51 +1011,53 @@ class MainActivity:ComponentActivity(){
             intent.action=Intent.ACTION_MAIN
         }
     }
+    private fun closeSearchDrawer(){
+        documentSearch?.cancel()
+        searchDrawer?.let{(it.parent as? ViewGroup)?.removeView(it)}
+        searchDrawer=null
+        inkView?.clearSearchHighlights()
+        (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.hideSoftInputFromWindow(root.windowToken,0)
+    }
     private fun searchDocument(){
         val surface=editorSurface?:return;val doc=document?:return
-        searchDrawer?.let{surface.removeView(it);searchDrawer=null;return}
+        if(searchDrawer!=null){closeSearchDrawer();return}
+        inkView?.clearSearchHighlights()
         val drawer=ui.col().apply{setBackgroundColor(ui.color("#fcfcfd"));elevation=dp(12).toFloat();isClickable=true};searchDrawer=drawer
-        val header=ui.row().apply{setPadding(dp(16),0,dp(12),0)};header.addView(ui.text("문서 검색",14f,ui.ink,true),LinearLayout.LayoutParams(0,-1,1f));header.addView(ui.iconButton("close","닫기",width=34){surface.removeView(drawer);searchDrawer=null});drawer.addView(header,LinearLayout.LayoutParams(-1,dp(58)));drawer.addView(ui.line(ui.color("#e3e5e9")))
-        val input=ui.field("","손글씨 OCR·텍스트·수식 검색",42);drawer.addView(input,LinearLayout.LayoutParams(-1,dp(42)).apply{setMargins(dp(14),dp(14),dp(14),dp(14))})
+        val header=ui.row().apply{setPadding(dp(16),0,dp(12),0)};header.addView(ui.text("문서 검색",14f,ui.ink,true),LinearLayout.LayoutParams(0,-1,1f));header.addView(ui.iconButton("close","검색 닫기",width=34){closeSearchDrawer()});drawer.addView(header,LinearLayout.LayoutParams(-1,dp(58)));drawer.addView(ui.line(ui.color("#e3e5e9")))
+        val input=ui.field("","PDF·손글씨·텍스트·수식 검색",42).apply{contentDescription=t("문서 검색어")};drawer.addView(input,LinearLayout.LayoutParams(-1,dp(42)).apply{setMargins(dp(14),dp(14),dp(14),dp(14))})
         val results=ui.col().apply{setPadding(dp(14),0,dp(14),dp(14))};drawer.addView(ScrollView(this).apply{addView(results)},LinearLayout.LayoutParams(-1,0,1f))
+        val searches=documentSearch?:DocumentSearchCoordinator<List<DocumentSearchHit>>(
+            search={id,term,cancelled->repository.searchDocumentPages(id,term,cancelled)},
+            dispatch={action->runOnUiThread(action)}).also{documentSearch=it}
         var generation=0
         input.addTextChangedListener(object:TextWatcher{override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){};override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){
-            val search=s.toString();val request=++generation;results.removeAllViews();if(search.isBlank())return
-            repository.executor.execute{val matches=repository.searchDocumentPages(doc.id,search)
-                runOnUiThread{if(generation!=request||searchDrawer!==drawer)return@runOnUiThread;results.removeAllViews();if(matches.isEmpty())results.addView(ui.text("검색 결과가 없습니다.",13f,ui.muted));matches.forEach{(index,snippet)->menuItem(results,"${index+1}페이지","search",snippet){inkView?.goTo(index)}}}}
+            val search=s.toString();val request=++generation;inkView?.clearSearchHighlights();results.removeAllViews()
+            searches.request(doc.id,search){result->
+                if(generation!=request||searchDrawer!==drawer||document?.id!=doc.id||isFinishing||isDestroyed)return@request
+                results.removeAllViews()
+                val matches=result.getOrElse{results.addView(ui.text("검색에 실패했습니다. 다시 시도해 주세요.",13f,ui.muted));return@request}
+                if(matches.isEmpty())results.addView(ui.text("검색 결과가 없습니다.",13f,ui.muted));matches.forEach{hit->menuItem(results,"${hit.index+1}페이지","search",hit.snippet){
+                    if(generation==request&&searchDrawer===drawer&&document?.id==doc.id){
+                        inkView?.goTo(hit.index);inkView?.showSearchHighlights(hit.pageId,hit.bounds)
+                        input.clearFocus()
+                        (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.hideSoftInputFromWindow(input.windowToken,0)
+                    }
+                }}}
         };override fun afterTextChanged(s:Editable?){} })
         surface.addView(drawer,FrameLayout.LayoutParams(dp(min(420,(resources.configuration.screenWidthDp*.92f).toInt())),-1,Gravity.RIGHT))
     }
     private fun scheduleOcr(){
         ocrTask?.let{handler.removeCallbacks(it)}
-        if(inkView?.hasActiveContact==true||!settings.optBoolean("autoOcr",true)&&!settings.optBoolean("autoMath",false))return
+        if(inkView?.hasActiveContact==true||!settings.optBoolean("autoOcr",true))return
         ocrTask=Runnable{recognize(false,true)}.also{handler.postDelayed(it,6500)}
     }
     private fun ocrPolicy()=settings.optString("ocrLanguagePolicy").ifBlank{when(settings.optString("language","ko")){
         "en"->"en-primary";"ja"->"ja";"zh"->"zh";"pt"->"pt";else->"ko-primary"}}
     private fun invalidateOcr(pageId:String){pageEditEpoch[pageId]=(pageEditEpoch[pageId]?:0)+1
         if(manualOcrPageId==pageId)cancelManualOcr("페이지가 변경되어 인식을 취소했습니다.")else pageOcr.cancel(pageId)}
-    private fun recognize(math:Boolean,automatic:Boolean){
+    private fun recognize(math:Boolean,automatic:Boolean,selectedIds:Set<String>?=null){
         val view=inkView?:return;val page=view.currentPage?:return;val doc=document?:return
         if(automatic&&view.hasActiveContact)return
-        if(math){
-            if(recognitionBusy)return
-            recognitionBusy=true
-            val pageId=page.id
-            afterSaved{recognition.executor.execute{
-                try{val saved=requireNotNull(repository.page(pageId));val result=recognition.handwriting(saved.objects,saved.width,saved.height,
-                    settings.optString("language","ko"),true)
-                    runOnUiThread{if(document?.id==doc.id&&inkView?.currentPage?.id==pageId)calculatePrompt(result.replace('\n',' '))}}
-                catch(e:Exception){runOnUiThread{
-                    if(e.message=="mathEngineUnavailable"){
-                        message("수식 전용 인식 엔진이 아직 준비되지 않았습니다. 수식을 직접 입력해 주세요.")
-                        if(document?.id==doc.id&&inkView?.currentPage?.id==pageId)calculatePrompt("")
-                    }else message("수식 인식에 실패했습니다.")
-                }}
-                finally{recognitionBusy=false}
-            }}
-            return
-        }
         val policy=ocrPolicy()
         val startEpoch=pageEditEpoch[page.id]?:0
         val uiToken=if(automatic)0L else ++ocrUiToken
@@ -978,98 +1067,95 @@ class MainActivity:ComponentActivity(){
             if(document?.id!=doc.id||inkView?.currentPage?.id!=page.id||(pageEditEpoch[page.id]?:0)!=startEpoch||
                 !automatic&&(uiToken!=ocrUiToken||manualOcrPageId!=page.id))return@afterSaved
             if(automatic&&inkView?.hasActiveContact==true)return@afterSaved
-            pageOcr.request(doc.id,page.id,policy,automatic,
-                progress={stage,done,total->if(!automatic)runOnUiThread{if(document?.id==doc.id&&
+            pageOcr.request(doc.id,page.id,policy,automatic,math=math,selectedIds=selectedIds,
+                progress={stage,_,_->if(!automatic)runOnUiThread{if(document?.id==doc.id&&
                     inkView?.currentPage?.id==page.id&&uiToken==ocrUiToken&&manualOcrPageId==page.id)
-                    showOcrStatus("손글씨 OCR · ${when(stage){"recognizing"->"영역 인식";"saving"->"결과 저장";"image"->"이미지 인식";else->"준비 중"}} · $done/$total",true)}},
+                    showOcrStatus(if(stage=="saving")"인식한 텍스트를 저장하고 있습니다."else"필기를 인식하고 있습니다.",true)}},
                 complete={receipt->runOnUiThread{
                     if(document?.id!=doc.id)return@runOnUiThread
                     if(!automatic){if(uiToken!=ocrUiToken||manualOcrPageId!=page.id||inkView?.currentPage?.id!=page.id)
                         return@runOnUiThread
                         manualOcrPageId=null
                         showOcrStatus(when{
-                            receipt.applied&&receipt.result?.optString("status")=="partial"->"손글씨 OCR · 부분 결과가 저장되었습니다."
-                            receipt.applied->"손글씨 OCR · 인식 결과가 저장되었습니다."
+                            receipt.applied&&receipt.result?.optBoolean("ephemeral")==true->"원본 필기는 유지됩니다. 복사하거나 텍스트로 추가해 보관하세요."
+                            receipt.applied&&receipt.result?.optString("status")=="partial"->"일부 필기를 인식하지 못했습니다. 원본 필기는 유지됩니다."
+                            receipt.applied->"인식한 텍스트를 저장했습니다."
                             receipt.errorCode in setOf("cancelled","inactive","recognizerInactive")->"손글씨 인식을 취소했습니다."
-                            else->"손글씨 OCR · 인식 실패"
+                            else->"손글씨 인식에 실패했습니다."
                         })}
                     if(receipt.applied&&receipt.result!=null){
                         if(!automatic){val current=inkView?.currentPage
                             if(current?.id==page.id && (pageEditEpoch[page.id]?:0)==startEpoch)
-                                showOcrResult(page.id,receipt.result)
+                                showOcrResult(page.id,receipt.result.put("uiEditEpoch",startEpoch))
                         }
-                        else if(settings.optBoolean("autoMath",false))maybeAutoMath(page.id,receipt.result)
                     }else if(!automatic&&receipt.errorCode !in setOf("alreadyIndexed","cancelled","inactive","recognizerInactive"))
-                        message(when(receipt.errorCode){"noInk"->"인식할 필기가 없습니다.";"inputTooLarge"->"필기가 너무 커서 이 영역을 인식할 수 없습니다.";
-                            "stalePage"->"인식 중 페이지가 바뀌어 결과를 적용하지 않았습니다.";
-                            "recognizerTimeout","recognizerCircuitOpen"->"인식 시간이 초과되었습니다. 앱을 다시 열어 재시도해 주세요.";
+                        message(when(receipt.errorCode){"noInk"->"인식할 필기가 없습니다.";"inputTooLarge","mathInputBudgetExceeded","mathLineLimitExceeded"->"필기를 작은 부분으로 나누어 선택한 뒤 다시 인식해 주세요.";
+                            "stalePage","selectionChanged"->"인식 중 페이지나 선택이 바뀌어 결과를 적용하지 않았습니다.";
+                            "recognizerTimeout","recognizerCircuitOpen"->"이전 인식 작업이 끝난 뒤 다시 시도해 주세요.";
                             "unsupportedLanguage"->"이 언어의 인식 모델을 사용할 수 없습니다.";else->"손글씨 인식에 실패했습니다."})
                 }}
             )
         }
     }
-    private fun maybeAutoMath(pageId:String,result:JSONObject){
-        if(result.array("regions").objects().none{it.optString("contentKind")=="MATH"&&it.optString("status")=="complete"})return
-        val page=inkView?.currentPage?.takeIf{it.id==pageId}?:return
-        val recognized=result.array("regions").objects().joinToString("\n"){it.optString("selectedText")}
-        if(!recognized.trim().endsWith("="))return
-        try{val expression=recognized.lineSequence().last().trim().removeSuffix("=").trim()
-            val answer=MathEngine(degrees=settings.optBoolean("degrees")).calculate(expression)
-            if(page.objects.none{it.optString("type")=="math"&&it.optString("expression")==expression})
-                inkView?.add(json("id" to uid("math"),"type" to "math","expression" to expression,"result" to answer.display(),
-                    "x" to 100,"y" to min(page.height-100,(page.objects.lastOrNull()?.let{InkGeometry.bounds(it).bottom}?:150f)+30),
-                    "w" to 600,"h" to 92,"fontSize" to 27))
-        }catch(_:Exception){}
-    }
     private fun showOcrResult(pageId:String,result:JSONObject){
-        val content=showSheet("손글씨 OCR","인식 결과")
+        val math=result.optString("contentKind")=="MATH"
+        val ephemeral=result.optBoolean("ephemeral")
+        val expectedEpoch=result.optLong("uiEditEpoch",pageEditEpoch[pageId]?:0L)
+        val documentId=document?.id
+        fun current()=document?.id==documentId&&inkView?.currentPage?.id==pageId&&
+            (pageEditEpoch[pageId]?:0L)==expectedEpoch
+        val content=showSheet(if(math)"수식으로 변환"else"손글씨 인식","인식 결과")
         val visible=OcrResultPolicy.visibleRegions(result)
-        val combined=visible.joinToString("\n"){it.optString("correctedText",it.optString("selectedText"))}
-        content.addView(ui.text(if(result.optString("status")=="complete")"인식 완료"else"부분 결과 · 원본 필기 유지",13f,ui.muted))
-        if(visible.isEmpty())content.addView(ui.text("인식된 텍스트가 없습니다.",13f,ui.muted))
-        visible.forEach{region->
-            val id=region.optString("id");val status=region.optString("status")
-            val raw=region.optString("correctedText",region.optString("selectedText"))
-            val alternate=region.optJSONObject("alternateLanguage")?.array("candidates")?.objects()?.firstOrNull()?.optString("text")
-            val label=if(status=="complete"||status=="cached")raw.ifBlank{"(빈 결과)"}else "$id · ${when(status){"unresolved"->"영역 구분 필요";"failed"->"인식 실패";else->"검토 필요"}}"
-            menuItem(content,label,"ocr",buildString{val reasons=region.array("reviewReasons")
-                append((0 until reasons.length()).joinToString(" · "){index->when(reasons.optString(index)){
-                "legacyOrder"->"이전 필기의 획 순서 확인 필요";"timeBasisUnknown"->"필기 시간 정보 없음";
-                "marginalia"->"여백 필기";"languageDisagreement"->"언어별 결과가 다름";
-                "layoutAmbiguous"->"영역 구분 확인 필요";else->"검토 필요"}})
-                val options=region.array("candidates").objects().map{it.optString("text")}
-                if(options.isNotEmpty())append(" · 후보: ").append(options.joinToString(" / "))
-                if(alternate!=null)append(" · 다른 언어 후보: ").append(alternate)}) {
-                if(status=="complete"||status=="cached"){
-                    val options=region.array("candidates").objects().map{it.optString("text")}+
-                        listOfNotNull(alternate).filter{it !in region.array("candidates").objects().map{candidate->candidate.optString("text")}}
-                    choose("인식 후보",options+"직접 수정"){selected->
-                        val expectedInputDigest=region.optString("inputDigest")
-                        val expectedPageDigest=result.optString("pageDigest")
-                        val saveCorrection:(String)->Unit={value->work("교정을 저장하고 있습니다.",{
-                            val applied=repository.correctOcrRegion(pageId,id,value,expectedInputDigest,expectedPageDigest)
-                            applied to repository.ocrResult(pageId)
-                        }){(applied,updated)->if(!applied)message("인식 결과가 변경되었습니다. 새 결과에서 다시 교정해 주세요.")
-                            else if(updated!=null&&inkView?.currentPage?.id==pageId)showOcrResult(pageId,updated)
-                            else message("교정을 저장했습니다.")}}
-                        options.getOrNull(selected)?.let(saveCorrection)?:prompt("영역 교정",raw,saveCorrection)
-                    }
-                }
-            }
+        val combined=OcrResultPolicy.visibleText(result)
+        if(result.optString("status")!="complete")
+            content.addView(ui.text(if(math)"일부 수식을 인식하지 못했습니다. 작은 부분으로 나누어 선택한 뒤 다시 시도해 주세요."
+                else"일부 필기를 인식하지 못했습니다. 원본 필기는 유지됩니다.",13f,ui.muted))
+        if(math)content.addView(ui.text("기본 수식 변환 결과입니다. 계산하기 전에 내용을 확인해 주세요.",12f,ui.muted))
+        if(ephemeral)content.addView(ui.text("원본 필기는 유지됩니다. 복사하거나 텍스트로 추가해 보관하세요.",12f,ui.muted))
+        val input=ui.field(combined,"인식된 텍스트가 없습니다.").apply{
+            contentDescription=t("인식한 텍스트")
+            setSingleLine(false);minLines=4;gravity=Gravity.TOP or Gravity.START
+            setPadding(dp(14),dp(12),dp(14),dp(12))
+            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
-        menuItem(content,"OCR 진단 JSON 내보내기","export","필기와 인식 결과가 포함됩니다. 정답 영역은 내보낸 뒤 직접 표시합니다."){
-            val doc=document
-            if(doc!=null&&inkView?.currentPage?.id==pageId)fileExport.prepare(doc,"json",false,pageId)
+        content.addView(input,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12);bottomMargin=dp(12)})
+        if(!ephemeral)menuItem(content,"교정 저장","check"){
+            if(!current()){message("페이지가 변경되었습니다. 다시 인식해 주세요.");return@menuItem}
+            val value=input.text.toString()
+            work("교정을 저장하고 있습니다.",{
+                val applied=repository.correctOcrText(pageId,value,result.optString("pageDigest"))
+                applied to repository.ocrResult(pageId)
+            }){(applied,updated)->if(!applied)message("인식 결과가 변경되었습니다. 새 결과에서 다시 교정해 주세요.")
+                else if(updated!=null&&current())showOcrResult(pageId,updated.put("uiEditEpoch",expectedEpoch))
+                else message("교정을 저장했습니다.")}
         }
-        menuItem(content,"전체 텍스트 복사","copy"){val clipboard=getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("BADNOTE OCR",combined));message("복사했습니다.")}
-        menuItem(content,"원래 위치에 텍스트 추가","text"){val current=inkView?.currentPage
-            if(current?.id==pageId){val objects=visible.mapNotNull{region->
-                val value=region.optString("correctedText",region.optString("selectedText"));val box=region.optJSONObject("bounds")
-                if(value.isEmpty()||box==null)null else ocrTextObject(value,box,current)
-            };if(objects.isNotEmpty())inkView?.changeObjects(emptyList(),objects)
-                if(objects.size<visible.count{it.optString("correctedText",it.optString("selectedText")).isNotEmpty()})
-                    message("페이지 안에 들어가지 않는 텍스트 영역은 추가하지 않았습니다.")}}
+        menuItem(content,"전체 텍스트 복사","copy"){
+            val clipboard=getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("BADNOTE OCR",input.text.toString()))
+            message("복사했습니다.")
+        }
+        menuItem(content,"텍스트로 추가","text"){
+            val page=inkView?.currentPage
+            if(page==null||!current()){message("페이지가 변경되었습니다. 다시 인식해 주세요.");return@menuItem}
+            val value=input.text.toString()
+            if(value.isEmpty()){message("추가할 텍스트가 없습니다.");return@menuItem}
+            val boxes=visible.mapNotNull{it.optJSONObject("bounds")}.filter{box->
+                listOf("left","top","right","bottom").all{box.optDouble(it).isFinite()}&&
+                    box.optDouble("right")>box.optDouble("left")&&box.optDouble("bottom")>box.optDouble("top")}
+            val box=if(boxes.isEmpty())json("left" to 100,"top" to 150,"right" to max(180f,page.width-100f),"bottom" to 190)
+                else json("left" to boxes.minOf{it.optDouble("left")},"top" to boxes.minOf{it.optDouble("top")},
+                    "right" to boxes.maxOf{it.optDouble("right")},"bottom" to boxes.maxOf{it.optDouble("bottom")})
+            val obj=ocrTextObject(value,box,page)
+            if(obj==null)message("페이지 안에 텍스트가 들어가지 않습니다. 내용을 줄여 다시 추가해 주세요.")
+            else inkView?.changeObjects(emptyList(),listOf(obj))
+        }
+        if(math)menuItem(content,"수식 확인 및 계산","math","계산할 부분을 선택하면 선택한 수식만 계산합니다."){
+            if(!current()){message("페이지가 변경되었습니다. 다시 인식해 주세요.");return@menuItem}
+            val start=min(input.selectionStart,input.selectionEnd);val end=max(input.selectionStart,input.selectionEnd)
+            val expression=if(start>=0&&end>start)input.text.substring(start,end)else input.text.toString()
+            calculatePrompt(expression.trim().removeSuffix("=").trim(),pageId,expectedEpoch)
+        }
     }
     private fun ocrTextObject(value:String,box:JSONObject,page:NotePage):JSONObject?{
         val left=box.optDouble("left");val top=box.optDouble("top")
@@ -1098,10 +1184,16 @@ class MainActivity:ComponentActivity(){
             "w" to width,"h" to max(40.0,min(pageHeight-y,max(bottom-top,textHeight))),
             "fontSize" to 28,"color" to "#225e9d")
     }
-    private fun mathMenu(){choose("수식",listOf("손글씨 수식 계산","수식 직접 입력","각도 단위 변경")){i->when(i){0->recognize(true,false);1->calculatePrompt("");2->{settings.put("degrees",!settings.optBoolean("degrees"));saveSettings();message(if(settings.optBoolean("degrees"))"도 단위"else"라디안 단위")}}}}
-    private fun calculatePrompt(expression:String){prompt("수식 확인",expression){value->
+    private fun mathMenu(){choose("수식",listOf("수식으로 변환","수식 직접 입력","각도 단위 변경")){i->when(i){0->recognize(true,false);1->calculatePrompt("");2->{settings.put("degrees",!settings.optBoolean("degrees"));saveSettings();message(if(settings.optBoolean("degrees"))"도 단위"else"라디안 단위")}}}}
+    private fun calculatePrompt(expression:String,expectedPage:String?=null,expectedEpoch:Long?=null){prompt("수식 확인",expression){value->
+        if(expectedPage!=null&&(inkView?.currentPage?.id!=expectedPage||
+                expectedEpoch!=null&&(pageEditEpoch[expectedPage]?:0L)!=expectedEpoch)){
+            message("페이지가 변경되었습니다. 다시 인식해 주세요.");return@prompt
+        }
         val doc=document?:return@prompt;val variables=doc.data.optJSONObject("variables")?:JSONObject();val map=variables.keys().asSequence().associateWith{variables.optDouble(it)}
-        val result=MathEngine(map,settings.optBoolean("degrees")).calculate(value)
+        val result=try{MathEngine(map,settings.optBoolean("degrees")).calculate(value)}catch(error:Exception){
+            message(error.message?:"수식을 계산할 수 없습니다.");calculatePrompt(value,expectedPage,expectedEpoch);return@prompt
+        }
         result.variable?.let{name->val value=result.value
             val current=document?.takeIf{it.id==doc.id}?:doc
             val visibleVariables=current.data.optJSONObject("variables")?.copyJson()?:JSONObject()
@@ -1193,7 +1285,7 @@ class MainActivity:ComponentActivity(){
         setting("언어","앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.",ui.button(names[languages.indexOf(settings.optString("language","ko")).coerceAtLeast(0)],height=38){choose("언어",names){i->settings.put("language",languages[i]);loadDictionary();saveSettings();val index=inkView?.currentIndex?:0;if(document==null)showLibrary()else showEditor(index);showSettings()}})
         val ocrPolicies=listOf("ko-primary","en-primary","mixed-review","ja","zh","pt")
         val ocrNames=listOf("한국어 우선","English first","한·영 검토","日本語","中文","Português")
-        setting("손글씨 OCR 언어","혼합 검토는 두 모델 후보가 다르면 검토 사유로 표시합니다.",
+        setting("손글씨 OCR 언어","한국어와 영어가 섞인 필기를 함께 인식합니다.",
             ui.button(ocrNames[ocrPolicies.indexOf(ocrPolicy()).coerceAtLeast(0)],height=38){
                 choose("손글씨 OCR 언어",ocrNames){i->settings.put("ocrLanguagePolicy",ocrPolicies[i]);saveSettings();scheduleOcr();showSettings()}
             })
@@ -1206,7 +1298,6 @@ class MainActivity:ComponentActivity(){
         setting("HUD 텍스트 투명도","S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.",opacity)
         toggle("연속 페이지 보기","모든 페이지를 세로로 이어서 표시합니다.","continuous",true)
         toggle("손글씨 OCR 자동 등록","필기를 인식해 문서 검색에 등록합니다.","autoOcr",true)
-        toggle("손글씨 수식 자동 계산","등호로 끝나는 수식을 인식해 계산합니다.","autoMath",false)
         menuItem(content,"업데이트 확인","download","bad note ${BuildConfig.VERSION_NAME}"){checkUpdates()}
         menuItem(content,"PDFium 오픈소스 고지","page-plus","PDF 원문 검색 엔진의 라이선스와 포함된 고지를 읽습니다."){
             val notices=assets.open("pdfium-notices.txt").bufferedReader(Charsets.UTF_8).use{it.readText()}
@@ -1235,44 +1326,56 @@ class MainActivity:ComponentActivity(){
         menuItem(content,"손글씨 OCR","search","현재 페이지 필기를 텍스트로 인식합니다."){recognize(false,false)}
         menuItem(content,"수식 계산","math","손글씨 수식을 계산하거나 직접 입력합니다."){mathMenu()}
     }
-    private fun togglePages(){
-        val surface=editorSurface?:return
-        pageSidebar?.let{surface.removeView(it);pageSidebar=null;resizeForSidebar();return}
-        val sidebar=ui.col().apply{setBackgroundColor(ui.color("#fcfcfd"));elevation=dp(12).toFloat();isClickable=true};pageSidebar=sidebar
-        surface.addView(sidebar,FrameLayout.LayoutParams(dp(min(420,(resources.configuration.screenWidthDp*.92f).toInt())),-1,Gravity.LEFT))
-        renderSidebar();resizeForSidebar()
+    private fun openPages(){
+        inkView?.finishContact()
+        sidebarTab="pages"
+        if(pageSidebar==null)togglePages()else renderSidebar()
     }
-    private fun resizeForSidebar(){
-        val narrow=resources.configuration.screenWidthDp<=840
-        val inset=if(!narrow&&pageSidebar!=null)dp(420)else 0
-        inkView?.let{it.layoutParams=(it.layoutParams as FrameLayout.LayoutParams).apply{leftMargin=inset}}
-        inkFrontBuffer?.let{it.layoutParams=(it.layoutParams as FrameLayout.LayoutParams).apply{leftMargin=inset}}
+    private fun togglePages(){
+        val workspace=editorWorkspace?:return
+        inkView?.finishContact()
+        closeSheet()
+        pageSidebar?.let{pageGrid?.dispose();pageGrid=null;workspace.removeView(it);pageSidebar=null;renderEditorToolbar();return}
+        sidebarTab="pages"
+        val sidebar=ui.col().apply{setBackgroundColor(ui.color("#fcfcfd"));elevation=dp(12).toFloat();isClickable=true;contentDescription=t("페이지 관리")};pageSidebar=sidebar
+        val width=workspace.width.takeIf{it>0}?:resources.displayMetrics.widthPixels
+        val panelWidth=(width-dp(280)).coerceIn(dp(156),dp(188))
+        workspace.addView(sidebar,0,LinearLayout.LayoutParams(panelWidth,-1))
+        renderSidebar();renderEditorToolbar()
     }
     private fun renderSidebar(){
-        val sidebar=pageSidebar?:return;sidebar.removeAllViews()
-        val header=ui.row().apply{setPadding(dp(16),0,dp(12),0)};val tabs=ui.row()
+        val sidebar=pageSidebar?:return
+        val scrollState=pageGrid?.layoutManager?.onSaveInstanceState()
+        val previousSelected=pageGrid?.selectedId
+        pageGrid?.dispose();pageGrid=null;sidebar.removeAllViews()
+        val header=ui.row().apply{setPadding(dp(4),0,dp(4),0)};val tabs=ui.row()
         listOf("pages" to "페이지","outline" to "목차","audio" to "오디오").forEach{(id,title)->
-            val tab=ui.col().apply{gravity=Gravity.BOTTOM;setOnClickListener{sidebarTab=id;renderSidebar()};contentDescription=title}
-            tab.addView(ui.text(title,13f,if(sidebarTab==id)ui.ink else ui.muted,true).apply{gravity=Gravity.CENTER},LinearLayout.LayoutParams(-1,dp(41)))
+            val tab=ui.col().apply{gravity=Gravity.BOTTOM;isFocusable=true;isSelected=sidebarTab==id;setOnClickListener{sidebarTab=id;renderSidebar()};contentDescription=t(title)}
+            tab.addView(ui.text(title,11f,if(sidebarTab==id)ui.ink else ui.muted,true).apply{gravity=Gravity.CENTER;maxLines=1},LinearLayout.LayoutParams(-1,dp(45)))
             tab.addView(View(this).apply{setBackgroundColor(if(sidebarTab==id)ui.accent else Color.TRANSPARENT)},LinearLayout.LayoutParams(-1,dp(3)))
-            tabs.addView(tab,LinearLayout.LayoutParams(dp(54),dp(58)).apply{rightMargin=dp(12)})
+            tabs.addView(tab,LinearLayout.LayoutParams(0,dp(48),1f))
         }
-        header.addView(tabs,LinearLayout.LayoutParams(0,-1,1f));header.addView(ui.iconButton("close","닫기",width=34){togglePages()});sidebar.addView(header,LinearLayout.LayoutParams(-1,dp(58)));sidebar.addView(ui.line(ui.color("#e3e5e9")))
-        val content=ui.col().apply{setPadding(dp(14),dp(14),dp(14),dp(14))};sidebar.addView(ScrollView(this).apply{addView(content)},LinearLayout.LayoutParams(-1,0,1f))
+        header.addView(tabs,LinearLayout.LayoutParams(0,-1,1f));header.addView(ui.iconButton("close","페이지 관리 닫기",width=48){togglePages()});sidebar.addView(header,LinearLayout.LayoutParams(-1,dp(58)));sidebar.addView(ui.line(ui.color("#e3e5e9")))
+        val content=ui.col().apply{setPadding(dp(14),dp(14),dp(14),dp(14))}
+        if(sidebarTab!="pages")sidebar.addView(ScrollView(this).apply{addView(content)},LinearLayout.LayoutParams(-1,0,1f))
         if(sidebarTab=="pages"){
-            val controls=ui.row();val jump=ui.col();jump.addView(ui.text("페이지 이동",11f,ui.muted,true))
-            val number=ui.field("${(inkView?.currentIndex?:0)+1}",height=36).apply{inputType=android.text.InputType.TYPE_CLASS_NUMBER;gravity=Gravity.CENTER};jump.addView(number,LinearLayout.LayoutParams(-1,dp(36)).apply{topMargin=dp(5)})
-            controls.addView(jump,LinearLayout.LayoutParams(0,-2,1f));controls.addView(ui.iconButton("arrow","페이지 이동",ui.blue,36,36,17){number.text.toString().toIntOrNull()?.let{inkView?.goTo(it-1);renderSidebar()}},LinearLayout.LayoutParams(dp(36),dp(36)).apply{leftMargin=dp(8);gravity=Gravity.BOTTOM});content.addView(controls,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(16)})
-            val cardWidth=(min(420,(resources.configuration.screenWidthDp*.92f).toInt())-44)/2
-            ids.indices.chunked(2).forEach{pair->val line=ui.row().apply{gravity=Gravity.TOP}
-                pair.forEachIndexed{n,index->val item=ui.col();val card=FrameLayout(this).apply{background=ui.rounded(Color.WHITE,8f,if(index==inkView?.currentIndex)ui.accent else ui.color("#d7dbe1"),if(index==inkView?.currentIndex)2f else 1f);setPadding(dp(2),dp(2),dp(2),dp(2));clipToOutline=true;elevation=dp(3).toFloat();contentDescription="${index+1}페이지";setOnClickListener{inkView?.goTo(index);renderSidebar()};setOnLongClickListener{inkView?.goTo(index);pageMenu();true}}
-                    card.addView(thumbnail(null,ids[index]),FrameLayout.LayoutParams(-1,-1));if(metas.getOrNull(index)?.optBoolean("bookmarked")==true)card.addView(ui.icon("bookmark",ui.accent,20),FrameLayout.LayoutParams(dp(20),dp(20),Gravity.TOP or Gravity.RIGHT))
-                    item.addView(card,LinearLayout.LayoutParams(-1,dp((cardWidth*1.414f).toInt())));val label=ui.row();label.addView(ui.text("${index+1}",12f,ui.muted,true),LinearLayout.LayoutParams(0,dp(30),1f));label.addView(ui.iconButton("more","${index+1}페이지 메뉴",ui.muted,30,30,18){inkView?.goTo(index);pageMenu()});item.addView(label)
-                    line.addView(item,LinearLayout.LayoutParams(0,-2,1f).apply{if(n>0)leftMargin=dp(16)})}
-                if(pair.size==1)line.addView(View(this),LinearLayout.LayoutParams(0,1,1f).apply{leftMargin=dp(16)})
-                content.addView(line,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(18)})
-            }
-            content.addView(ui.button("새 페이지",icon="plus"){addPage()})
+            val controls=ui.row().apply{setPadding(dp(8),dp(8),dp(8),dp(8))}
+            val number=ui.field("${(inkView?.currentIndex?:0)+1}",hint="페이지 번호",height=48).apply{inputType=android.text.InputType.TYPE_CLASS_NUMBER;gravity=Gravity.CENTER;contentDescription=t("페이지 번호");setPadding(dp(4),0,dp(4),0)}
+            controls.addView(number,LinearLayout.LayoutParams(0,dp(48),1f))
+            controls.addView(ui.iconButton("chevron-right","페이지 이동",ui.blue,48,48,22){number.text.toString().toIntOrNull()?.let{inkView?.finishContact();inkView?.goTo(it-1,center=true);renderSidebar()}}.apply{ViewCompat.setTooltipText(this,t("페이지 이동"))},LinearLayout.LayoutParams(dp(48),dp(48)).apply{leftMargin=dp(4)})
+            controls.addView(ui.iconButton("page-plus","새 페이지",ui.blue,48,48,25){addPage()}.apply{ViewCompat.setTooltipText(this,t("새 페이지"))},LinearLayout.LayoutParams(dp(48),dp(48)).apply{leftMargin=dp(4)})
+            sidebar.addView(controls,LinearLayout.LayoutParams(-1,-2))
+            val docId=document?.id?:return;val canvas=inkView?:return;val original=ids
+            val grid=PageThumbnailGrid(this,ui,original,metas,original.getOrNull(canvas.currentIndex),
+                thumbnail={thumbnail(null,it)},
+                isCurrent={document?.id==docId&&inkView===canvas&&pageSidebar===sidebar&&sidebarTab=="pages"&&ids===original},
+                canDrag={!busy&&!saveFailed},finishContact={canvas.finishContact()},
+                navigate={id->val index=ids.indexOf(id);if(index>=0){canvas.finishContact();canvas.goTo(index,center=true)}},
+                menu={id,anchor->if(id in ids){canvas.finishContact();pageMenu(id,anchor)}},
+                reorder={order->reorderPages(docId,canvas,original,order)})
+            pageGrid=grid;sidebar.addView(grid,LinearLayout.LayoutParams(-1,0,1f))
+            if(scrollState!=null&&previousSelected==grid.selectedId)grid.layoutManager?.onRestoreInstanceState(scrollState)
+            else grid.scrollToPosition(canvas.currentIndex)
         }else if(sidebarTab=="outline"){
             menuItem(content,"현재 페이지를 목차에 추가","plus"){outlineMenu()}
             loadOutline{entries->if(pageSidebar!==sidebar||sidebarTab!="outline")return@loadOutline
@@ -1312,6 +1415,41 @@ class MainActivity:ComponentActivity(){
             }
         }}catch(e:Exception){runOnUiThread{message(e.message?:"업데이트 확인 실패")}}
     }}
+    private fun showPagePopover(anchor:View,title:String):LinearLayout{
+        closeSheet();inkView?.finishContact()
+        val shade=FrameLayout(this).apply{isClickable=true;setOnClickListener{closeSheet()}}
+        val scroll=ScrollView(this).apply{
+            background=ui.rounded(Color.WHITE,16f,ui.color("#dfe3e8"));clipToOutline=true;elevation=dp(16).toFloat()
+            isVerticalScrollBarEnabled=false;visibility=View.INVISIBLE;isClickable=true
+        }
+        ViewCompat.setAccessibilityPaneTitle(scroll,title)
+        val content=ui.col().apply{setPadding(dp(10),dp(6),dp(10),dp(6))}
+        val header=ui.row()
+        header.addView(ui.text(title,14f,ui.ink,true).apply{setPadding(dp(10),0,0,0)},LinearLayout.LayoutParams(0,dp(48),1f))
+        header.addView(ui.iconButton("close","닫기",width=48){closeSheet()})
+        content.addView(header);scroll.addView(content)
+        shade.addView(scroll,FrameLayout.LayoutParams(dp(264),-2,Gravity.TOP or Gravity.LEFT))
+        root.addView(shade,FrameLayout.LayoutParams(-1,-1));modal=shade
+        scroll.post{
+            if(modal!==shade||!anchor.isAttachedToWindow)return@post
+            val gap=dp(8)
+            val availableWidth=root.width-root.paddingLeft-root.paddingRight
+            val availableHeight=root.height-root.paddingTop-root.paddingBottom
+            val width=min(dp(264),(availableWidth-2*gap).coerceAtLeast(1))
+            scroll.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec((availableHeight-2*gap).coerceAtLeast(1),View.MeasureSpec.AT_MOST))
+            val origin=IntArray(2);val location=IntArray(2);root.getLocationOnScreen(origin);anchor.getLocationOnScreen(location)
+            val left=location[0]-origin[0]-root.paddingLeft;val top=location[1]-origin[1]-root.paddingTop
+            val x=if(left+anchor.width+gap+width<=availableWidth-gap)left+anchor.width+gap else left-width-gap
+            val y=if(top+anchor.height+gap+scroll.measuredHeight<=availableHeight-gap)top+anchor.height+gap else top-scroll.measuredHeight-gap
+            scroll.layoutParams=FrameLayout.LayoutParams(width,scroll.measuredHeight,Gravity.TOP or Gravity.LEFT).apply{
+                leftMargin=x.coerceIn(gap,(availableWidth-width-gap).coerceAtLeast(gap))
+                topMargin=y.coerceIn(gap,(availableHeight-scroll.measuredHeight-gap).coerceAtLeast(gap))
+            }
+            scroll.visibility=View.VISIBLE
+        }
+        return content
+    }
     private fun closeSheet(){
         modal?.let{root.removeView(it)};modal=null
         if(Build.VERSION.SDK_INT>=31)body.setRenderEffect(null)
@@ -1337,10 +1475,10 @@ class MainActivity:ComponentActivity(){
         }
         return content
     }
-    private fun sheetActions(content:LinearLayout,label:String="확인",icon:String?=null,cancel:Boolean=true,action:()->Unit){
+    private fun sheetActions(content:LinearLayout,label:String="확인",icon:String?=null,cancel:Boolean=true,height:Int=42,action:()->Unit){
         val actions=ui.row().apply{gravity=Gravity.RIGHT}
-        if(cancel)actions.addView(ui.button("취소"){closeSheet()})
-        actions.addView(ui.button(label,ui.accent,Color.WHITE,icon=icon){try{action()}catch(e:Exception){message(e.message?:"작업 실패")}},LinearLayout.LayoutParams(-2,dp(42)).apply{leftMargin=dp(9)})
+        if(cancel)actions.addView(ui.button("취소",height=height){closeSheet()})
+        actions.addView(ui.button(label,ui.accent,Color.WHITE,height=height,icon=icon){try{action()}catch(e:Exception){message(e.message?:"작업 실패")}},LinearLayout.LayoutParams(-2,dp(height)).apply{leftMargin=dp(9)})
         content.addView(actions,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(22)})
     }
     private fun templateGrid(selected:String,onPick:(String)->Unit):View{
@@ -1355,11 +1493,14 @@ class MainActivity:ComponentActivity(){
             };grid.addView(line,LinearLayout.LayoutParams(-1,-2).apply{if(grid.childCount>0)topMargin=dp(12)})
         };return grid
     }
-    private fun menuItem(parent:LinearLayout,label:String,icon:String="chevron-right",description:String="",action:()->Unit){
-        val item=ui.row().apply{setPadding(dp(10),dp(6),dp(10),dp(6));minimumHeight=dp(54);background=android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(ui.color("#edf2f7")),ui.rounded(Color.TRANSPARENT),ui.rounded(Color.WHITE));contentDescription=t(label);setOnClickListener{closeSheet();try{action()}catch(e:Exception){message(e.message?:"작업 실패")}}}
+    private fun menuItem(parent:LinearLayout,label:String,icon:String="chevron-right",description:String="",enabled:Boolean=true,action:()->Unit){
+        val item=ui.row().apply{setPadding(dp(10),dp(6),dp(10),dp(6));minimumHeight=dp(54);isFocusable=true;background=android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(ui.color("#edf2f7")),ui.rounded(Color.TRANSPARENT),ui.rounded(Color.WHITE));contentDescription=t(label);setOnClickListener{closeSheet();try{action()}catch(e:Exception){message(e.message?:"작업 실패")}}}
         item.addView(ui.iconButton(icon,label,ui.color("#436581"),38,38,21){item.performClick()}.apply{background=ui.rounded(ui.color("#edf2f7"),10f)})
         val copy=ui.col();copy.addView(ui.text(label,14f,if(label.contains("삭제"))ui.color("#d24646")else ui.ink,true));if(description.isNotBlank())copy.addView(ui.text(description,11f,ui.muted),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(3)})
         item.addView(copy,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(9);rightMargin=dp(9)});item.addView(ui.icon("chevron-right",ui.color("#a2a6ad"),18))
+        item.isEnabled=enabled;item.alpha=if(enabled)1f else .45f
+        if(!enabled&&description.isNotBlank())ViewCompat.setStateDescription(item,t(description))
+        for(index in 0 until item.childCount)item.getChildAt(index).isEnabled=enabled
         parent.addView(item,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(7)})
     }
     private fun prompt(title:String,value:String,action:(String)->Unit){
@@ -1370,14 +1511,17 @@ class MainActivity:ComponentActivity(){
         val content=showSheet("메뉴",title)
         items.forEachIndexed{i,label->menuItem(content,label,when{label.contains("삭제")||label.contains("휴지통")->"trash";label.contains("공유")->"share";label.contains("검색")->"search";label.contains("페이지")->"notebook";label.contains("복제")||label.contains("복사")->"copy";label.contains("설정")->"settings";label.contains("펜")->"pen";label.contains("내보내기")->"export";else->"chevron-right"}){action(i);if(inkView!=null)renderActiveDock()}}
     }
-    private fun confirm(title:String,description:String,action:()->Unit){val content=showSheet("",title);content.addView(ui.text(description,14f,ui.muted));sheetActions(content){closeSheet();action()}}
+    private fun confirm(title:String,description:String,action:()->Unit){val content=showSheet("",title);content.addView(ui.text(description,14f,ui.muted));sheetActions(content,height=48){closeSheet();action()}}
     private fun slider(title:String,value:Int,min:Int,max:Int,action:(Int)->Unit){
         val content=showSheet("",title);var selected=value;val output=ui.text("$value",18f,ui.ink,true);content.addView(output)
         content.addView(range(value,min,max){selected=it;output.text="$it"},LinearLayout.LayoutParams(-1,dp(48)))
         sheetActions(content){closeSheet();action(selected);renderActiveDock()}
     }
-    private fun navigateBack(){if(modal!=null){closeSheet();return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
+    override fun dispatchTouchEvent(event:MotionEvent):Boolean{textEditor?.onOutsideTouch(event);return super.dispatchTouchEvent(event)}
+    private fun navigateBack(){if(modal!=null){closeSheet();return};if(textEditor?.active==true){textEditor?.finish(returnToLasso=true);return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
     override fun onKeyDown(keyCode:Int,event:KeyEvent):Boolean{
+        if(textEditor?.active==true&&keyCode==KeyEvent.KEYCODE_ESCAPE){textEditor?.finish(cancel=true);return true}
+        if(textEditor?.active==true&&event.isCtrlPressed&&keyCode in listOf(KeyEvent.KEYCODE_S,KeyEvent.KEYCODE_ENTER)){textEditor?.finish();return true}
         if(event.isCtrlPressed){when(keyCode){KeyEvent.KEYCODE_Z->{if(event.isShiftPressed)inkView?.redo()else inkView?.undo();return true};KeyEvent.KEYCODE_Y->{inkView?.redo();return true};KeyEvent.KEYCODE_S->{inkView?.finishContact();return true}}}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(true);return true}
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY){inkView?.undo();return true}
@@ -1387,17 +1531,17 @@ class MainActivity:ComponentActivity(){
         if(keyCode==KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY){inkView?.barrelKey(false);return true}
         return super.onKeyUp(keyCode,event)
     }
-    override fun onSaveInstanceState(outState:Bundle){inkView?.finishContact();outState.putString("documentId",document?.id);outState.putString("pendingExport",fileExport.pendingPath());super.onSaveInstanceState(outState)}
+    override fun onSaveInstanceState(outState:Bundle){textEditor?.finish();inkView?.finishContact();outState.putString("documentId",document?.id);outState.putString("pendingExport",fileExport.pendingPath());super.onSaveInstanceState(outState)}
     override fun onResume(){super.onResume();if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}}
-    override fun onPause(){ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
+    override fun onPause(){textEditor?.finish();pageGrid?.cancelDrag();ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
         if(::pageOcr.isInitialized){pageOcr.setActive(false);recognition.setActive(false)}
         inkView?.finishContact();ocrTask?.let{handler.removeCallbacks(it)};if(audio.recording)stopRecording();super.onPause()}
-    override fun onConfigurationChanged(newConfig:Configuration){super.onConfigurationChanged(newConfig);val index=inkView?.currentIndex?:0;afterSaved{if(document==null)showLibrary()else showEditor(index)}}
+    override fun onConfigurationChanged(newConfig:Configuration){textEditor?.finish();pageGrid?.cancelDrag();super.onConfigurationChanged(newConfig);val index=inkView?.currentIndex?:0;afterSaved{if(document==null)showLibrary()else showEditor(index)}}
     override fun onTrimMemory(level:Int){super.onTrimMemory(level);if(level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW){
         if(::repository.isInitialized)repository.clearOcrMemoryCache()
         recognition.releaseIdle()
     }}
-    override fun onDestroy(){ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
+    override fun onDestroy(){documentSearch?.close();documentSearch=null;pageGrid?.dispose();pageGrid=null;thumbnails.close();ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
         if(saveFailed){pendingRecordings.forEach(audio::discardPending);pendingRecordings.clear()}
         audio.close();recognition.close();network.shutdown();super.onDestroy()}
     companion object{

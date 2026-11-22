@@ -40,7 +40,8 @@ object PageOcrLayout {
             try { valid += scan(id, obj, index) }
             catch (e: IllegalArgumentException) { invalid += Invalid(id, e.message ?: "invalidPoint") }
         }
-        val nonText = valid.filter { it.source.optBoolean("hidden") || it.source.optString("brush") == "highlighter" }
+        val nonText = valid.filter { it.source.optBoolean("hidden") || it.source.optString("brush") == "highlighter" ||
+            it.source.f("opacity", 1f) <= 0f || (it.source.optJSONObject("settings")?.f("opacity", 1f) ?: 1f) <= 0f }
         val nonTextIds = nonText.mapTo(HashSet()) { it.id }
         val visible = valid.filterNot { it.id in nonTextIds }
         val heights = visible.map { it.bounds.height }.filter { it >= 3f && it < height * .08f }.sorted()

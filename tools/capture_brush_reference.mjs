@@ -11,7 +11,7 @@ const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== '--output') {
   throw new Error('Usage: node tools/capture_brush_reference.mjs --output build/brush-reference.json');
 }
-const filename = path.join(root, 'web', 'app.js');
+const filename = path.join(root, 'legacy', 'web', 'app.js');
 const source = fs.readFileSync(filename, 'utf8');
 function originalFunction(name) {
   const start = source.indexOf('  function ' + name + '(');
@@ -102,7 +102,7 @@ for(const fixture of fixtures){
 }
 const output=path.resolve(args[1]);fs.mkdirSync(path.dirname(output),{recursive:true});
 fs.writeFileSync(output,JSON.stringify({
-  schemaVersion:1,source:'web/app.js',sourceSha256:crypto.createHash('sha256').update(source).digest('hex'),
+  schemaVersion:1,source:'legacy/web/app.js',sourceSha256:crypto.createHash('sha256').update(source).digest('hex'),
   purpose:'original arithmetic and drawing-command regression; not pixel/physical latency evidence',
   functions:names,fixtures,randomFixtures,widthFixtures,renderFixtures
 },null,2)+'\n');

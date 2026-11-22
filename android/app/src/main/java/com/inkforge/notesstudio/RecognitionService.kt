@@ -1,7 +1,6 @@
 package com.inkforge.notesstudio
 
 import android.graphics.Bitmap
-import com.inkforge.ocr.contracts.MathRecognitionUnavailable
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
@@ -39,14 +38,7 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
     var onModelState: (String, String) -> Unit = { _, _ -> }
     var onModelInvalidated: (String) -> Unit = {}
 
-    fun modelTags(policy: String): List<String> = when (policy) {
-        "en", "en-primary" -> listOf("en-US")
-        "mixed-review" -> listOf("ko", "en-US")
-        "ja" -> listOf("ja")
-        "zh" -> listOf("zh-Hans")
-        "pt" -> listOf("pt-BR")
-        else -> listOf("ko")
-    }
+    fun modelTags(policy: String): List<String> = OcrRecognitionPlan.languageTags(policy)
 
     private fun model(language: String): DigitalInkRecognitionModel {
         val identifier = requireNotNull(DigitalInkRecognitionModelIdentifier.fromLanguageTag(language)) { "unsupportedLanguage" }
@@ -70,8 +62,8 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
     }
 
     /** Even a cache hit must first verify that its remote model is still installed. */
-    fun ensureModels(policy: String) = synchronized(operationLock) {
-        modelTags(policy).forEach { language -> ensureDownloaded(language, model(language)) }
+    fun ensureModels(policy: String, checkCurrent: () -> Unit = {}) = synchronized(operationLock) {
+        modelTags(policy).forEach { language -> checkCurrent(); ensureDownloaded(language, model(language)) }
     }
 
     private fun recognizer(language: String): DigitalInkRecognizer {
@@ -165,10 +157,20 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
         }
     }
 
-    data class ModelResult(val languageTag: String, val candidates: List<String>)
+    data class ModelResult(val languageTag: String, val candidates: List<String>,
+                           val candidateKind: String = "native", val words: List<WordResult> = emptyList(),
+                           val reviewReasons: List<String> = emptyList())
+    data class WordResult(val region: PageOcrLayout.Region, val models: List<ModelResult>)
 
-    fun recognizeRegion(region: PageOcrLayout.Region, policy: String, preContext: String = ""): List<ModelResult> = synchronized(operationLock) {
-        modelLimit = if (lowMemory || policy != "mixed-review") 1 else 2
+    fun recognizeRegion(region: PageOcrLayout.Region, policy: String, preContext: String = "",
+                        checkCurrent: () -> Unit = {}): List<ModelResult> =
+        recognizePlan(OcrRecognitionPlan.create(region, policy, preContext), checkCurrent)
+
+    internal fun recognizePlan(plan: OcrRecognitionPlan, checkCurrent: () -> Unit = {}): List<ModelResult> =
+        synchronized(operationLock) {
+        val region = plan.source
+        val tags = plan.languageTags
+        modelLimit = if (lowMemory) 1 else tags.size.coerceAtMost(2)
         val pointCount = region.strokes.sumOf { it.pointCount.toLong() }
         require(region.strokes.size <= OcrInput.HARD_REGION_STROKES && pointCount <= OcrInput.HARD_REGION_POINTS) { "inputTooLarge" }
         var bytes = 0L
@@ -177,36 +179,77 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
             require(bytes <= OcrInput.HARD_REGION_BYTES) { "inputTooLarge" }
         }
         require(region.strokes.size <= OcrInput.SOFT_REGION_STROKES && pointCount <= OcrInput.SOFT_REGION_POINTS && bytes <= OcrInput.SOFT_REGION_BYTES) { "inputTooLarge" }
+        checkCurrent()
+        // Use the very plan that was hashed for the cache, including per-word timing modes.
+        val words = plan.regions
+        if (words.size > 1) {
+            val results = words.mapIndexed { index, word ->
+                checkCurrent()
+                WordResult(word, recognizeNativeRegion(word, tags, if (index == 0) plan.preContext else "", checkCurrent))
+            }
+            return@synchronized listOf(OcrTextComposition.compose(results, plan.policy))
+        }
+        recognizeNativeRegion(words.single(), tags, plan.preContext, checkCurrent)
+    }
+
+    /** Math keeps source JSON intact; only the bounded, geometry-preserving payload reaches ML Kit. */
+    internal fun recognizeMathRegion(region: PageOcrLayout.Region,
+                                     checkCurrent: () -> Unit = {}): List<ModelResult> =
+        synchronized(operationLock) {
+            val input = OcrInkGeometry.mathInput(region, checkCurrent)
+            modelLimit = 1
+            recognizeNativeRegion(region, listOf("en-US"), "", checkCurrent, input)
+        }
+
+    private fun recognizeNativeRegion(region: PageOcrLayout.Region, tags: List<String>, preContext: String,
+                                      checkCurrent: () -> Unit,
+                                      prepared: OcrInkGeometry.ModelInput? = null): List<ModelResult> {
+        val space = prepared?.space ?: OcrInkGeometry.space(region)
         val ink = Ink.builder()
-        for (source in region.strokes) {
+        region.strokes.forEachIndexed { strokeIndex, source ->
+            checkCurrent()
             val stroke = Ink.Stroke.builder()
             val points = source.source.optJSONArray("points") ?: throw IllegalArgumentException("invalidInput")
-            for (i in 0 until points.length()) {
-                val point = requireNotNull(points.optJSONObject(i)) { "invalidInput" }
-                val x = OcrInput.number(point, "x").toFloat() - region.bounds.left
-                val y = OcrInput.number(point, "y").toFloat() - region.bounds.top
+            val selected = prepared?.strokes?.get(strokeIndex)
+            val count = selected?.pointCount ?: points.length()
+            for (i in 0 until count) {
+                if (i and 255 == 0) checkCurrent()
+                val index = selected?.indices?.get(i) ?: i
+                val point = requireNotNull(points.optJSONObject(index)) { "invalidInput" }
+                val x = space.x(OcrInput.number(point, "x").toFloat())
+                val y = space.y(OcrInput.number(point, "y").toFloat())
                 if (region.timeMode == "relative") stroke.addPoint(Ink.Point.create(x, y, point.getLong("t") - region.timeOrigin))
                 else stroke.addPoint(Ink.Point.create(x, y))
             }
             ink.addStroke(stroke.build())
         }
-        val context = RecognitionContext.builder().setWritingArea(
-            WritingArea(region.bounds.width.coerceAtLeast(1f), region.bounds.height.coerceAtLeast(1f)))
+        val context = RecognitionContext.builder().setWritingArea(WritingArea(space.width, space.height))
             .setPreContext(preContext).build()
-        val tags = modelTags(policy)
-        tags.map { tag ->
+        val input = ink.build()
+        return tags.map { tag ->
+            checkCurrent()
             val client = recognizer(tag)
-            ModelResult(tag, infer(25, { client.recognize(ink.build(), context) }).candidates.take(5).map { it.text })
+            ModelResult(tag, infer(25, { client.recognize(input, context) }).candidates.take(5).map { it.text },
+                reviewReasons = region.reviewReasons)
         }
     }
 
-    /** A language recognizer must never report a successful mathematics conversion. */
+    /** Mathematics is an explicitly reviewed spatial subset over real English model text. */
     fun handwriting(objects: List<JSONObject>, width: Float, height: Float, language: String = "ko", math: Boolean = false): String {
-        if (math) error(MathRecognitionUnavailable.ERROR_CODE)
+        if (math) {
+            val lines = OcrMathLayout.recognize(objects, width, height,
+                recognize = { recognizeMathRegion(it).first().candidates })
+            require(lines.isNotEmpty()) { "noInk" }
+            require(lines.all { it.candidates.isNotEmpty() }) {
+                lines.firstOrNull { it.errorCode != null }?.errorCode ?: "mathStructureUnresolved"
+            }
+            return lines.joinToString("\n") { it.candidates.first() }
+        }
         val layout = PageOcrLayout.analyze(objects, width, height)
-        require(layout.regions.isNotEmpty()) { "인식할 필기가 없습니다." }
+        require(layout.regions.isNotEmpty()) { "noInk" }
         return layout.regions.joinToString("\n") { region ->
-            recognizeRegion(region, language).first().candidates.firstOrNull().orEmpty()
+            val models = recognizeRegion(region, language)
+            OcrCandidatePolicy.preferred(models, language).candidates.first()
         }
     }
 

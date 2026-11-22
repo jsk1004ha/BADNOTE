@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build InkForge Notes Studio Android release APKs with Gradle."""
+"""Build BADNOTE Android release APKs with Gradle."""
 from __future__ import annotations
 
 import argparse
@@ -25,6 +25,7 @@ def main() -> None:
     wrapper = ANDROID / ("gradlew.bat" if os.name == "nt" else "gradlew")
     parser.add_argument("--gradle", default=os.environ.get("GRADLE", str(wrapper) if wrapper.exists() else "gradle"))
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--ocr-beta", action="store_true", help="Enable the current beta OCR paths in release APKs")
     args = parser.parse_args()
 
     if not (ANDROID / "local.properties").exists() and not (os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")):
@@ -40,20 +41,17 @@ def main() -> None:
     command = [gradle, "--no-daemon", "--console=plain"]
     if args.offline:
         command.append("--offline")
+    if args.ocr_beta:
+        command.append("-PbadnoteOcrBeta=true")
     command.extend(tasks)
     run(command)
 
-    outputs = {
-        "update": ANDROID / "app/build/outputs/apk/update/release/app-update-release.apk",
-        "sideBySide": ANDROID / "app/build/outputs/apk/sideBySide/release/app-sideBySide-release.apk",
-    }
-    for name, path in outputs.items():
-        if args.variant in (name, "both") and path.exists():
-            version = re.search(r"versionName\s+'([^']+)'", (ANDROID / "app/build.gradle").read_text(encoding="utf-8")).group(1)
-            suffix = "Update" if name == "update" else "SideBySide"
+    version = re.search(r"versionName\s+'([^']+)'", (ANDROID / "app/build.gradle").read_text(encoding="utf-8")).group(1)
+    for name, suffix in {"update": "Update", "sideBySide": "SideBySide"}.items():
+        if args.variant in (name, "both"):
             destination = ROOT / "build/apk" / f"bad-note-Android-{version}-{suffix}.apk"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, destination)
+            if not destination.is_file():
+                raise SystemExit(f"빌드한 APK가 없습니다: {destination}")
             print(f"{name}: {destination}")
 
 

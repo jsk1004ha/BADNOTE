@@ -67,10 +67,11 @@ object ViewportChecks {
                 view.layout(0, 0, 480, 640)
                 // Count the metadata reads performed by the real draw loop, including culled pages.
                 // This catches accidentally leaving a full-document loop around a bounded helper.
-                val metadata = List(count) {
+                val pageHeightReads = IntArray(count)
+                val metadata = List(count) { index ->
                     object : JSONObject() {
                         override fun optDouble(name: String?, fallback: Double): Double {
-                            if (name == "height") heightReads++
+                            if (name == "height") { heightReads++; pageHeightReads[index]++ }
                             return super.optDouble(name, fallback)
                         }
                     }.put("height", 1414)
@@ -83,10 +84,17 @@ object ViewportChecks {
                     pan.setFloat(view, -(frame * (count - 1) / 59) * 1442f * view.scale)
                     bitmap.eraseColor(0)
                     heightReads = 0
+                    pageHeightReads.fill(0)
                     val start = Debug.threadCpuTimeNanos()
                     view.draw(canvas)
                     times += Debug.threadCpuTimeNanos() - start
                     candidates += heightReads
+                    if (!baseline) {
+                        val repeatedPage = pageHeightReads.indexOfFirst { it > 1 }
+                        check(repeatedPage < 0) {
+                            "Viewport frame $frame reread page $repeatedPage height ${pageHeightReads[repeatedPage]} times"
+                        }
+                    }
                     if (frame in listOf(0, 29, 59)) {
                         pixels.clear(); bitmap.copyPixelsToBuffer(pixels)
                         hashes += CRC32().apply { update(pixels.array()) }.value

@@ -16,8 +16,10 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
 
     fun request(documentId: String, pageId: String, policy: String, automatic: Boolean,
                 expectedDigest: String? = null,
+                math: Boolean = false, selectedIds: Set<String>? = null,
                 progress: (String, Int, Int) -> Unit = { _, _, _ -> },
-                complete: (Receipt) -> Unit) = queue.request(documentId, pageId, policy, automatic, expectedDigest, progress, complete)
+                complete: (Receipt) -> Unit) = queue.request(documentId, pageId, policy, automatic,
+                    expectedDigest, progress, complete, math, selectedIds)
     fun cancel(pageId: String) = queue.cancel(pageId)
     fun setActive(value: Boolean) = queue.setActive(value)
     fun setWriting(value: Boolean) = queue.setWriting(value)
@@ -29,15 +31,22 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
             ?: return Receipt(false, null, "pageMissing")
         if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val page = snapshot.page
-        val imageSource = OcrSources.hasRasterSource(page)
-        if (page.objects.none { it.optString("type") == "stroke" } && !imageSource) return Receipt(false, null, "noInk")
+        val selectedIds = request.selectedIds
+        if (selectedIds != null && (selectedIds.isEmpty() ||
+                !page.objects.map { it.optString("id") }.containsAll(selectedIds)))
+            return Receipt(false, null, "selectionChanged")
+        val source = if (selectedIds == null) page else NotePage(page.id, page.meta,
+            page.objects.filter { it.optString("id") in selectedIds }.toMutableList())
+        val imageSource = selectedIds == null && OcrSources.hasRasterSource(source)
+        if (source.objects.none { it.optString("type") == "stroke" } && !imageSource) return Receipt(false, null, "noInk")
         val generation = snapshot.generation
         val digest = OcrInput.pageDigest(page, request.policy)
         if (request.expectedDigest != null && digest != request.expectedDigest)
             return Receipt(false, null, "stalePage")
         if (!queue.current(request)) return Receipt(false, null, "cancelled")
+        if (request.math) return processMath(request, source, generation, digest)
         val started = System.nanoTime()
-        val layout = PageOcrLayout.analyze(page.objects, page.width, page.height)
+        val layout = PageOcrLayout.analyze(source.objects, source.width, source.height)
         if (layout.regions.isEmpty() && layout.unresolved.isEmpty() && layout.invalidInput.isEmpty() &&
             layout.nonTextPreserved.isEmpty() && !imageSource)
             return Receipt(false, null, "noInk")
@@ -45,7 +54,9 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
         val recognitionRegions = layout.regions.flatMap { PageOcrLayout.splitForBudget(it) ?: listOf(it) }
         if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val modelTags = if (recognitionRegions.isEmpty()) emptyList() else recognition.modelTags(request.policy)
-        if (modelTags.isNotEmpty()) recognition.ensureModels(request.policy)
+        if (modelTags.isNotEmpty()) recognition.ensureModels(request.policy) {
+            if (!queue.current(request)) error("cancelled")
+        }
         if (!queue.current(request)) return Receipt(false, null, "cancelled")
         val modelGeneration = modelTags.joinToString("|") { "$it:${repository.modelGeneration(it)}" }
         if (request.automatic && repository.hasCurrentOcrIndex(
@@ -115,47 +126,38 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
                     "sourceIdentityDigest" to OcrInput.sourceIdentityDigest(region),
                     "reviewReasons" to JSONArray(region.reviewReasons))
                 try {
-                    val tag = when (request.policy) {
-                        "en", "en-primary" -> "en-US"; "ja" -> "ja"; "zh" -> "zh-Hans"; "pt" -> "pt-BR"; else -> "ko"
-                    }
-                    val writingWidth = region.bounds.width.coerceAtLeast(1f)
-                    val writingHeight = region.bounds.height.coerceAtLeast(1f)
-                    val inputDigest = OcrInput.regionInputDigest(region, tag, "", writingWidth,
-                        writingHeight, region.timeMode)
-                    val key = OcrInput.regionKey(region, tag, "", writingWidth,
-                        writingHeight, region.timeMode, repository.modelGeneration(tag))
+                    val plan = OcrRecognitionPlan.create(region, request.policy)
+                    val inputDigest = plan.inputDigest()
+                    val key = OcrInput.Hasher().apply {
+                        string(inputDigest); string(modelGeneration); string(OcrInput.MODEL_EPOCH)
+                    }.hex()
                     output.put("inputDigest", inputDigest)
                     val cached = repository.cachedOcr(key)
                     if (!queue.current(request)) return Receipt(false, null, "cancelled")
-                    val models = if (cached == null || request.policy == "mixed-review")
-                        recognition.recognizeRegion(region, request.policy) else emptyList()
-                    val primary = models.firstOrNull()
-                    val texts = primary?.candidates ?: cached?.array("candidates")?.objects()?.map { it.optString("text") }.orEmpty()
-                    val selected = texts.firstOrNull().orEmpty()
-                    val candidates = JSONArray(texts.mapIndexed { rank, text ->
-                        val candidate = RecognitionCandidate(text,OcrInput.MODEL_EPOCH,tag,
-                            request.token.toString(),region.id,rank)
-                        json("rank" to rank,"nativeRank" to candidate.nativeRank,
-                            "text" to candidate.rawText,"rawText" to candidate.rawText,
-                            "engineId" to candidate.engineId,"languageTag" to candidate.languageTag,
-                            "requestId" to candidate.requestId,"hypothesisId" to candidate.hypothesisId,
-                            "score" to JSONObject.NULL,"confidence" to JSONObject.NULL)
-                    })
-                    val alternate = models.getOrNull(1)
-                    if (alternate?.candidates?.firstOrNull()?.let { it != selected } == true)
-                        output.array("reviewReasons").put("languageDisagreement")
-                    if (texts.isEmpty() || selected.isBlank()) error("emptyCandidates")
-                    output.put("status", if (cached != null && primary == null) "cached" else "complete")
+                    val models = cached?.let { OcrModelCache.decode(it, plan) }?.takeIf { it.isNotEmpty() }
+                        ?: recognition.recognizePlan(plan,
+                            checkCurrent = { if (!queue.current(request)) error("cancelled") })
+                    val primary = OcrCandidatePolicy.preferred(models, request.policy)
+                    val selected = primary.candidates.first()
+                    val candidates = JSONArray()
+                    (listOf(primary) + models.filterNot { it === primary }).forEach { model ->
+                        model.candidates.forEachIndexed { nativeRank, text ->
+                            val composed = model.candidateKind != "native"
+                            candidates.put(candidateJson(text, model.languageTag, nativeRank, request, region,
+                                if (composed) OcrTextComposition.ENGINE_ID else OcrInput.MODEL_EPOCH)
+                                .put("candidateKind", model.candidateKind)
+                                .put("nativeRank", if (composed) JSONObject.NULL else nativeRank)
+                                .put("rank", candidates.length()))
+                        }
+                    }
+                    output.put("reviewReasons", JSONArray((plan.reviewReasons +
+                        OcrCandidatePolicy.reviewReasons(models, request.policy)).distinct()))
+                    output.put("status", if (cached == null) "complete" else "cached")
                         .put("rawText", selected).put("selectedText", selected).put("candidates", candidates)
-                        .put("languageTag", primary?.languageTag ?: tag)
-                    if (alternate != null) output.put("alternateLanguage", json("languageTag" to alternate.languageTag,
-                        "candidates" to JSONArray(alternate.candidates.mapIndexed { rank, text ->
-                            json("rank" to rank,"nativeRank" to rank,"text" to text,"rawText" to text,
-                                "engineId" to OcrInput.MODEL_EPOCH,"languageTag" to alternate.languageTag,
-                                "requestId" to request.token.toString(),"hypothesisId" to region.id,
-                                "score" to JSONObject.NULL,"confidence" to JSONObject.NULL)
-                        })))
-                    if (cached == null && primary != null) repository.cacheOcr(key, json("candidates" to candidates))
+                        .put("languageTag", primary.languageTag)
+                    val words = JSONArray(primary.words.map { word -> wordRegionJson(word, request) })
+                    if (words.length() > 0) output.put("wordRegions", words)
+                    if (cached == null) repository.cacheOcr(key, OcrModelCache.encode(models))
                 } catch (error: Exception) {
                     failed++
                     val tooLarge = error.message == "inputTooLarge"
@@ -183,6 +185,8 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
             "nonTextPreserved" to JSONArray(layout.nonTextPreserved.map { it.id }),
             "layoutAmbiguous" to layout.layoutAmbiguous,
             "measurements" to json("layoutMs" to layoutMs, "totalMs" to ((System.nanoTime() - started) / 1_000_000)))
+        if (selectedIds != null) return finishEphemeral(request, generation, digest,
+            result.put("ephemeral", true).put("scope", "selection").put("contentKind", ContentKind.TEXT.name))
         if (!queue.current(request)) return Receipt(false, result, "cancelled")
         queue.progress(request, "saving", regions.length(), regions.length())
         if (!queue.current(request)) return Receipt(false, result, "cancelled")
@@ -198,6 +202,87 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
         return Receipt(applied, if (applied) repository.ocrResult(request.pageId) ?: result else result,
             if (applied) null else "stalePage")
     }
+
+    private fun candidateJson(text: String, tag: String, rank: Int, request: OcrRequestQueue.Request,
+                              region: PageOcrLayout.Region, engine: String = OcrInput.MODEL_EPOCH): JSONObject {
+        val candidate = RecognitionCandidate(text, engine, tag, request.token.toString(), region.id, rank)
+        return json("rank" to rank, "nativeRank" to candidate.nativeRank, "text" to text, "rawText" to text,
+            "engineId" to candidate.engineId, "languageTag" to tag, "requestId" to candidate.requestId,
+            "hypothesisId" to candidate.hypothesisId, "score" to JSONObject.NULL, "confidence" to JSONObject.NULL)
+    }
+
+    private fun wordRegionJson(word: RecognitionService.WordResult, request: OcrRequestQueue.Request): JSONObject {
+        val region = word.region
+        val primary = OcrCandidatePolicy.preferred(word.models, request.policy)
+        val candidates = JSONArray()
+        (listOf(primary) + word.models.filterNot { it === primary }).forEach { model ->
+            model.candidates.forEachIndexed { rank, text ->
+                candidates.put(candidateJson(text, model.languageTag, rank, request, region)
+                    .put("candidateKind", "native"))
+            }
+        }
+        return json("id" to region.id, "strokeIds" to JSONArray(region.strokes.map { it.id }),
+            "bounds" to json("left" to region.bounds.left, "top" to region.bounds.top,
+                "right" to region.bounds.right, "bottom" to region.bounds.bottom),
+            "sourceIdentityDigest" to OcrInput.sourceIdentityDigest(region),
+            "selectedText" to primary.candidates.first(), "languageTag" to primary.languageTag,
+            "reviewReasons" to JSONArray((region.reviewReasons + OcrCandidatePolicy.reviewReasons(word.models, request.policy)).distinct()),
+            "candidates" to candidates)
+    }
+
+    /** Selection/math conversions are review-only and must never replace the page's text index. */
+    private fun finishEphemeral(request: OcrRequestQueue.Request, generation: Long, digest: String,
+                                result: JSONObject): Receipt {
+        if (!queue.current(request)) return Receipt(false, result, "cancelled")
+        queue.progress(request, "review", result.array("regions").length(), result.array("regions").length())
+        val current = repository.readOcrSnapshot(request.documentId, request.pageId)
+        if (current == null || current.generation != generation ||
+            OcrInput.pageDigest(current.page, request.policy) != digest) return Receipt(false, result, "stalePage")
+        val accepted = queue.applyIfCurrent(request) { repository.generation(request.pageId) == generation }
+            ?: return Receipt(false, result, "cancelled")
+        return Receipt(accepted, result, if (accepted) null else "stalePage")
+    }
+
+    private fun processMath(request: OcrRequestQueue.Request, page: NotePage, generation: Long, digest: String): Receipt {
+        val started = System.nanoTime()
+        var recognized = 0
+        val lines = OcrMathLayout.recognize(page.objects, page.width, page.height,
+            recognize = { region ->
+                if (!queue.current(request)) error("cancelled")
+                queue.progress(request, "math", recognized++, 0)
+                recognition.recognizeMathRegion(region,
+                    checkCurrent = { if (!queue.current(request)) error("cancelled") }).first().candidates
+            }, checkCurrent = { if (!queue.current(request)) error("cancelled") })
+        if (lines.isEmpty()) return Receipt(false, null, "noInk")
+        val regions = JSONArray(lines.map { line ->
+            val region = line.region
+            val candidates = JSONArray(line.candidates.mapIndexed { rank, text ->
+                candidateJson(text, "en-US", rank, request, region, OcrMathLayout.ENGINE_ID)
+                    .put("candidateKind", "spatialComposition").put("nativeRank", JSONObject.NULL)
+            })
+            val space = OcrInkGeometry.space(region)
+            json("id" to region.id, "strokeIds" to JSONArray(region.strokes.map { it.id }), "order" to region.order,
+                "sourceKind" to SourceKind.DIGITAL_INK.name, "contentKind" to ContentKind.MATH.name,
+                "role" to "display_math", "bounds" to json("left" to region.bounds.left, "top" to region.bounds.top,
+                    "right" to region.bounds.right, "bottom" to region.bounds.bottom),
+                "sourceIdentityDigest" to OcrInput.sourceIdentityDigest(region),
+                "inputDigest" to OcrInput.regionInputDigest(region, "en-US", "", space.width, space.height, region.timeMode),
+                "reviewReasons" to JSONArray(line.reviewReasons), "requiresReview" to true,
+                "status" to if (line.errorCode != null) "failed" else if (line.candidates.isEmpty()) "unresolved" else "complete",
+                "errorCode" to (line.errorCode ?: JSONObject.NULL),
+                "rawText" to line.candidates.firstOrNull().orEmpty(), "selectedText" to line.candidates.firstOrNull().orEmpty(),
+                "candidates" to candidates)
+        })
+        val result = json("schemaVersion" to 1, "documentId" to request.documentId, "pageId" to request.pageId,
+            "pageDigest" to digest, "generation" to generation, "ephemeral" to true,
+            "scope" to if (request.selectedIds == null) "page" else "selection", "contentKind" to ContentKind.MATH.name,
+            "status" to if (lines.all { it.candidates.isNotEmpty() }) "complete" else "partial",
+            "pipelineFingerprint" to OcrPipeline.CURRENT.fingerprint, "engineId" to OcrMathLayout.ENGINE_ID,
+            "supportedSubset" to OcrMathLayout.SUPPORTED_SUBSET_EXPLANATION,
+            "regions" to regions, "readingOrder" to JSONArray(lines.map { it.region.id }),
+            "measurements" to json("totalMs" to (System.nanoTime() - started) / 1_000_000))
+        return finishEphemeral(request, generation, digest, result)
+    }
 }
 
 /** Owns request priority and cancellation while inference retains its separate Task permit. */
@@ -207,7 +292,8 @@ internal class OcrRequestQueue(private val worker: Executor,
                        val automatic: Boolean, val token: Long, val writingEpoch: Long,
                        val expectedDigest: String?,
                        val progress: (String, Int, Int) -> Unit,
-                       val complete: (PageOcrCoordinator.Receipt) -> Unit)
+                       val complete: (PageOcrCoordinator.Receipt) -> Unit,
+                       val math: Boolean = false, val selectedIds: Set<String>? = null)
     private val lock = Any()
     private val pending = LinkedHashMap<String, Request>()
     private val epochs = HashMap<String, Long>()
@@ -232,9 +318,15 @@ internal class OcrRequestQueue(private val worker: Executor,
 
     fun request(documentId: String, pageId: String, policy: String, automatic: Boolean,
                 expectedDigest: String?,
-                progress: (String, Int, Int) -> Unit, complete: (PageOcrCoordinator.Receipt) -> Unit) {
+                progress: (String, Int, Int) -> Unit, complete: (PageOcrCoordinator.Receipt) -> Unit,
+                math: Boolean = false, selectedIds: Set<String>? = null) {
         var cancelled: Request? = null
         var rejected = false
+        if (automatic && (math || selectedIds != null)) {
+            try { complete(PageOcrCoordinator.Receipt(false, null, "manualConversionRequired")) } catch (_: Exception) { }
+            return
+        }
+        val selection = selectedIds?.toSet()
         val contactEpoch = writingEpoch.get()
         synchronized(lock) {
             if (closed || !active) rejected = true
@@ -244,7 +336,8 @@ internal class OcrRequestQueue(private val worker: Executor,
                 val token = sequence.incrementAndGet()
                 if (!(automatic && activeRequest?.pageId == pageId && activeRequest?.automatic == false))
                     epochs[pageId] = token
-                cancelled = pending.put(pageId, Request(documentId, pageId, policy, automatic, token, contactEpoch, expectedDigest, progress, complete))
+                cancelled = pending.put(pageId, Request(documentId, pageId, policy, automatic, token, contactEpoch,
+                    expectedDigest, progress, complete, math, selection))
                 if (!draining) { draining = true; worker.execute(::drain) }
             }
         }

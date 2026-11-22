@@ -83,7 +83,7 @@ object S3ClosureChecks {
             ui(instrument) {
                 val settings = MainActivity::class.java.getDeclaredField("settings").apply { isAccessible = true }
                     .get(opened) as JSONObject
-                settings.put("autoOcr", false).put("autoMath", false)
+                settings.put("autoOcr", false)
             }
             val entered = CountDownLatch(1)
             opened.repository.executor.execute { entered.countDown(); release.await(20, TimeUnit.SECONDS) }
@@ -92,7 +92,8 @@ object S3ClosureChecks {
             ui(instrument) {
                 opened.inkView!!.add(stroke(newId))
                 MainActivity::class.java.getDeclaredMethod("recognize", Boolean::class.javaPrimitiveType,
-                    Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(opened, false, false)
+                    Boolean::class.javaPrimitiveType, Set::class.java).apply { isAccessible = true }
+                    .invoke(opened, false, false, null)
             }
             SystemClock.sleep(300)
             check(opened.repository.page(pageId)?.objects?.none { it.optString("id") == newId } == true)

@@ -321,8 +321,8 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
     onNotices: () -> Unit, onClose: () -> Unit) {
     val toggles = remember { mutableStateMapOf<String, Boolean>().apply {
         listOf("stylusOnly" to true, "scribbleErase" to true, "drawHold" to true,
-            "telemetry" to false, "continuous" to true, "autoOcr" to true,
-            "autoMath" to false).forEach { (key, fallback) -> put(key, initial.optBoolean(key, fallback)) }
+            "telemetry" to false, "continuous" to true, "autoOcr" to true)
+            .forEach { (key, fallback) -> put(key, initial.optBoolean(key, fallback)) }
     } }
     var opacity by remember { mutableFloatStateOf(initial.f("hudTextOpacity", 1f).coerceIn(.35f, 1f)) }
     val language = when (initial.optString("language", "ko")) {
@@ -335,7 +335,7 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SettingChoice(translate("언어"), translate("앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다."),
             language, onLanguage)
-        SettingChoice(translate("손글씨 OCR 언어"), translate("혼합 검토는 두 모델 후보가 다르면 검토 사유로 표시합니다."),
+        SettingChoice(translate("손글씨 OCR 언어"), translate("한국어와 영어가 섞인 필기를 함께 인식합니다."),
             ocrPolicy, onOcrPolicy)
         listOf(
             Triple("stylusOnly", "스타일러스 전용 필기", "손바닥과 손가락 입력을 필기에서 제외합니다."),
@@ -343,8 +343,7 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
             Triple("drawHold", "그려서 도형 만들기", "직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다."),
             Triple("telemetry", "스타일러스 정보 표시", "필압, 기울기, 입력 장치를 화면에 표시합니다."),
             Triple("continuous", "연속 페이지 보기", "모든 페이지를 세로로 이어 표시합니다."),
-            Triple("autoOcr", "손글씨 OCR 자동 등록", "필기를 인식해 문서 검색에 등록합니다."),
-            Triple("autoMath", "손글씨 수식 자동 계산", "등호로 끝나는 수식을 인식해 계산합니다.")
+            Triple("autoOcr", "손글씨 OCR 자동 등록", "필기를 인식해 문서 검색에 등록합니다.")
         ).forEach { (key, label, description) ->
             Row(Modifier.fillMaxWidth().background(Color(0xfff4f6f8), RoundedCornerShape(13.dp))
                 .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -1,0 +1,6 @@
+# Keep historical copies out of ordinary source and version searches.
+# Search these paths explicitly with rg --no-ignore when needed.
+/docs/archive/
+/legacy/
+/_delete_after_review/
+/.worktrees/

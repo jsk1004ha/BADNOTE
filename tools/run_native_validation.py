@@ -21,9 +21,9 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 ANDROID = ROOT / "android"
-SOURCE_PREFIXES = ("android/app/src/", "tools/", "docs/", "web/")
+SOURCE_PREFIXES = ("android/app/src/", "android/ocr-contracts/src/", "tools/", "docs/", "legacy/web/")
 SOURCE_FILES = {"android/app/build.gradle", "android/build.gradle", "android/settings.gradle",
-                "android/gradle.properties", "android/gradle/wrapper/gradle-wrapper.properties", "android/app/.gitignore", "README.md", "web/app.js"}
+                "android/gradle.properties", "android/gradle/wrapper/gradle-wrapper.properties", "android/ocr-contracts/build.gradle", "android/app/.gitignore", "README.md", "legacy/web/app.js"}
 
 
 def digest(path: Path) -> str:
@@ -32,6 +32,16 @@ def digest(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
+
+
+def current_release_version() -> tuple[int, str]:
+    """Keep APK and installed-upgrade checks tied to the same build version."""
+    config = (ANDROID / "app/build.gradle").read_text(encoding="utf-8")
+    codes = re.findall(r"(?m)^\s*versionCode\s+(\d+)\s*$", config)
+    names = re.findall(r"(?m)^\s*versionName\s+'([^']+)'\s*$", config)
+    if len(codes) != 1 or len(names) != 1:
+        raise ValueError("Expected one literal release versionCode and versionName in app/build.gradle")
+    return int(codes[0]), names[0]
 
 
 def transfer_private_fixture(adb: list, source_path: Path, private_path: str,
@@ -96,9 +106,9 @@ def source_snapshot() -> dict[str, str]:
 def release_capture_inputs(files: dict[str, str]) -> dict[str, str]:
     """Installed-release evidence depends on production inputs, not test runners."""
     return {name: sha for name, sha in files.items()
-            if (name.startswith("android/app/src/")
+            if (name.startswith(("android/app/src/", "android/ocr-contracts/src/"))
                 and not name.startswith(("android/app/src/androidTest/", "android/app/src/test/")))
-            or name.startswith("web/")
+            or name.startswith("legacy/web/")
             or (name in SOURCE_FILES and name.startswith("android/"))
             or name in {"tools/build_apk.py", "tools/sync_native_icons.py",
                         "tools/prepare_pdfium.py", "tools/pdfium.lock.json"}}
@@ -219,7 +229,7 @@ def main() -> None:
     parser.add_argument("--w3-fixtures", type=Path, default=ROOT / "build/ocr/load-w3")
     parser.add_argument("--upgrade-directory", type=Path, default=ROOT / "build/release-upgrade")
     parser.add_argument("--replay-set", choices=("all", "w0"), default="all")
-    parser.add_argument("--brush-fixture", type=Path, default=ROOT / ".adhd/ocr-native-plan/brush-reference.json")
+    parser.add_argument("--brush-fixture", type=Path, default=ROOT / "android/app/src/test/resources/brush-reference.json")
     parser.add_argument("--online", action="store_true", help="Allow Gradle dependency resolution")
     parser.add_argument("--chromium", type=Path, help="Installed Chromium/Chrome executable for existing web regressions")
     parser.add_argument("--guarded-native-library", action="append", default=[], metavar="LIBNAME=API")
@@ -322,7 +332,7 @@ def main() -> None:
             for name, path in (("test_web", output / "web-results.json"),
                                ("test_input_regressions", output / "input-results.json"),
                                ("test_file_export", output / "file-export")):
-                run([sys.executable, ROOT / "tools" / (name + ".py"), "--web", ROOT / "web",
+                run([sys.executable, ROOT / "tools" / (name + ".py"), "--web", ROOT / "legacy/web",
                      "--chromium", browser, "--output", path], name)
         elif args.phase == "build":
             sdk = sdk_root()
@@ -581,9 +591,7 @@ def main() -> None:
         elif args.phase == "apk":
             sdk = sdk_root()
             os.environ["ANDROID_SDK_ROOT"] = str(sdk)
-            gradle_config = (ANDROID / "app/build.gradle").read_text(encoding="utf-8")
-            version_code = re.search(r"versionCode\s+(\d+)", gradle_config).group(1)
-            version_name = re.search(r"versionName\s+'([^']+)'", gradle_config).group(1)
+            version_code, version_name = current_release_version()
             for variant in ("update", "sideBySide"):
                 path = ANDROID / f"app/build/outputs/apk/{variant}/release/app-{variant}-release.apk"
                 package = "com.inkforge.note4" if variant == "update" else "com.inkforge.note5"
@@ -595,6 +603,7 @@ def main() -> None:
                      *[argument for guard in args.guarded_native_library for argument in ("--guarded-native-library", guard)],
                      *[argument for asset in args.require_asset for argument in ("--require-asset", asset)]], "apk-" + variant)
         elif args.phase == "upgrade":
+            version_code, _ = current_release_version()
             directory = args.upgrade_directory.resolve()
             if not directory.is_relative_to(ROOT / "build"):
                 raise ValueError("Installed upgrade captures must be beneath repository/build")
@@ -608,7 +617,7 @@ def main() -> None:
                 if digest(old_apk) != pinned_sha:
                     raise ValueError("Retained signed 4.0.1 APK no longer matches its pinned input")
                 captures = []
-                for label, version, apk in (("before", 401, old_apk), ("after", 411, new_apk)):
+                for label, version, apk in (("before", 401, old_apk), ("after", version_code, new_apk)):
                     captured = directory / variant / label
                     capture_path = captured / "capture-receipt.json"
                     capture = json.loads(capture_path.read_text(encoding="utf-8"))

@@ -99,7 +99,14 @@ internal object OcrLineLayout {
               unresolved: MutableList<PageOcrLayout.Stroke>, diagnostics: MutableSet<String>): List<List<PageOcrLayout.Stroke>> {
         val dimensions = strokes.map { extent(it.bounds) }.filter { it >= fallbackScale * .25f }
         val baseScale = median(dimensions,fallbackScale)
-        val marks = strokes.filter { max(it.bounds.width,it.bounds.height) < baseScale * .23f }
+        fun small(stroke: PageOcrLayout.Stroke) = max(stroke.bounds.width,stroke.bounds.height) < baseScale * .23f
+        fun crossbar(stroke: PageOcrLayout.Stroke) = stroke.bounds.height < baseScale * .2f &&
+            stroke.bounds.width in (baseScale * .23f)..(baseScale * 1.6f)
+        // A dash/crossbar can be written before its taller letters. Let actual glyph components
+        // establish the line before attaching it; otherwise its zero height creates a false row.
+        // A page containing only horizontal strokes still needs its original recognition path.
+        val hasAnchors = strokes.any { !small(it) && !crossbar(it) }
+        val marks = strokes.filter { small(it) || hasAnchors && crossbar(it) }
         val markIds = marks.mapTo(HashSet()) { it.id }
         val components = protect(strokes.filterNot { it.id in markIds },baseScale,diagnostics)
         class Line(first: Component) {

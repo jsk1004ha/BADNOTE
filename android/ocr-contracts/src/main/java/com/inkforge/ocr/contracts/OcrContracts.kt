@@ -11,10 +11,6 @@ data class RecognitionCandidate(val rawText: String, val engineId: String, val l
     init { require(nativeRank >= 0); require(score == null || score.isFinite()) }
 }
 
-/** Text model availability says nothing about a two-dimensional mathematics backend. */
+/** Availability describes capability, not a model-quality or confidence guarantee. */
 interface MathRecognitionEngine { val availability: MathAvailability }
-enum class MathAvailability { READY, UNAVAILABLE }
-class MathRecognitionUnavailable : MathRecognitionEngine {
-    override val availability = MathAvailability.UNAVAILABLE
-    companion object { const val ERROR_CODE = "mathEngineUnavailable" }
-}
+enum class MathAvailability { SUPPORTED_SUBSET, UNAVAILABLE }

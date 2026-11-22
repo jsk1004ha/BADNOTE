@@ -40,4 +40,15 @@ public class StylusButtonStateTest {
         state.update(MotionEvent.ACTION_HOVER_EXIT, MotionEvent.BUTTON_STYLUS_PRIMARY, 0);
         assertEquals(0, state.getButtons());
     }
+
+    @Test public void contactResetDoesNotCarryButtonStateIntoAnotherTool() {
+        StylusButtonState state = new StylusButtonState();
+        state.update(MotionEvent.ACTION_BUTTON_PRESS, 0, MotionEvent.BUTTON_STYLUS_PRIMARY);
+        state.reset();
+        assertEquals(0, state.getButtons());
+        state.update(MotionEvent.ACTION_DOWN, 0, 0);
+        assertEquals(0, state.getButtons());
+        state.update(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_STYLUS_SECONDARY, 0);
+        assertEquals(MotionEvent.BUTTON_STYLUS_SECONDARY, state.getButtons());
+    }
 }

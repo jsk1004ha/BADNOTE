@@ -1,4 +1,5 @@
 import java.util.Properties
+import com.android.build.api.artifact.SingleArtifact
 
 plugins {
     id 'com.android.application'
@@ -21,8 +22,8 @@ android {
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 414
-        versionName '4.1.3-beta.2'
+        versionCode 421
+        versionName '4.1.4-beta.1'
         testInstrumentationRunner 'com.inkforge.notesstudio.NativeSmokeInstrumentation'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
@@ -77,7 +78,17 @@ android {
             shrinkResources false
             if (signingFile.exists()) signingConfig signingConfigs.release
         }
+        profile {
+            // Measure production execution without touching the user's installed package.
+            initWith release
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-profile'
+            signingConfig signingConfigs.debug
+            debuggable false
+            matchingFallbacks = ['release']
+        }
     }
+    testBuildType providers.gradleProperty('badnoteTestBuildType').orElse('debug').get()
 
     compileOptions {
         coreLibraryDesugaringEnabled true
@@ -116,7 +127,10 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.11.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
+    // Independently import and render the XFDF appearance format in JVM regressions only.
+    testImplementation 'org.apache.pdfbox:pdfbox:3.0.5'
     implementation 'androidx.core:core:1.17.0'
+    implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.webkit:webkit:1.14.0'
     implementation 'androidx.graphics:graphics-core:1.0.4'
     implementation platform('androidx.compose:compose-bom:2026.06.01')
@@ -146,4 +160,60 @@ def preparePdfium = tasks.register('preparePdfium') {
 tasks.configureEach {
     if (name.startsWith('configureCMake') || name == 'preBuild' || (name.startsWith('merge') && name.endsWith('Assets')))
         dependsOn preparePdfium
+}
+afterEvaluate {
+    tasks.matching { it.name.startsWith('l8DexDesugarLib') && it.name.endsWith('ProfileAndroidTest') }.configureEach {
+        // Instrumentation loads its library before the target app's library. AGP 8.13.2
+        // otherwise keeps only APIs used by tests, hiding APIs still needed by the app.
+        // Retain the test copy; production Profile/Release dex is unchanged.
+        keepRulesConfigurations.add('-keep class j$.** { *; }')
+    }
+}
+
+// Collect successful assemble results in the repository's public APK directory.
+// Keeping this on the assemble tasks covers direct Gradle builds and Python helpers.
+def collectApk = { component, version, label, destination ->
+    def apkDirectory = component.artifacts.get(SingleArtifact.APK.INSTANCE)
+    def artifactsLoader = component.artifacts.getBuiltArtifactsLoader()
+    def assembleName = 'assemble' + component.name.capitalize()
+    tasks.matching { it.name == assembleName }.configureEach {
+        doLast {
+            def artifacts = artifactsLoader.load(apkDirectory.get())
+            if (artifacts == null || artifacts.elements.isEmpty()) {
+                throw new GradleException('No APK output metadata for ' + component.name)
+            }
+            artifacts.elements.each { artifact ->
+                def source = file(artifact.outputFile)
+                if (!source.isFile()) throw new GradleException('Missing APK: ' + source)
+                def filters = artifact.filters.collect { it.identifier }.join('-')
+                def suffix = label + (filters ? '-' + filters : '') +
+                    (source.name.endsWith('-unsigned.apk') ? '-Unsigned' : '')
+                def filename = 'bad-note-Android-' + version.get() + '-' + suffix + '.apk'
+                copy {
+                    from source
+                    into destination
+                    rename { filename }
+                }
+                logger.lifecycle('APK: ' + new File(destination, filename))
+            }
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        def install = variant.productFlavors.find { it.first == 'install' }.second
+        def isDebug = variant.buildType == 'debug'
+        def isProfile = variant.buildType == 'profile'
+        def label = install == 'update' ? (isDebug ? 'Debug' : isProfile ? 'Profile' : 'Update') :
+            (isDebug ? 'SideBySide-Debug' : isProfile ? 'SideBySide-Profile' : 'SideBySide')
+        def version = variant.outputs.first().versionName.map {
+            isDebug ? it.replaceFirst(/-debug$/, '') : isProfile ? it.replaceFirst(/-profile$/, '') : it
+        }
+        collectApk(variant, version, label, rootProject.file('../build/apk'))
+        if (variant.androidTest != null) {
+            collectApk(variant.androidTest, version, label + '-AndroidTest',
+                rootProject.file('../build/apk/tests'))
+        }
+    }
 }

@@ -10,6 +10,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 internal object S5cOcrChecks {
     fun run(context: Context) {
+        OcrScopeChecks.run(context)
+        OcrWordDuplicationChecks.run(context)
         val name = "ocr-s5c-${UUID.randomUUID()}.db"
         NoteRepository(context, name).use { repository ->
             val doc = repository.create("S5c OCR boundary", "root", "grid")
@@ -56,11 +58,11 @@ internal object S5cOcrChecks {
             check(repository.putOcrResult(doc.id, page.id, repository.generation(page.id), pageDigest,
                 "ko-primary", result(original, pageDigest, "ko:$modelBefore")))
             check(repository.ocrText(page.id) == "raw")
-            check(repository.searchDocumentPages(doc.id, "raw").single().first == 0)
+            check(repository.searchDocumentPages(doc.id, "raw").single().index == 0)
             check(doc.id in repository.searchOcrDocuments("raw"))
             check(repository.correctOcrRegion(page.id, original.id, "user correction", originalDigest, pageDigest))
             check(repository.ocrText(page.id) == "user correction")
-            check(repository.searchDocumentPages(doc.id, "user correction").single().second.contains("user correction"))
+            check(repository.searchDocumentPages(doc.id, "user correction").single().snippet.contains("user correction"))
             check(doc.id in repository.searchOcrDocuments("user correction"))
             check(doc.id !in repository.searchOcrDocuments("raw"))
             repository.invalidateModelGeneration("ko")

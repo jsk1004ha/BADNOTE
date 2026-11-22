@@ -1,4 +1,5 @@
 {
+  "minus": "<path d=\"M5 12h14\"/>",
   "home": "<path d=\"M3 10.8 12 3l9 7.8v9.7a1.5 1.5 0 0 1-1.5 1.5H15v-7h-6v7H4.5A1.5 1.5 0 0 1 3 20.5z\"/>",
   "notebook": "<rect x=\"5\" y=\"3\" width=\"15\" height=\"18\" rx=\"2\"/><path d=\"M9 3v18M3 7h4M3 11h4M3 15h4\"/>",
   "folder": "<path d=\"M3 6.5h7l2 2h9v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\"/><path d=\"M3 9h18\"/>",
