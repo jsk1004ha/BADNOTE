@@ -43,46 +43,55 @@ class PageOcrCoordinator(private val repository: NoteRepository, private val rec
         val modelTags = if (recognitionRegions.isEmpty()) emptyList() else recognition.modelTags(request.policy)
         if (modelTags.isNotEmpty()) recognition.ensureModels(request.policy)
         val modelGeneration = modelTags.joinToString("|") { "$it:${repository.modelGeneration(it)}" }
-        if (request.automatic && repository.ocrResult(request.pageId)?.let {
-                it.optString("policy") == request.policy && it.optString("modelGeneration") == modelGeneration &&
-                    it.optString("pipelineFingerprint") == OcrPipeline.CURRENT.fingerprint &&
-                    it.optString("status") == "complete"
-            } == true) return Receipt(false, null, "alreadyIndexed")
+        if (request.automatic && repository.hasCurrentOcrIndex(
+                request.pageId, generation, digest, request.policy, modelGeneration
+            )) return Receipt(false, null, "alreadyIndexed")
         val regions = JSONArray()
         val readingOrder = JSONArray()
         var failed = 0
         val recognizeRaster = imageSource && (BuildConfig.OCR_MIXED_SOURCES ||
             layout.regions.isEmpty() && layout.unresolved.isEmpty())
         if (recognizeRaster) {
-            if (!queue.current(request)) return Receipt(false,null,"cancelled")
-            queue.progress(request, "image", 0, 1)
-            try {
-                recognition.requireAvailable()
-                val imagePage = if (BuildConfig.OCR_MIXED_SOURCES) OcrSources.rasterOnly(page) else page
-                val bitmap = StreamingPdf.render(repository, imagePage,OcrSources.rasterWidth(imagePage))
-                val lease = BitmapLease { bitmap.recycle() }
-                var handedToEngine = false
-                val imageLanguage = if (request.policy == "en-primary") "en" else if (request.policy == "mixed-review") "ko" else request.policy.substringBefore('-')
-                val (imageDigest, text) = try {
-                    val key = OcrInput.imageKey(imagePage, request.policy, bitmap)
-                    handedToEngine = true
-                    key to recognition.image(bitmap, imageLanguage,lease::close)
-                } finally { if (!handedToEngine) lease.close() }
-                if (text.isBlank()) error("emptyCandidates")
-                regions.put(json("id" to "image", "strokeIds" to JSONArray(), "order" to 0,
-                    "sourceKind" to SourceKind.RASTER_IMAGE.name,"contentKind" to ContentKind.TEXT.name,
-                    "renderMode" to if (BuildConfig.OCR_MIXED_SOURCES) "SOURCE_ONLY" else "COMPOSITE",
-                    "sourceObjectIds" to JSONArray(imagePage.objects.map { it.optString("id") }),
-                    "bounds" to json("left" to 0,"top" to 0,"right" to page.width,"bottom" to page.height),
-                    "reviewReasons" to JSONArray(listOf("pageLevelRasterMapping")),
-                    "role" to "image", "status" to "complete", "rawText" to text, "selectedText" to text,
-                    "inputDigest" to imageDigest,
-                    "candidates" to JSONArray(listOf(json("rank" to 0, "text" to text, "confidence" to JSONObject.NULL)))))
+            if (!queue.current(request)) return Receipt(false, null, "cancelled")
+            val imagePage = if (BuildConfig.OCR_MIXED_SOURCES) OcrSources.rasterOnly(page) else page
+            val rasterMode = if (BuildConfig.OCR_MIXED_SOURCES) "SOURCE_ONLY" else "COMPOSITE"
+            val rasterSourceDigest = OcrInput.pageSourceDigest(imagePage, request.policy)
+            // Keep image OCR when only digital ink changed; avoid a redundant 4 MP render.
+            val reused = repository.reusableRasterOcrRegion(
+                request.pageId, request.policy, rasterSourceDigest, rasterMode, modelGeneration
+            )
+            if (reused != null) {
+                regions.put(reused)
                 readingOrder.put("image")
-            } catch (error: Exception) {
-                failed++
-                regions.put(json("id" to "image", "strokeIds" to JSONArray(), "order" to 0,
-                    "role" to "image", "status" to "failed", "errorCode" to (error.message ?: "imageOcrFailed")))
+            } else {
+                queue.progress(request, "image", 0, 1)
+                try {
+                    recognition.requireAvailable()
+                    val bitmap = StreamingPdf.render(repository, imagePage,OcrSources.rasterWidth(imagePage))
+                    val lease = BitmapLease { bitmap.recycle() }
+                    var handedToEngine = false
+                    val imageLanguage = if (request.policy == "en-primary") "en" else if (request.policy == "mixed-review") "ko" else request.policy.substringBefore('-')
+                    val (imageDigest, text) = try {
+                        val key = OcrInput.imageKey(imagePage, request.policy, bitmap)
+                        handedToEngine = true
+                        key to recognition.image(bitmap, imageLanguage,lease::close)
+                    } finally { if (!handedToEngine) lease.close() }
+                    if (text.isBlank()) error("emptyCandidates")
+                    regions.put(json("id" to "image", "strokeIds" to JSONArray(), "order" to 0,
+                        "sourceKind" to SourceKind.RASTER_IMAGE.name,"contentKind" to ContentKind.TEXT.name,
+                        "renderMode" to rasterMode, "rasterSourceDigest" to rasterSourceDigest,
+                        "sourceObjectIds" to JSONArray(imagePage.objects.map { it.optString("id") }),
+                        "bounds" to json("left" to 0,"top" to 0,"right" to page.width,"bottom" to page.height),
+                        "reviewReasons" to JSONArray(listOf("pageLevelRasterMapping")),
+                        "role" to "image", "status" to "complete", "rawText" to text, "selectedText" to text,
+                        "inputDigest" to imageDigest,
+                        "candidates" to JSONArray(listOf(json("rank" to 0, "text" to text, "confidence" to JSONObject.NULL)))))
+                    readingOrder.put("image")
+                } catch (error: Exception) {
+                    failed++
+                    regions.put(json("id" to "image", "strokeIds" to JSONArray(), "order" to 0,
+                        "role" to "image", "status" to "failed", "errorCode" to (error.message ?: "imageOcrFailed")))
+                }
             }
         }
         if (!recognizeRaster || BuildConfig.OCR_MIXED_SOURCES) {

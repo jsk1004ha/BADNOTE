@@ -399,18 +399,53 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         val result = JSONObject(row.third)
         val current = page(pageId) ?: return null
         if (row.first != generation(pageId) || row.second != OcrInput.pageDigest(current, result.optString("policy"))) return null
+        return attachOcrCorrections(pageId, result)
+    }
+
+    /** Corrections must still match the original source identity, even on the fast search path. */
+    private fun attachOcrCorrections(pageId: String, result: JSONObject): JSONObject {
         val regions = result.array("regions")
         val corrections = readableDatabase.rawQuery("SELECT body FROM ocr_corrections WHERE page_id=?",
             arrayOf(pageId)).use { c -> buildList { while (c.moveToNext()) add(JSONObject(c.getString(0))) } }
         val identities = regions.objects().groupingBy { it.optString("sourceIdentityDigest") }.eachCount()
         for (i in 0 until regions.length()) {
             val region = regions.optJSONObject(i) ?: continue
-            val matches = corrections.filter { OcrCorrectionPolicy.matches(it,region) }
+            val matches = corrections.filter { OcrCorrectionPolicy.matches(it, region) }
             if (matches.size == 1 && (region.optString("sourceIdentityDigest").isEmpty() ||
                     identities[region.optString("sourceIdentityDigest")] == 1))
                 region.put("correctedText", matches.single().optString("text"))
         }
         return result
+    }
+
+    /** Check against the worker snapshot without reloading and rehashing the entire page. */
+    fun hasCurrentOcrIndex(pageId: String, expectedGeneration: Long, digest: String,
+                           policy: String, modelGeneration: String): Boolean {
+        val row = readableDatabase.rawQuery(
+            "SELECT generation,digest,body FROM ocr_page_state WHERE page_id=?", arrayOf(pageId)
+        ).use { if (it.moveToFirst()) Triple(it.getLong(0), it.getString(1), it.getString(2)) else null }
+            ?: return false
+        if (row.first != expectedGeneration || row.second != digest) return false
+        val result = JSONObject(row.third)
+        return result.optString("status") == "complete" && result.optString("policy") == policy &&
+            result.optString("modelGeneration") == modelGeneration &&
+            result.optString("pipelineFingerprint") == OcrPipeline.CURRENT.fingerprint
+    }
+
+    /** An unchanged raster source may reuse image OCR across edits to digital ink. */
+    fun reusableRasterOcrRegion(pageId: String, policy: String, rasterSourceDigest: String,
+                               renderMode: String, modelGeneration: String): JSONObject? {
+        val body = readableDatabase.rawQuery("SELECT body FROM ocr_page_state WHERE page_id=?",
+            arrayOf(pageId)).use { if (it.moveToFirst()) it.getString(0) else null } ?: return null
+        val result = JSONObject(body)
+        if (result.optString("policy") != policy ||
+            result.optString("pipelineFingerprint") != OcrPipeline.CURRENT.fingerprint ||
+            result.optString("modelGeneration") != modelGeneration) return null
+        return result.array("regions").objects().firstOrNull {
+            it.optString("role") == "image" && it.optString("status") == "complete" &&
+                it.optString("renderMode") == renderMode &&
+                it.optString("rasterSourceDigest") == rasterSourceDigest
+        }?.copyJson()
     }
 
     fun correctOcrRegion(pageId: String, regionId: String, text: String,
@@ -436,13 +471,81 @@ class NoteRepository(context: Context, databaseName: String = NativeDatabase.NAM
         return applied
     }
 
+    /** Search is generation-checked without decoding and hashing every stroke on each keystroke. */
     fun ocrText(pageId: String): String {
-        val result = ocrResult(pageId) ?: return readableDatabase.rawQuery("SELECT 1 FROM ocr_page_state WHERE page_id=?",
-            arrayOf(pageId)).use { if (it.moveToFirst()) "" else pageMeta(pageId)?.optString("ocrText").orEmpty() }
-        return result.array("regions").objects().mapNotNull { region ->
-            if (region.optString("status") in setOf("complete", "recognized", "ok", "cached", "legacy"))
-                region.optString("correctedText", region.optString("selectedText")) else null
-        }.joinToString("\n")
+        val body = readableDatabase.rawQuery(
+            """SELECT o.body FROM ocr_page_state o
+                LEFT JOIN page_generation g ON g.page_id=o.page_id
+                WHERE o.page_id=? AND o.generation=COALESCE(g.generation,0)""".trimIndent(),
+            arrayOf(pageId)
+        ).use { if (it.moveToFirst()) it.getString(0) else null }
+        if (body == null) return readableDatabase.rawQuery(
+            "SELECT 1 FROM ocr_page_state WHERE page_id=?", arrayOf(pageId)
+        ).use { if (it.moveToFirst()) "" else pageMeta(pageId)?.optString("ocrText").orEmpty() }
+        return OcrResultPolicy.searchableText(attachOcrCorrections(pageId, JSONObject(body)))
+    }
+
+    /** Global library search: only valid OCR content or attached user corrections can match. */
+    fun searchOcrDocuments(query: String): Set<String> {
+        val term = query.trim()
+        if (term.isEmpty()) return emptySet()
+        // JSON escapes and SQLite's ASCII-only lower() cannot safely prefilter decoded Unicode text.
+        val candidates = readableDatabase.rawQuery(
+            """SELECT o.page_id,o.document_id FROM ocr_page_state o
+                LEFT JOIN page_generation g ON g.page_id=o.page_id
+                WHERE o.generation=COALESCE(g.generation,0)""".trimIndent(),
+            null
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) }
+        }
+        return candidates.filter { (pageId, _) -> ocrText(pageId).contains(term, ignoreCase = true) }
+            .mapTo(LinkedHashSet<String>()) { it.second }
+    }
+
+    /** Page search decodes text-bearing objects and metadata, never the entire ink page. */
+    fun searchDocumentPages(documentId: String, query: String): List<Pair<Int, String>> {
+        val term = query.trim()
+        if (term.isEmpty()) return emptyList()
+        val objectText = HashMap<String, MutableList<String>>()
+        readableDatabase.rawQuery(
+            """SELECT o.page_id,o.body FROM objects o
+                JOIN pages p ON p.id=o.page_id
+                WHERE p.document_id=?
+                  AND (instr(o.body,'"text":')>0 OR instr(o.body,'"expression":')>0)
+                ORDER BY o.position,o.rowid""".trimIndent(),
+            arrayOf(documentId)
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val obj = JSONObject(cursor.getString(1))
+                val text = listOf(obj.optString("text"), obj.optString("expression"))
+                    .filter(String::isNotBlank).joinToString(" ")
+                if (text.contains(term, ignoreCase = true))
+                    objectText.getOrPut(cursor.getString(0)) { ArrayList() }.add(text)
+            }
+        }
+        val hits = ArrayList<Pair<Int, String>>()
+        readableDatabase.rawQuery(
+            "SELECT id,body FROM pages WHERE document_id=? ORDER BY position,id",
+            arrayOf(documentId)
+        ).use { cursor ->
+            var index = 0
+            while (cursor.moveToNext()) {
+                val pageId = cursor.getString(0)
+                val meta = JSONObject(cursor.getString(1))
+                val text = buildString {
+                    append(meta.optString("pdfText"))
+                    append(' ')
+                    append(ocrText(pageId))
+                    objectText[pageId]?.forEach { append(' '); append(it) }
+                }
+                val at = text.indexOf(term, ignoreCase = true)
+                if (at >= 0) hits += index to text.substring(
+                    maxOf(0, at - 20), minOf(text.length, at + 80)
+                ).trim()
+                index++
+            }
+        }
+        return hits
     }
 
     /** Previously indexed text is retained with unknown provenance, never treated as model truth. */

@@ -80,6 +80,8 @@ class MainActivity:ComponentActivity(){
     private var saving=false
     private var saveFailed=false
     private var libraryGeneration=0
+    private var librarySearchGeneration=0L
+    private var librarySearchTask:Runnable?=null
     private var lastActivityIntentHandled=false
     private val ui by lazy { ClassicUi(this,::t) }
     private var modal:FrameLayout?=null
@@ -223,6 +225,8 @@ class MainActivity:ComponentActivity(){
         }}
     }
     private fun clearScreen(){
+        librarySearchTask?.let{handler.removeCallbacks(it)}
+        librarySearchGeneration++
         cancelManualOcr("손글씨 인식을 취소했습니다.")
         ocrStatusRow=null;ocrStatusText=null;ocrCancelButton=null
         closeSheet();editorSurface=null;editorNavbar=null;activeDock=null;undoPill=null;pageSidebar=null;searchDrawer=null;zoomLabel=null;pageLabel=null;selectionBar=null
@@ -262,12 +266,28 @@ class MainActivity:ComponentActivity(){
             settings.optBoolean("listMode"),settings.optString("librarySort") == "title",
             selectionMode,selectedDocuments.toSet(),narrow,globalSearchOpen))
         val documentState=mutableStateOf<List<LibraryDocumentUi>>(emptyList())
+        fun searchOcrMatches(value:String){
+            val request=++librarySearchGeneration
+            librarySearchTask?.let{handler.removeCallbacks(it)}
+            state.value=state.value.copy(ocrMatches=emptySet())
+            if(value.isBlank())return
+            librarySearchTask=Runnable{
+                if(generation!=libraryGeneration||request!=librarySearchGeneration||document!=null)return@Runnable
+                repository.executor.execute{
+                    val matches=repository.searchOcrDocuments(value)
+                    runOnUiThread{
+                        if(generation==libraryGeneration&&request==librarySearchGeneration&&
+                            document==null&&query==value)state.value=state.value.copy(ocrMatches=matches)
+                    }
+                }
+            }.also{handler.postDelayed(it,320)}
+        }
         val compose=ComposeView(this).apply{
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent { NativeLibraryScreen(state.value,documentState.value,
                 {id,cover->thumbnail(id,null).apply{coverColor=cover}},
                 {name,tint,size->ui.icon(name,tint,size)},::t,
-                onQuery={query=it},
+                onQuery={query=it;searchOcrMatches(it)},
                 onSearch={globalSearchOpen=!globalSearchOpen;showLibrary()},
                 onFilter={libraryFilter=it;selectionMode=false;selectedDocuments.clear();showLibrary()},
                 onFolder={folder=it;libraryFilter="all";showLibrary()},
@@ -289,6 +309,7 @@ class MainActivity:ComponentActivity(){
                 onSettings={showSettings()},onGuide={gestureGuide()}) }
         }
         body.addView(compose,LinearLayout.LayoutParams(-1,0,1f))
+        searchOcrMatches(query)
         repository.executor.execute{
             val docs=repository.documents()
             val counts=docs.filter{!it.trashed}.groupingBy{it.folder}.eachCount()
@@ -909,7 +930,7 @@ class MainActivity:ComponentActivity(){
         var generation=0
         input.addTextChangedListener(object:TextWatcher{override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){};override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){
             val search=s.toString();val request=++generation;results.removeAllViews();if(search.isBlank())return
-            repository.executor.execute{val matches=repository.pageIds(doc.id).mapIndexedNotNull{index,id->val page=repository.page(id)?:return@mapIndexedNotNull null;val text=page.meta.optString("pdfText")+" "+repository.ocrText(id)+" "+page.objects.joinToString(" "){it.optString("text")+" "+it.optString("expression")};val at=text.indexOf(search,ignoreCase=true);if(at>=0)index to text.substring(max(0,at-20),min(text.length,at+80))else null}
+            repository.executor.execute{val matches=repository.searchDocumentPages(doc.id,search)
                 runOnUiThread{if(generation!=request||searchDrawer!==drawer)return@runOnUiThread;results.removeAllViews();if(matches.isEmpty())results.addView(ui.text("검색 결과가 없습니다.",13f,ui.muted));matches.forEach{(index,snippet)->menuItem(results,"${index+1}페이지","search",snippet){inkView?.goTo(index)}}}}
         };override fun afterTextChanged(s:Editable?){} })
         surface.addView(drawer,FrameLayout.LayoutParams(dp(min(420,(resources.configuration.screenWidthDp*.92f).toInt())),-1,Gravity.RIGHT))
@@ -917,7 +938,7 @@ class MainActivity:ComponentActivity(){
     private fun scheduleOcr(){
         ocrTask?.let{handler.removeCallbacks(it)}
         if(!settings.optBoolean("autoOcr",true)&&!settings.optBoolean("autoMath",false))return
-        ocrTask=Runnable{recognize(false,true)}.also{handler.postDelayed(it,2000)}
+        ocrTask=Runnable{recognize(false,true)}.also{handler.postDelayed(it,6500)}
     }
     private fun ocrPolicy()=settings.optString("ocrLanguagePolicy").ifBlank{when(settings.optString("language","ko")){
         "en"->"en-primary";"ja"->"ja";"zh"->"zh";"pt"->"pt";else->"ko-primary"}}
@@ -945,14 +966,13 @@ class MainActivity:ComponentActivity(){
         }
         val policy=ocrPolicy()
         val startEpoch=pageEditEpoch[page.id]?:0
-        val requestedDigest=if(automatic)null else OcrInput.pageDigest(page,policy)
         val uiToken=if(automatic)0L else ++ocrUiToken
         if(!automatic){manualOcrPageId=page.id
             showOcrStatus("필기를 인식하고 있습니다. 첫 사용에는 모델 다운로드가 필요합니다.",true)}
         afterSaved{
             if(document?.id!=doc.id||inkView?.currentPage?.id!=page.id||(pageEditEpoch[page.id]?:0)!=startEpoch||
                 !automatic&&(uiToken!=ocrUiToken||manualOcrPageId!=page.id))return@afterSaved
-            pageOcr.request(doc.id,page.id,policy,automatic,expectedDigest=requestedDigest,
+            pageOcr.request(doc.id,page.id,policy,automatic,
                 progress={stage,done,total->if(!automatic)runOnUiThread{if(document?.id==doc.id&&
                     inkView?.currentPage?.id==page.id&&uiToken==ocrUiToken&&manualOcrPageId==page.id)
                     showOcrStatus("손글씨 OCR · ${when(stage){"recognizing"->"영역 인식";"saving"->"결과 저장";"image"->"이미지 인식";else->"준비 중"}} · $done/$total",true)}},
@@ -969,8 +989,7 @@ class MainActivity:ComponentActivity(){
                         })}
                     if(receipt.applied&&receipt.result!=null){
                         if(!automatic){val current=inkView?.currentPage
-                            if(current?.id==page.id && (pageEditEpoch[page.id]?:0)==startEpoch&&
-                                OcrInput.pageDigest(current,policy)==receipt.result.optString("pageDigest"))
+                            if(current?.id==page.id && (pageEditEpoch[page.id]?:0)==startEpoch)
                                 showOcrResult(page.id,receipt.result)
                         }
                         else if(settings.optBoolean("autoMath",false))maybeAutoMath(page.id,receipt.result)
@@ -997,12 +1016,12 @@ class MainActivity:ComponentActivity(){
         }catch(_:Exception){}
     }
     private fun showOcrResult(pageId:String,result:JSONObject){
-        val regions=result.array("regions").objects()
         val content=showSheet("손글씨 OCR","인식 결과")
-        val visible=regions.filter{it.optString("status") in setOf("complete","cached")}
+        val visible=OcrResultPolicy.visibleRegions(result)
         val combined=visible.joinToString("\n"){it.optString("correctedText",it.optString("selectedText"))}
         content.addView(ui.text(if(result.optString("status")=="complete")"인식 완료"else"부분 결과 · 원본 필기 유지",13f,ui.muted))
-        regions.forEach{region->
+        if(visible.isEmpty())content.addView(ui.text("인식된 텍스트가 없습니다.",13f,ui.muted))
+        visible.forEach{region->
             val id=region.optString("id");val status=region.optString("status")
             val raw=region.optString("correctedText",region.optString("selectedText"))
             val alternate=region.optJSONObject("alternateLanguage")?.array("candidates")?.objects()?.firstOrNull()?.optString("text")
