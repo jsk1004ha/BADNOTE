@@ -316,11 +316,11 @@ private fun LibraryAction(label: String, selected: Boolean, modifier: Modifier =
 internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> String,
     onToggle: (String, Boolean) -> Unit, onOpacity: (Float) -> Unit,
     onLanguage: () -> Unit, onOcrPolicy: () -> Unit, onUpdate: () -> Unit,
-    onNotices: () -> Unit, onClose: () -> Unit) {
+    onNotices: () -> Unit, onBackup: () -> Unit, onShortcuts: () -> Unit, onClose: () -> Unit) {
     val toggles = remember { mutableStateMapOf<String, Boolean>().apply {
         listOf("stylusOnly" to true, "scribbleErase" to true, "drawHold" to true,
             "telemetry" to false, "continuous" to true, "autoOcr" to true,
-            "autoMath" to false).forEach { (key, fallback) -> put(key, initial.optBoolean(key, fallback)) }
+            "autoMath" to false, "pdfDarkMode" to false).forEach { (key, fallback) -> put(key, initial.optBoolean(key, fallback)) }
     } }
     var opacity by remember { mutableFloatStateOf(initial.f("hudTextOpacity", 1f).coerceIn(.35f, 1f)) }
     val language = when (initial.optString("language", "ko")) {
@@ -342,7 +342,8 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
             Triple("telemetry", "스타일러스 정보 표시", "필압, 기울기, 입력 장치를 화면에 표시합니다."),
             Triple("continuous", "연속 페이지 보기", "모든 페이지를 세로로 이어 표시합니다."),
             Triple("autoOcr", "손글씨 OCR 자동 등록", "필기를 인식해 문서 검색에 등록합니다."),
-            Triple("autoMath", "손글씨 수식 자동 계산", "등호로 끝나는 수식을 인식해 계산합니다.")
+            Triple("autoMath", "손글씨 수식 자동 계산", "등호로 끝나는 수식을 인식해 계산합니다."),
+            Triple("pdfDarkMode", "PDF 다크 모드", "화면의 PDF 배경만 반전하며 필기와 내보내기 색상은 유지합니다.")
         ).forEach { (key, label, description) ->
             Row(Modifier.fillMaxWidth().background(Color(0xfff4f6f8), RoundedCornerShape(13.dp))
                 .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -372,6 +373,8 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
             Slider(value = opacity, onValueChange = { opacity = it; onOpacity(it) }, valueRange = .35f..1f)
         }
         SettingAction(translate("업데이트 확인"), "bad note ${BuildConfig.VERSION_NAME}", onUpdate)
+        SettingAction(translate("자동 백업"), translate("지정한 폴더에 변경된 노트의 복사본을 저장합니다."), onBackup)
+        SettingAction(translate("키보드 단축키"), translate("실행 취소와 숫자 도구 전환을 확인합니다."), onShortcuts)
         SettingAction(translate("PDFium 오픈소스 고지"), translate("PDF 원문 검색 엔진의 라이선스와 포함된 고지를 읽습니다."), onNotices)
         SettingAction(translate("완료"), "", onClose)
     }

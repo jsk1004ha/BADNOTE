@@ -33,6 +33,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private var telemetryText="펜 입력 대기"
     var continuous=true
     var ruler=false
+    var pdfDarkMode=false
+        set(value){if(field!=value){finishContact();field=value;sceneChanged()}}
     var rulerAngle=0f
     var penSettings=JSONObject()
     var onPageChanged:(Int)->Unit={}
@@ -209,13 +211,14 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             val id=pageIds[i];visible+=id;if(scene)requestPage(i)
             val d=abs((top+min(pageHeight*scale/2,height/2f))-height/2f);if(d<distance){nearest=i;distance=d}
             canvas.save();canvas.translate(originX,top);canvas.scale(scale,scale)
-            if(scene){paint.color=Color.WHITE;paint.style=Paint.Style.FILL;canvas.drawRect(0f,0f,1000f,pageHeight,paint)}
+            val darkPdf=pdfDarkMode&&metadata.getOrNull(i)?.optString("pdfSource")?.startsWith("asset:")==true
+            if(scene){paint.color=if(darkPdf)PdfDisplayColors.PAPER else Color.WHITE;paint.style=Paint.Style.FILL;canvas.drawRect(0f,0f,1000f,pageHeight,paint)}
             val page=pages[id]
             if(page!=null){
                 canvas.save();canvas.clipRect(0f,0f,page.width,page.height)
                 if(scene){
-                    renderer.template(canvas,page)
-                    background.draw(canvas,page,RectF(-originX/scale,-top/scale,(width-originX)/scale,(height-top)/scale),scale)
+                    if(!darkPdf)renderer.template(canvas,page)
+                    background.draw(canvas,page,RectF(-originX/scale,-top/scale,(width-originX)/scale,(height-top)/scale),scale,pdfDarkMode)
                     val layers=pictures.getOrPut(id){recordLayers(page)}
                     val visibleRect=InkBounds(-originX/scale,-top/scale,(width-originX)/scale,(height-top)/scale)
                     for(layer in layers)when(layer){
