@@ -74,9 +74,9 @@ class ClassicUi(val context:Context, val translate:(String)->String = {it}) {
         setPadding(dp(14),0,dp(14),0);background=rounded(color("#f8f9fb"),12f,color("#d7dbe1"))
         layoutParams=LinearLayout.LayoutParams(-1,dp(height));setSelectAllOnFocus(false)
     }
-    fun swatch(value:String,selected:Boolean=false,action:()->Unit)=FrameLayout(context).apply{
-        layoutParams=LinearLayout.LayoutParams(dp(39),dp(39));contentDescription=value;isClickable=true;setOnClickListener{action()}
-        background=rounded(Color.TRANSPARENT,50f,if(selected)Color.WHITE else Color.TRANSPARENT,2f)
+    fun swatch(value:String,selected:Boolean=false,selectionRing:Int=Color.WHITE,action:()->Unit)=FrameLayout(context).apply{
+        layoutParams=LinearLayout.LayoutParams(dp(39),dp(39));contentDescription=value;isClickable=true;isFocusable=true;isSelected=selected;setOnClickListener{action()}
+        background=rounded(Color.TRANSPARENT,50f,if(selected)selectionRing else Color.TRANSPARENT,2f)
         addView(View(context).apply{background=rounded(runCatching{color(value)}.getOrDefault(Color.BLACK),50f,color("#26000000"))},FrameLayout.LayoutParams(dp(28),dp(28),Gravity.CENTER))
     }
 }

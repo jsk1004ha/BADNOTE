@@ -179,6 +179,13 @@ class NativeSmokeInstrumentation:Instrumentation(){
             }
             activity=startActivitySync(Intent(Intent.ACTION_MAIN).setClassName(targetContext.packageName,MainActivity::class.java.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             repository=activity.repository
+            if (localChecks?.getString("inkWorkspaceOnly") == "true") {
+                InkWorkspaceChecks.run(activity, { block -> ui { block() } }, ::await)
+                result.putString("inkWorkspace", "gesture_input_undo_saved_graphite_xournal_verified")
+                result.putString("passed", "true")
+                finish(0, result)
+                return
+            }
             if(legacyOnly){migrateLegacyFixture(result);result.putString("legacyMigration","blob_origins_mime_bytes_failure_cleanup_verified");result.putString("passed","true");finish(0,result);return}
             if(focusedEditor&&!focusedWorkload)result.putLong("focusedStartupMs",awaitFocusedStartup())
             if(focusedWorkload){

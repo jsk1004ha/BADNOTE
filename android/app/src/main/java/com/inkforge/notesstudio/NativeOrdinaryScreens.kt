@@ -40,11 +40,13 @@ internal data class LibraryUiState(val title: String, val folder: String, val fi
     val selected: Set<String>, val narrow: Boolean, val searchOpen: Boolean,
     val ocrMatches: Set<String> = emptySet())
 
-private val libraryBackground = Color(0xff181818)
-private val libraryPanel = Color(0xff262626)
-private val libraryText = Color(0xfff3f3f4)
-private val libraryMuted = Color(0xff9a9a9e)
-private val libraryAccent = Color(0xff67c5ff)
+private val libraryBackground = Color(0xfff6f7fb)
+private val libraryPanel = Color.White
+private val libraryText = Color(0xff202739)
+private val libraryMuted = Color(0xff636c80)
+private val libraryAccent = Color(0xff344ca3)
+private val libraryTint = Color(0xffe8edff)
+private val libraryBorder = Color(0xffe0e4ec)
 
 @Composable
 internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryDocumentUi>,
@@ -52,10 +54,10 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
     translate: (String) -> String, onQuery: (String) -> Unit, onSearch: () -> Unit,
     onFilter: (String) -> Unit,
     onFolder: (String) -> Unit, onFolderMenu: (String) -> Unit, onNewFolder: () -> Unit,
-    onNewNote: (String) -> Unit, onDocument: (String) -> Unit, onDocumentMenu: (String) -> Unit,
+    onNewNote: (String) -> Unit, onImport: () -> Unit, onDocument: (String) -> Unit, onDocumentMenu: (String) -> Unit,
     onFavorite: (String) -> Unit, onSelect: (String) -> Unit, onSelectionMode: () -> Unit,
     onSelectedTrash: () -> Unit, onSort: () -> Unit, onListMode: () -> Unit,
-    onSettings: () -> Unit, onGuide: () -> Unit) {
+    onSettings: () -> Unit) {
     var search by remember(state.folder, state.filter) { mutableStateOf(state.query) }
     val visible = remember(documents, state, search) {
         documents.filter { item ->
@@ -79,15 +81,15 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
     Column(Modifier.fillMaxSize().background(libraryBackground)) {
         Row(Modifier.weight(1f)) {
             if (!state.narrow) {
-                Column(Modifier.width(78.dp).fillMaxHeight().background(Color(0xff292929))
+                Column(Modifier.width(78.dp).fillMaxHeight().background(Color(0xffeef0f6))
                     .padding(horizontal = 10.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     IconAction("notebook", translate("문서"), icon, Modifier.size(44.dp)) { onFolder("root") }
-                    Spacer(Modifier.height(40.dp))
+                    Spacer(Modifier.height(18.dp))
                     listOf(Triple("all", "folder", "모든 문서"), Triple("favorite", "star", "즐겨찾기"),
                         Triple("shared", "users", "공유됨"), Triple("templates", "store", "템플릿"),
                         Triple("trash", "trash", "휴지통")).forEach { (key, glyph, label) ->
                         if (key == "trash") Spacer(Modifier.fillMaxWidth().height(16.dp)
-                            .border(0.5.dp, Color(0x22ffffff)))
+                            .border(0.5.dp, libraryBorder))
                         IconAction(glyph, translate(label), icon, Modifier.size(44.dp), state.filter == key) { onFilter(key) }
                         Spacer(Modifier.height(12.dp))
                     }
@@ -118,7 +120,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                         } })
                 }
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text(translate("문서"), color = libraryText, fontSize = 15.sp,
@@ -131,8 +133,8 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                         }
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconAction("plus", translate("신규"), icon, Modifier.size(44.dp), true) { onNewNote("grid") }
-                            if (!state.narrow) LibraryAction(translate("신규"), true) { onNewNote("grid") }
+                            LibraryAction(translate("신규"), true) { onNewNote("grid") }
+                            LibraryAction(translate("노트 가져오기"), false, onClick = onImport)
                             IconAction("folderPlus", translate("폴더 생성"), icon, Modifier.size(44.dp)) { onNewFolder() }
                             if (state.folder != "root") IconAction("trash", translate("폴더 메뉴"), icon,
                                 Modifier.size(44.dp)) { onFolderMenu(state.folder) }
@@ -152,21 +154,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                                 FolderChip(folder, icon, translate, state.narrow,
                                     { onFolder(folder.id) }, { onFolderMenu(folder.id) })
                             }
-                            FolderChip(null, icon, translate, state.narrow, onNewFolder, {})
                         }
-                    }
-                }
-                item {
-                    Row(Modifier.fillMaxWidth().height(76.dp)
-                        .background(Color(0xff1b242a), RoundedCornerShape(12.dp)).padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        NativeGlyph("sparkles", 0xffd8eaff.toInt(), 27, icon)
-                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                            Text(translate("기기 안에서 빠르고 안전하게"), color = libraryText, fontWeight = FontWeight.Bold)
-                            Text(translate("필기, 손글씨 OCR, 수식 계산, 페이지 검색을 오프라인으로 사용할 수 있습니다."),
-                                color = libraryMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        if (!state.narrow) LibraryAction(translate("사용법"), false) { onGuide() }
                     }
                 }
                 if (state.filter == "templates") {
@@ -203,7 +191,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
             }
         }
         if (state.narrow) {
-            Row(Modifier.fillMaxWidth().background(Color(0xff1d1d1e)).padding(5.dp),
+            Row(Modifier.fillMaxWidth().background(Color(0xffeef0f6)).padding(5.dp),
                 horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 listOf("all" to "문서", "favorite" to "즐겨찾기", "new" to "신규",
                     "templates" to "템플릿", "settings" to "설정").forEach { (key, label) ->
@@ -213,7 +201,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                         horizontalAlignment = Alignment.CenterHorizontally) {
                         NativeGlyph(when(key){"all"->"folder";"favorite"->"star";"new"->"plus-circle";
                             "templates"->"store";else->"settings"},
-                            if(state.filter==key)0xff55b8f5.toInt() else 0xff8d8d91.toInt(),23,icon)
+                            if(state.filter==key)libraryAccent.toArgb() else libraryMuted.toArgb(),23,icon)
                         Text(translate(label), color = if(state.filter==key)libraryAccent else libraryMuted,
                             fontSize = 10.sp, maxLines = 1)
                     }
@@ -252,6 +240,7 @@ private fun LibraryCard(item: LibraryDocumentUi, listMode: Boolean, selected: Bo
         }
     }
     val root = modifier.background(libraryPanel, RoundedCornerShape(12.dp))
+        .border(1.dp, if (selected) libraryAccent else libraryBorder, RoundedCornerShape(12.dp))
         .clickable { if (selectionMode) onSelect() else onOpen() }
         .semantics { contentDescription = "${doc.title} ${translate("열기")}" }
     if (listMode) {
@@ -274,30 +263,28 @@ private fun NativeGlyph(name: String, tint: Int, size: Int, icon: (String, Int, 
 
 @Composable
 private fun IconAction(name: String, label: String, icon: (String, Int, Int) -> View,
-    modifier: Modifier, selected: Boolean = false, tint: Int = AndroidColor.WHITE,
+    modifier: Modifier, selected: Boolean = false, tint: Int = libraryMuted.toArgb(),
     onClick: () -> Unit) {
-    Box(modifier.background(if (selected) Color(0xff174784) else Color.Transparent, RoundedCornerShape(10.dp))
+    Box(modifier.background(if (selected) libraryTint else Color.Transparent, RoundedCornerShape(10.dp))
         .clickable(onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-        NativeGlyph(name, if (selected) 0xff67c5ff.toInt() else tint, 23, icon)
+        NativeGlyph(name, if (selected) libraryAccent.toArgb() else tint, 23, icon)
     }
 }
 
 @Composable
-private fun FolderChip(folder: LibraryFolderUi?, icon: (String, Int, Int) -> View,
+private fun FolderChip(folder: LibraryFolderUi, icon: (String, Int, Int) -> View,
     translate: (String) -> String, narrow: Boolean, onOpen: () -> Unit, onMenu: () -> Unit) {
-    val color = folder?.color ?: libraryAccent
     Row(Modifier.width(if (narrow) 174.dp else 190.dp).height(if (narrow) 61.dp else 68.dp)
         .background(libraryPanel, RoundedCornerShape(13.dp)).clickable(onClick = onOpen).padding(9.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        NativeGlyph(if (folder == null) "folderPlus" else "folder", color.toArgb(), 24, icon)
+        NativeGlyph("folder", folder.color.toArgb(), 24, icon)
         Column(Modifier.weight(1f).padding(start = 8.dp)) {
-            Text(folder?.title ?: translate("새 폴더"), color = if (folder == null) libraryAccent else libraryText,
+            Text(folder.title, color = libraryText,
                 fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (folder == null) translate("노트 묶음 만들기") else
-                "${folder.count}${translate("개 노트")}", color = libraryMuted, fontSize = 11.sp,
+            Text("${folder.count}${translate("개 노트")}", color = libraryMuted, fontSize = 11.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (folder != null) IconAction("chevron-down", translate("폴더 메뉴"), icon, Modifier.size(28.dp),
+        IconAction("chevron-down", translate("폴더 메뉴"), icon, Modifier.size(28.dp),
             onClick = onMenu)
     }
 }
@@ -305,7 +292,7 @@ private fun FolderChip(folder: LibraryFolderUi?, icon: (String, Int, Int) -> Vie
 @Composable
 private fun LibraryAction(label: String, selected: Boolean, modifier: Modifier = Modifier,
     onClick: () -> Unit) {
-    Box(modifier.background(if (selected) Color(0xff174784) else libraryPanel, RoundedCornerShape(10.dp))
+    Box(modifier.background(if (selected) libraryTint else libraryPanel, RoundedCornerShape(10.dp))
         .clickable(onClick = onClick).semantics { contentDescription = label }
         .heightIn(min = 42.dp).padding(horizontal = 10.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center) {
@@ -339,8 +326,8 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
             ocrPolicy, onOcrPolicy)
         listOf(
             Triple("stylusOnly", "스타일러스 전용 필기", "손바닥과 손가락 입력을 필기에서 제외합니다."),
-            Triple("scribbleErase", "낙서해서 지우기", "같은 영역을 여러 번 왕복해 덮은 펜 획을 지웁니다."),
-            Triple("drawHold", "그려서 도형 만들기", "직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다."),
+            Triple("scribbleErase", "낙서해서 지우기", "펜으로 글자 위를 지그재그로 문지르면 반복해서 닿은 필기를 지웁니다."),
+            Triple("drawHold", "그려서 도형 만들기", "펜으로 선·타원·사각형을 그린 뒤 잠깐 멈추면 도형으로 변환합니다."),
             Triple("telemetry", "스타일러스 정보 표시", "필압, 기울기, 입력 장치를 화면에 표시합니다."),
             Triple("continuous", "연속 페이지 보기", "모든 페이지를 세로로 이어 표시합니다."),
             Triple("autoOcr", "손글씨 OCR 자동 등록", "필기를 인식해 문서 검색에 등록합니다."),

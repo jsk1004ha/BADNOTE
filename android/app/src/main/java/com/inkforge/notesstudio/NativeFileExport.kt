@@ -38,6 +38,7 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
                     "png"->StreamingPdf.render(repository,requireNotNull(repository.page(requireNotNull(currentPage))),1800).let{bmp->
                         try{file.outputStream().use{require(bmp.compress(Bitmap.CompressFormat.PNG,100,it))}}finally{bmp.recycle()}}
                     "xfdf"->XfdfExport.write(repository,doc.id,file,{cancelled.get()})
+                    "xopp"->NoteInterchange.exportXournal(repository,doc,file){cancelled.get()}
                     "json"->{
                         val page=requireNotNull(repository.page(requireNotNull(currentPage))){"현재 페이지가 없습니다."}
                         val result=requireNotNull(repository.ocrResult(page.id)){"먼저 현재 페이지의 손글씨 OCR을 실행해 주세요."}
@@ -100,7 +101,7 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
             return Intent(Intent.ACTION_SEND).setType(mime(file)).putExtra(Intent.EXTRA_STREAM,uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply{clipData=ClipData.newRawUri(file.name,uri)}
         }
-        fun mime(file:File)=when(file.extension){"pdf"->"application/pdf";"png"->"image/png";"xfdf"->"application/vnd.adobe.xfdf";"json"->"application/json";else->"application/octet-stream"}
+        fun mime(file:File)=when(file.extension){"pdf"->"application/pdf";"png"->"image/png";"xfdf"->"application/vnd.adobe.xfdf";"xopp"->XournalInk.MIME;"json"->"application/json";else->"application/octet-stream"}
     }
 }
 

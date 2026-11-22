@@ -23,7 +23,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     var eraserRadius=22f
     var preciseEraser=false
     var wholeEraser=false
-    var shape="line"
+    var shape="freehand"
     var stylusOnly=true
     var readOnly=false
     var scribbleErase=true
@@ -239,7 +239,11 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private var touchX=0f;private var touchY=0f;private var touchSpan=0f;private var touchTravel=0f
     private var touchStartTime=0L;private var maxTouches=0
     private var heldShape=false
-    private val hold=Runnable{convertHeldShape()}
+    private var holdAnchor: InkPoint? = null
+    private val holdDelay = 450L
+    private val hold = Runnable { convertHeldShape() }
+    private val screenScale get() = scale / resources.displayMetrics.density
+    private val drawingFreehandShape get() = contactTool == Tool.SHAPE && live?.optString("type") == "stroke"
 
     init{isFocusable=true;isFocusableInTouchMode=true;contentDescription="필기 페이지"}
     internal fun attachFrontBuffer(host:InkFrontSurface){frontBuffer=host;sceneDirty=true;invalidate()}
@@ -783,6 +787,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             }
             if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){
                 consumeEvent(event,pIndex)
+                // MotionEvent time also covers a pause whose delayed callback is still queued.
+                holdAnchor?.let { if (event.eventTime - it.time >= holdDelay) convertHeldShape() }
                 finishContact();performClick();return true
             }
             return true
@@ -828,19 +834,31 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun beginInk(p:InkPoint){
         frontStroke=null
         erasing=false;eraserPoint=null;points=mutableListOf(p);pointPublication.clear();pointPublication.append(p);heldShape=false;contactTool=tool
+        holdAnchor = p.takeIf { tool == Tool.PEN && drawHold && !ruler }
         contactState=if(tool==Tool.LASSO)ContactState.SELECTING else ContactState.DRAWING
         val page=contactPage?:return
         if(tool!=Tool.LASSO&&tool!=Tool.HAND&&tool!=Tool.LASER)clearSearchHighlights(page.id)
         val cssWidth=(basePageWidth/resources.displayMetrics.density).toDouble().coerceAtLeast(1.0)
         val screenWidth=if(tool==Tool.HIGHLIGHTER)highlighterWidth else inkWidth
         val pageWidth=LegacyBrush.toolStrokeWidthToPage(cssWidth,screenWidth.toDouble())
-        when(tool){
-            Tool.PEN,Tool.HIGHLIGHTER,Tool.LASER->live=json("id" to uid("stroke"),"type" to "stroke","brush" to if(tool==Tool.HIGHLIGHTER)"highlighter" else brush,
+        val freehand = tool == Tool.SHAPE && shape == "freehand"
+        if (tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.LASER) || freehand) {
+            live=json("id" to uid("stroke"),"type" to "stroke","brush" to when {
+                freehand -> "fineliner"
+                tool == Tool.HIGHLIGHTER -> "highlighter"
+                else -> brush
+            },
                 "color" to if(tool==Tool.HIGHLIGHTER&&inkColor=="#172033")"#ffe066" else inkColor,
                 "width" to pageWidth,"screenWidth" to screenWidth,
-                "opacity" to if(tool==Tool.HIGHLIGHTER).32f else 1f,"settings" to penSettings.copyJson(),"createdAt" to System.currentTimeMillis(),
+                "opacity" to when {
+                    tool == Tool.HIGHLIGHTER -> .32f
+                    tool == Tool.PEN && brush == "pencil" -> penSettings.optDouble("opacity", .82)
+                    else -> 1f
+                },"settings" to if (freehand) json("smoothing" to 0, "taper" to 0) else penSettings.copyJson(),"createdAt" to System.currentTimeMillis(),
                 "captureSeq" to repository.reserveCaptureSequence(page.id),"captureSessionId" to captureSessionId,
                 "timeBasis" to "session-monotonic","revision" to 1)
+            if (tool == Tool.PEN && brush == "pencil") live?.put("pencilTexture", "graphite")
+        } else when(tool){
             Tool.SHAPE->live=json("id" to uid("shape"),"type" to "shape","shape" to shape,"color" to inkColor,
                 "width" to pageWidth,"screenWidth" to inkWidth,"x1" to p.x,"y1" to p.y,"x2" to p.x,"y2" to p.y)
             Tool.TAPE->live=json("id" to uid("tape"),"type" to "tape","color" to "#4c91dd","x" to p.x,"y" to p.y,"w" to 1,"h" to 1)
@@ -883,14 +901,18 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun movePoint(p:InkPoint){
         if(contactPage==null)return
         if(heldShape)return
-        when(contactTool){
-            Tool.PEN,Tool.HIGHLIGHTER,Tool.LASER->{
-                val moved=points.isEmpty()||InkGeometry.distance(points.last(),p)*scale>.25f
-                points+=p;pointPublication.append(p)
-                if(moved){
-                    removeCallbacks(hold);if(drawHold&&contactTool==Tool.PEN&&!ruler)postDelayed(hold,650)
-                }
+        if (live?.optString("type") == "stroke") {
+            points += p
+            pointPublication.append(p)
+            val anchor = holdAnchor
+            if (anchor != null && InkGeometry.distance(anchor, p) * screenScale >= 2.5f) {
+                holdAnchor = p
+                removeCallbacks(hold)
+                postDelayed(hold, holdDelay)
             }
+            return
+        }
+        when(contactTool){
             Tool.SHAPE->{live?.put("x2",p.x)?.put("y2",p.y)}
             Tool.TAPE->{val a=points.first();live?.put("x",min(a.x,p.x))?.put("y",min(a.y,p.y))?.put("w",abs(a.x-p.x))?.put("h",abs(a.y-p.y))}
             Tool.LASSO->{val start=moveStart
@@ -900,15 +922,27 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         }
     }
     private fun convertHeldShape(){
-        if(pointer<0||erasing||contactTool!=Tool.PEN||points.size<5)return
-        if(scribbleErase&&InkGeometry.deliberateScratch(points,scale/resources.displayMetrics.density))return
-        val recognized=InkGeometry.recognizeShape(points)?:return
-        if(frontContact){frontBuffer?.cancelFront();frontContact=false;frontBuffer?.hideForLegacy()}
-        val a=points.first();val b=points.last()
-        val x1=if(recognized=="line")a.x else points.minOf{it.x};val y1=if(recognized=="line")a.y else points.minOf{it.y}
-        val x2=if(recognized=="line")b.x else points.maxOf{it.x};val y2=if(recognized=="line")b.y else points.maxOf{it.y}
-        live=json("id" to uid("shape"),"type" to "shape","shape" to recognized,"color" to inkColor,"width" to inkWidth,"x1" to x1,"y1" to y1,"x2" to x2,"y2" to y2)
-        heldShape=true;invalidate()
+        if (pointer < 0 || erasing || heldShape || contactTool != Tool.PEN || !drawHold || ruler) return
+        if (scribbleErase && InkGeometry.deliberateScratch(points, screenScale)) return
+        val shape = fittedShape() ?: return
+        abandonFrontStroke()
+        live = shape
+        heldShape = true
+        invalidate()
+    }
+    private fun fittedShape(): JSONObject? {
+        val source = live ?: return null
+        val recognized = InkGeometry.recognizeShape(points, screenScale) ?: return null
+        return json("id" to uid("shape"), "type" to "shape", "shape" to recognized.name,
+            "color" to source.getString("color"), "width" to source.getDouble("width"),
+            "screenWidth" to source.getDouble("screenWidth"), "x1" to recognized.x1, "y1" to recognized.y1,
+            "x2" to recognized.x2, "y2" to recognized.y2)
+    }
+    private fun abandonFrontStroke() {
+        if (!frontContact) return
+        frontBuffer?.cancelFront()
+        frontContact = false
+        frontBuffer?.hideForLegacy()
     }
     private fun beginErase(p:InkPoint){
         frontBuffer?.hideForLegacy()
@@ -930,7 +964,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun transitionContact(toEraser:Boolean,p:InkPoint){
         if(pointer<0||erasing||!toEraser||tool !in setOf(Tool.PEN,Tool.HIGHLIGHTER,Tool.ERASER,Tool.LASER))return
         // A temporary eraser is latched to this contact, not to the physical button's release.
-        if(frontContact){frontBuffer?.cancelFront();frontContact=false;frontBuffer?.hideForLegacy()}
+        abandonFrontStroke()
         finalizeInkSegment();beginErase(p)
     }
     private fun eraseAlong(p:InkPoint)=erasePath(listOf(p))
@@ -962,7 +996,8 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             val stroke=obj.optString("type")=="stroke"
             if(obj.optBoolean("locked")||obj.optBoolean("hidden")||
                 !(wholeEraser&&tool==Tool.ERASER||stroke||obj.optString("type") in setOf("text","shape")))continue
-            val masked=obj.optString("type") in setOf("text","shape") || obj.optString("brush")=="highlighter"
+            val masked=obj.optString("type") in setOf("text","shape") || obj.optString("brush")=="highlighter" ||
+                GraphiteBrush.isGraphite(obj)
             val fragments=if(preciseEraser&&masked)listOf(ObjectEraseMask.erase(obj,centers,radius))
             else if(preciseEraser&&stroke)index.eraseAlong(obj,event)else{
                 if(!index.hitAlong(obj,event))continue
@@ -999,23 +1034,27 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun finalizeInkSegment(){
         removeCallbacks(hold)
         val page=contactPage?:return
-        val obj=live ?: return
+        val source = live ?: return
         if(contactTool!=Tool.LASER){
-            if(obj.optString("type")=="stroke"){
-                val samples=JSONArray();for(point in points)samples.put(point.json());obj.put("points",samples)
-            }
-            val scratch=if(scribbleErase&&contactTool==Tool.PEN&&!heldShape)
-                InkGeometry.scratchTargets(page.objects,points,scale/resources.displayMetrics.density)else emptyList()
+            val scratch = if (scribbleErase && contactTool == Tool.PEN && !heldShape && !ruler)
+                InkGeometry.scratchTargets(points, screenScale) { indexFor(page).query(it) } else emptyList()
             if(scratch.isNotEmpty()){
+                abandonFrontStroke()
                 scratch.forEach{stageReplace(page,it,emptyList())}
                 onStatus("${scratch.size}개 항목을 지웠습니다.")
             }else{
+                val obj = if (drawingFreehandShape) fittedShape() ?: source else source
+                if (obj.optString("type") == "stroke") {
+                    val samples = JSONArray()
+                    for (point in points) samples.put(point.json())
+                    obj.put("points", samples)
+                }
                 // The contact transfers ownership; later edits replace objects instead of mutating their geometry.
                 page.objects.add(obj);contactAdded.add(obj.getString("id"));spatialIndexes[page.id]?.put(obj)
                 pictures[page.id]?.takeUnless{it.dirty}?.append(obj)
             }
         }
-        live=null;points.clear();pointPublication.clear();heldShape=false
+        live=null;points.clear();pointPublication.clear();heldShape=false;holdAnchor=null
     }
     fun finishContact(){
         removeCallbacks(hold);if(frontContact)updateFront();val page=contactPage
@@ -1079,7 +1118,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         // The contact latch always ends here; a physically held key survives only a normal lift.
         if(!preserveHeldKey)keyEraser=false
         stylusButtons.reset()
-        contactTool=null;heldShape=false;eraserPoint=null;contactState=state;invalidate()
+        contactTool=null;heldShape=false;holdAnchor=null;eraserPoint=null;contactState=state;invalidate()
         if(hadContact)onContactChanged(false)
     }
     private fun positions(page:NotePage):Map<String,Int>{

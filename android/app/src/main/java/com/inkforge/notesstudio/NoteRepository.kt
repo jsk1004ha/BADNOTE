@@ -221,12 +221,20 @@ class NoteRepository(
         if (writableDatabase.update("documents", values, "id=?", arrayOf(doc.id)) == 0)
             writableDatabase.insertOrThrow("documents", null, values)
     }
-    fun create(title: String, folder: String, template: String): DocumentInfo {
+    fun create(title: String, folder: String, template: String): DocumentInfo =
+        createFromPages(title, folder) { append -> append(NotePage.blank(template)) }
+
+    internal fun createFromPages(title: String, folder: String, readPages: ((NotePage) -> Unit) -> Unit): DocumentInfo {
         val id = uid("doc")
         val doc = DocumentInfo(id, json("id" to id, "title" to title, "folderId" to folder,
             "schema" to "com.inkforge.ifnote", "version" to 5, "favorite" to false,
             "createdAt" to System.currentTimeMillis(), "audio" to JSONArray()))
-        transaction { putDocument(doc); putPage(id, NotePage.blank(template), 0) }
+        transaction {
+            putDocument(doc)
+            var position = 0
+            readPages { page -> putPage(id, page, position++) }
+            require(position > 0) { "가져올 페이지가 없습니다." }
+        }
         return doc
     }
     fun pageIds(documentId: String): List<String> = readableDatabase.rawQuery("SELECT id FROM pages WHERE document_id=? ORDER BY position,id", arrayOf(documentId)).use {

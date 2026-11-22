@@ -9,7 +9,7 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
     private val legacyBrush=LegacyCanvasBrush()
     fun color(value: String,default: Int=Color.BLACK)=try{Color.parseColor(value)}catch(_:Exception){default}
     fun template(canvas: Canvas,page: NotePage) {
-        canvas.drawColor(Color.WHITE)
+        canvas.drawColor(color(page.meta.optString("paperColor"), Color.WHITE))
         paint.reset();paint.isAntiAlias=true;paint.color=0xffdce2e9.toInt();paint.strokeWidth=max(1f,page.width/1000f)
         val sx=page.width/1000f;val sy=page.height/1414f
         when(page.meta.optString("template","blank")) {

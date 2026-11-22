@@ -1,0 +1,86 @@
+package com.inkforge.notesstudio
+
+import org.json.JSONArray
+import org.junit.Assert.*
+import org.junit.Test
+import java.io.ByteArrayOutputStream
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+
+class InkWorkspaceTest {
+    @Test fun smallAndSparseShapesUseDisplaySize() {
+        for (scale in listOf(.35f, .8f, 2.7f)) {
+            fun point(x: Float, y: Float) = InkPoint(300 + x / scale, 500 + y / scale)
+            val line = listOf(point(0f, 0f), point(25f, 11f))
+            assertEquals("line", InkGeometry.recognizeShape(line, scale)?.name)
+            val rectangle = listOf(point(0f, 0f), point(25f, 1f), point(26f, 20f),
+                point(1f, 21f), point(0f, 3f))
+            assertEquals("rectangle", InkGeometry.recognizeShape(rectangle, scale)?.name)
+            val oval = (0..12).map {
+                val angle = it * 2 * PI / 13
+                point(18 * cos(angle).toFloat(), 12 * sin(angle).toFloat())
+            }
+            assertEquals("ellipse", InkGeometry.recognizeShape(oval, scale)?.name)
+            assertNull(InkGeometry.recognizeShape(oval.take(8), scale))
+            assertNull(InkGeometry.recognizeShape(listOf(point(0f, 0f), point(4f, 1f)), scale))
+        }
+    }
+
+    @Test fun shortSparseScratchRequiresRepeatedContactWithUnlockedInk() {
+        val stroke = json("id" to "target", "type" to "stroke", "width" to 3, "points" to JSONArray(
+            listOf(InkPoint(100f, 70f).json(), InkPoint(100f, 110f).json())))
+        val locked = stroke.copyJson().put("id", "locked").put("locked", true)
+        val nearby = InkGeometry.transform(stroke, 30f, 0f).put("id", "nearby")
+        val gestures = listOf(
+            listOf(InkPoint(82f, 80f), InkPoint(118f, 91f), InkPoint(84f, 92f), InkPoint(114f, 103f)),
+            listOf(InkPoint(82f, 80f), InkPoint(118f, 91f), InkPoint(84f, 92f), InkPoint(96f, 103f))
+        )
+        val candidates = listOf(stroke, locked, nearby)
+        assertEquals(listOf("target"), InkGeometry.scratchTargets(candidates, gestures[0], .65f).map { it.getString("id") })
+        assertTrue(InkGeometry.scratchTargets(candidates, gestures[1], .65f).isEmpty())
+    }
+
+    @Test fun xournalRoundTripKeepsPageOrderCoordinatesColorAndPressureWidths() {
+        val input = """
+            <xournal version="0.4.8"><title>Two pages</title>
+            <page width="600" height="800"><background type="solid" style="graph" color="#f4f2eaff"/><layer>
+            <stroke tool="pen" color="#182233ff" width="3 1 2">60 80 120 60 300 400</stroke>
+            </layer></page>
+            <page width="500" height="500"><background type="solid" style="plain" color="white"/><layer>
+            <stroke tool="highlighter" color="#ffff007f" capStyle="butt" width="8">25 50 375 50</stroke>
+            </layer></page></xournal>
+        """.trimIndent()
+        val pages = parse(input.byteInputStream())
+        assertEquals(listOf(1333.3334f, 1000f), pages.map { it.height })
+        assertEquals("grid", pages.first().meta.getString("template"))
+        assertEquals("#f4f2ea", pages.first().meta.getString("paperColor"))
+        val stroke = pages.first().objects.single()
+        assertEquals("xournal", stroke.getString("widthProfile"))
+        assertEquals(listOf(100f, 200f, 500f), InkGeometry.points(stroke).map { it.x })
+        assertEquals(1.6667, LegacyBrush.widths(stroke)[0], .001)
+        assertEquals(3.3333, LegacyBrush.widths(stroke)[1], .001)
+
+        val output = ByteArrayOutputStream()
+        XournalInk.write(output, "두 쪽 & 검증", pages.asSequence(), { error("editable strokes were flattened") })
+        val reopened = parse(output.toByteArray().inputStream())
+        assertEquals(listOf("#182233", "#ffff00"), reopened.map { it.objects.single().getString("color") })
+        assertEquals("highlighter", reopened.last().objects.single().getString("brush"))
+        assertEquals("butt", reopened.last().objects.single().getString("strokeCap"))
+        assertEquals(300.0, reopened.first().objects.single().array("points").getJSONObject(2).getDouble("x") * .6, .001)
+        assertEquals(3.3333, LegacyBrush.widths(reopened.first().objects.single())[1], .001)
+    }
+
+    @Test fun xournalRejectsExternalBackgroundsAndDocumentTypeDeclarations() {
+        assertThrows(IllegalArgumentException::class.java) {
+            parse("""<xournal><page width="600" height="800"><background type="pdf"/></page></xournal>""".byteInputStream())
+        }
+        assertThrows(org.xml.sax.SAXException::class.java) {
+            parse("<!DOCTYPE xournal><xournal/>".byteInputStream())
+        }
+    }
+
+    private fun parse(input: java.io.InputStream) = buildList {
+        XournalInk.read(input, { error("unexpected embedded image") }, { add(it) })
+    }
+}

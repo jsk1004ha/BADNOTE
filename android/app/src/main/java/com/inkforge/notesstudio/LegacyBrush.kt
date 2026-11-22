@@ -260,18 +260,20 @@ object LegacyBrush {
         val rawWidth = jsOr(field(stroke, "width"), 4.0)
         val base = max(.35, rawWidth)
         val brush = brush(stroke)
+        val externalWidth = stroke.optString("widthProfile") == "xournal"
         private val settings = settings(stroke)
         private val fallback = defaultSettings(brush)
         val taper = value(settings, fallback, "taper", 0.0, true)
         val pressure = value(settings, fallback, "pressure",
             when (brush) { "ballpoint" -> .08; "brush" -> .95; else -> .76 }, true)
         val tiltShade = value(settings, fallback, "tiltShade", .82, true)
-        fun matches(other: WidthContext) = brush == other.brush && rawWidth == other.rawWidth &&
+        fun matches(other: WidthContext) = brush == other.brush && rawWidth == other.rawWidth && externalWidth == other.externalWidth &&
             taper == other.taper && pressure == other.pressure && tiltShade == other.tiltShade
     }
     private fun segmentWidth(context: WidthContext, point: Point, next: Point?, index: Int,
                              total: Int): Double {
         val base = context.base
+        if (context.externalWidth) return base * (point.p ?: 1.0).coerceIn(.001, 1.0)
         val brush = context.brush
         val pressure = pointPressure(point, if (brush == "ballpoint" || brush == "fineliner") .54 else .42)
         val progress = if (total > 1) index.toDouble() / (total - 1) else 0.0
@@ -358,7 +360,8 @@ object LegacyBrush {
                 }
             }
             val a = points[index - 1]; val b = points[index]
-            val width = live?.width(context, a, b, index - 1, points.size) ?:
+            val width = if (context.externalWidth) segmentWidth(context, a, b, index - 1, points.size)
+            else live?.width(context, a, b, index - 1, points.size) ?:
                 ((segmentWidth(context, a, b, index - 1, points.size) +
                     segmentWidth(context, b, a, index, points.size)) / 2)
             sink.width(max(.25, width * jsOr(widthScale, 1.0)))
@@ -388,6 +391,10 @@ object LegacyBrush {
                                     sink: DrawingSink, live: LiveSmoothing?, pencilPoints: () -> List<Point>) {
         if (smooth.isEmpty()) return
         val brush = brush(stroke); val settings = settings(stroke); val fallback = defaultSettings(brush)
+        if (GraphiteBrush.isGraphite(stroke)) {
+            GraphiteBrush.render(stroke, smooth, sink)
+            return
+        }
         val context = WidthContext(stroke)
         val color = stroke.optString("color").ifBlank { "#111827" }
         val opacity = field(stroke, "opacity") ?: value(settings, fallback, "opacity", 1.0)
@@ -431,7 +438,8 @@ object LegacyBrush {
             }
             "highlighter" -> {
                 sink.save(); sink.multiply()
-                strokePath(sink, smooth, context, field(stroke, "opacity") ?: .28, color, true, live = live)
+                strokePath(sink, smooth, context, field(stroke, "opacity") ?: .28, color,
+                    !context.externalWidth || stroke.optString("strokeCap") == "butt", live = live)
                 sink.restore()
             }
             "gel" -> {

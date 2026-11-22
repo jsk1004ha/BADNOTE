@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.WindowCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -139,12 +140,13 @@ open class MainActivity:ComponentActivity(){
             val restore=if(savedInstanceState!=null)savedInstanceState.getString("documentId").orEmpty()
                 else DocumentWindows.documentId(intent)?:repository.setting("last-open-document")
             showLibrary()
-            if(intent?.action==Intent.ACTION_SEND&&intent.type=="application/pdf")handleIncoming(intent)
+            if (intent?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) handleIncoming(intent)
             else if(restore.isNotBlank())openDocument(restore,savedInstanceState?.getInt("pageIndex",0))
         }
     }
     private fun makeRoot(){
-        root=FrameLayout(this).apply{setBackgroundColor(0xff181818.toInt())}
+        root=FrameLayout(this).apply{setBackgroundColor(0xffeef0f6.toInt())}
+        WindowInsetsControllerCompat(window, root).apply { isAppearanceLightStatusBars = true; isAppearanceLightNavigationBars = true }
         RootSafeArea.install(root)
         body=column();root.addView(body,FrameLayout.LayoutParams(-1,-1))
         status=text("bad note · 4.0",12,0xff607185.toInt()).apply{setPadding(dp(16),dp(5),dp(16),dp(5))}
@@ -274,7 +276,7 @@ open class MainActivity:ComponentActivity(){
         clearScreen();document=null;ids=emptyList();metas=emptyList()
         if(previousDocument!=null)afterSaved{if(document?.id!=previousDocument)app.windows.release(previousDocument,this)}
         enqueueSave({repository.setting("last-open-document","",true)})
-        body.setBackgroundColor(ui.color("#181818"))
+        body.setBackgroundColor(ui.color("#f6f7fb"))
         val generation=++libraryGeneration
         val narrow=resources.configuration.screenWidthDp<=840
         val allFolders=folders.objects().map { item ->
@@ -322,7 +324,7 @@ open class MainActivity:ComponentActivity(){
                 onFilter={libraryFilter=it;selectionMode=false;selectedDocuments.clear();showLibrary()},
                 onFolder={folder=it;libraryFilter="all";showLibrary()},
                 onFolderMenu={id->folders.objects().firstOrNull{it.optString("id")==id}?.let(::folderMenu)},
-                onNewFolder={newFolder()},onNewNote={newNote(it)},
+                onNewFolder={newFolder()},onNewNote={newNote(it)},onImport={pick("note")},
                 onDocument={id->if(selectionMode){if(!selectedDocuments.add(id))selectedDocuments.remove(id);showLibrary()}
                     else openDocument(id)},
                 onDocumentMenu={id->documentState.value.firstOrNull{it.document.id==id}?.let{documentMenu(it.document)}},
@@ -336,7 +338,7 @@ open class MainActivity:ComponentActivity(){
                     }}){selectedDocuments.clear();selectionMode=false;showLibrary()}}},
                 onSort={settings.put("librarySort",if(settings.optString("librarySort")=="title")"date" else "title");saveSettings();showLibrary()},
                 onListMode={settings.put("listMode",!settings.optBoolean("listMode"));saveSettings();showLibrary()},
-                onSettings={showSettings()},onGuide={gestureGuide()}) }
+                onSettings={showSettings()}) }
         }
         body.addView(compose,LinearLayout.LayoutParams(-1,0,1f))
         searchOcrMatches(query)
@@ -516,8 +518,8 @@ open class MainActivity:ComponentActivity(){
                 1->{val choices=listOf(json("id" to "root","title" to "문서"))+folders.objects().filter{it.optString("id")!="root"};choose("폴더로 이동",choices.map{it.optString("title")}){n->mutateDocument(doc){put("folderId",choices[n].getString("id"))}}}
                 2->prompt("태그 (쉼표로 구분)",doc.data.array("tags").let{a->(0 until a.length()).joinToString(", "){a.optString(it)}}){value->mutateDocument(doc){put("tags",JSONArray(value.split(',').map{it.trim()}.filter{it.isNotBlank()}))}}
                 3->work("노트 복제 중…",{val file=File.createTempFile("duplicate-",".ifnote",repository.workDirectory);try{repository.export(doc.id,file);file.inputStream().use{repository.importArchive(it,doc.folder)}.also{it.data.put("title","${doc.title} 사본");repository.putDocument(it)}}finally{file.delete()}}){showLibrary()}
-                4->exportMenu(doc,false)
-                5->exportMenu(doc,true)
+                4->exportMenu(doc)
+                5->exportMenu(doc)
                 6->mutateDocument(doc){put("trashed",true)}
                 7->openDocumentWindow(doc.id)
             }
@@ -558,24 +560,44 @@ open class MainActivity:ComponentActivity(){
             }else startActivity(DocumentWindows.intent(this,id))
         }
     }
+    private val workspacePanel = 0xfffcfcfe.toInt()
+    private val workspaceLine = 0xffdce1eb.toInt()
+    private val workspaceAccent = 0xff344ca3.toInt()
+    private val workspaceSelected = 0xffe8edff.toInt()
+
     private fun showEditor(index:Int){
         val doc=document?:return;clearScreen();document=doc
         val narrow=resources.configuration.screenWidthDp<=840
         body.setBackgroundColor(ui.color("#f6f6f7"))
+        val tabs = ui.row().apply {
+            setPadding(dp(6), 0, dp(6), 0)
+            setBackgroundColor(ui.color("#eef0f6"))
+        }
+        val documentWindow = this is DocumentActivity
+        tabs.addView(ui.iconButton(if(documentWindow) "close" else "home",
+            if(documentWindow) "문서 창 닫기" else "라이브러리", ui.ink, 48, 40, 20) { showLibrary() })
         if(!narrow){
-            val tabs=ui.row().apply{setBackgroundColor(ui.color("#233e64"));gravity=Gravity.BOTTOM}
-            tabs.addView(ui.iconButton(if(this is DocumentActivity)"close"else"home",if(this is DocumentActivity)"문서 창 닫기"else"라이브러리",ui.color("#e9f2fb"),40,32,19){showLibrary()})
             val tabList=ui.row().apply{gravity=Gravity.BOTTOM}
             openTabs.toList().takeLast(6).forEach{id->
-                val tab=ui.row().apply{setPadding(dp(11),0,dp(6),0);background=GradientDrawable().apply{setColor(if(id==doc.id)ui.blue else ui.color("#2c466a"));cornerRadii=floatArrayOf(dp(8).toFloat(),dp(8).toFloat(),dp(8).toFloat(),dp(8).toFloat(),0f,0f,0f,0f)};setOnClickListener{openDocument(id)}}
-                tab.addView(ui.text(if(id==doc.id)doc.title else repository.document(id)?.title?:"노트",12f,if(id==doc.id)Color.WHITE else ui.color("#aaffffff")).apply{gravity=Gravity.CENTER;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END},LinearLayout.LayoutParams(0,-1,1f))
-                tab.addView(ui.iconButton("close","문서 탭 닫기",ui.color("#b3ffffff"),22,22,14){openTabs.remove(id);if(id==doc.id){openTabs.lastOrNull()?.let{openDocument(it)}?:showLibrary()}else showEditor(inkView?.currentIndex?:0)})
-                tabList.addView(tab,LinearLayout.LayoutParams(dp(120+((if(id==doc.id)doc.title.length else 6)-6).coerceIn(0,20)*5),dp(29)).apply{rightMargin=dp(2)})
+                val selected = id == doc.id
+                val tab=ui.row().apply{setPadding(dp(12),0,dp(4),0);background=ui.rounded(if(selected) workspacePanel else Color.TRANSPARENT,8f);isSelected=selected;setOnClickListener{openDocument(id)}}
+                tab.addView(ui.text(if(selected)doc.title else repository.document(id)?.title?:"노트",13f,if(selected)workspaceAccent else ui.muted,selected).apply{maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END},LinearLayout.LayoutParams(0,-1,1f))
+                tab.addView(ui.iconButton("close","문서 탭 닫기",ui.muted,30,32,14){openTabs.remove(id);if(id==doc.id){openTabs.lastOrNull()?.let{openDocument(it)}?:showLibrary()}else showEditor(inkView?.currentIndex?:0)})
+                tabList.addView(tab,LinearLayout.LayoutParams(dp(122+((if(selected)doc.title.length else 6)-6).coerceIn(0,20)*5),dp(34)).apply{marginEnd=dp(3)})
             }
-            tabs.addView(horizontal(tabList),LinearLayout.LayoutParams(0,dp(29),1f));tabs.addView(ui.iconButton("plus","새 문서",Color.WHITE,40,32,19){newNote()});body.addView(tabs,LinearLayout.LayoutParams(-1,dp(34)))
+            tabs.addView(horizontal(tabList),LinearLayout.LayoutParams(0,dp(34),1f))
+            tabs.addView(ui.iconButton("plus","새 문서",ui.ink,48,40,20){newNote()})
+        } else {
+            tabs.addView(ui.text(doc.title, 14f, ui.ink, true).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, -1, 1f))
+            tabs.addView(ui.iconButton("share", "공유와 내보내기", ui.ink, 48, 40, 20) { exportMenu(doc) })
         }
-        val navbar=ui.row().apply{setPadding(dp(if(narrow)4 else 12),0,dp(if(narrow)4 else 12),0);setBackgroundColor(ui.blue)}
-        editorNavbar=navbar;body.addView(navbar,LinearLayout.LayoutParams(-1,dp(62)))
+        body.addView(tabs, LinearLayout.LayoutParams(-1, dp(42)))
+        val navbar=ui.row().apply{setBackgroundColor(workspacePanel)}
+        editorNavbar=navbar;body.addView(navbar,LinearLayout.LayoutParams(-1,dp(52)))
+        body.addView(ui.line(workspaceLine))
         val ocrRow=ui.row().apply{setBackgroundColor(ui.color("#edf3f8"));visibility=View.GONE}
         ocrStatusRow=ocrRow
         val ocrLabel=ui.text("",12f,ui.ink).apply{setPadding(dp(16),dp(5),dp(4),dp(5));
@@ -592,7 +614,7 @@ open class MainActivity:ComponentActivity(){
         val canvas=InkCanvasView(this,repository);inkView=canvas
         canvas.beforePageRead=::afterSaved
         applySettings(canvas)
-        canvas.tool=runCatching{InkCanvasView.Tool.valueOf(settings.optString("activeTool","LASSO"))}.getOrDefault(InkCanvasView.Tool.LASSO)
+        canvas.tool=runCatching{InkCanvasView.Tool.valueOf(settings.optString("activeTool","PEN"))}.getOrDefault(InkCanvasView.Tool.PEN)
         if(canvas.tool==InkCanvasView.Tool.HIGHLIGHTER)canvas.inkColor=settings.optString("highlighterColor","#f5df39")
         if(canvas.tool==InkCanvasView.Tool.TAPE)canvas.inkColor=settings.optString("tapeColor","#4c91dd")
         canvas.onPageChanged={position->if(manualOcrPageId!=null&&canvas.currentPage?.id!=manualOcrPageId)
@@ -637,9 +659,9 @@ open class MainActivity:ComponentActivity(){
                 if(activeDock?.visibility!=(if(active)View.GONE else View.VISIBLE))renderActiveDock()
                 else textEditor?.refreshControls()
             })
-        val pill=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(4),0,dp(4),0);background=ui.rounded(ui.color("#bf575758"),20f);elevation=dp(8).toFloat()};undoPill=pill
+        val pill=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(4),0,dp(4),0);background=ui.rounded(workspacePanel,16f,workspaceLine);elevation=dp(3).toFloat()};undoPill=pill
         surface.addView(pill,FrameLayout.LayoutParams(dp(if(narrow)102 else 146),dp(if(narrow)48 else 68),if(narrow)Gravity.BOTTOM or Gravity.LEFT else Gravity.TOP or Gravity.LEFT).apply{leftMargin=dp(if(narrow)8 else 13);if(narrow)bottomMargin=dp(12)else topMargin=dp(18)})
-        fun hud():TextView=ui.text("",12f,Color.WHITE,true).apply{gravity=Gravity.CENTER;setPadding(dp(13),0,dp(13),0);background=ui.rounded(ui.color("#b326292e"),17f)}
+        fun hud():TextView=ui.text("",12f,ui.ink,true).apply{gravity=Gravity.CENTER;setPadding(dp(13),0,dp(13),0);background=ui.rounded(workspacePanel,15f,workspaceLine)}
         pageLabel=hud().apply{isFocusable=true;setOnClickListener{openPages()}};zoomLabel=hud().apply{minimumWidth=dp(62);setOnClickListener{canvas.resetZoom()}}
         surface.addView(pageLabel,FrameLayout.LayoutParams(-2,dp(48),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(7)})
         surface.addView(zoomLabel,FrameLayout.LayoutParams(-2,dp(34),Gravity.BOTTOM or Gravity.RIGHT).apply{bottomMargin=dp(14);rightMargin=dp(14)})
@@ -660,37 +682,58 @@ open class MainActivity:ComponentActivity(){
         (resources.displayMetrics.widthPixels-root.paddingLeft-root.paddingRight-(pageSidebar?.layoutParams?.width?:0))
     private fun renderEditorToolbar(){
         val bar=editorNavbar?:return;val view=inkView?:return
-        val narrow=resources.configuration.screenWidthDp<=840;bar.removeAllViews()
-        bar.setPadding(dp(if(narrow)4 else 12),0,dp(if(narrow)4 else 12),0)
-        // The tools scroll within the remaining width. A tablet/window breakpoint must
-        // never create a second row when the actual bar still has room.
-        bar.orientation=LinearLayout.HORIZONTAL
-        val left=ui.row();val center=ui.row();val right=ui.row().apply{gravity=Gravity.RIGHT or Gravity.CENTER_VERTICAL}
+        val narrow=resources.configuration.screenWidthDp<=840
+        val previousScroll = (bar.getChildAt(1) as? HorizontalScrollView)?.scrollX ?: 0
+        bar.removeAllViews()
+        bar.setPadding(dp(if(narrow)2 else 12),0,dp(if(narrow)2 else 12),0)
+        val left=ui.row()
+        val center=ui.row().apply { gravity = Gravity.CENTER }
+        val right=ui.row().apply{gravity=Gravity.END or Gravity.CENTER_VERTICAL}
         val size=48
-        fun icon(parent:LinearLayout,name:String,label:String,active:Boolean=false,action:()->Unit){parent.addView(ui.iconButton(name,label,Color.WHITE,size,size,if(narrow)23 else 25,active,ui.color("#d9e4ef"),if(name=="pen")ui.color("#1d677b")else ui.color("#162b44"),action),LinearLayout.LayoutParams(dp(size),dp(size)).apply{if(parent.childCount>0)leftMargin=dp(if(parent==center)5 else 4)})}
-        icon(left,if(this is DocumentActivity)"close"else"home",if(this is DocumentActivity)"문서 창 닫기"else"라이브러리"){showLibrary()}
+        var selectedTool: View? = null
+        fun icon(parent: LinearLayout, name: String, label: String, active: Boolean = false, action: () -> Unit): View {
+            val button = ui.iconButton(name, label, ui.ink, size, size, 22, active, workspaceSelected, workspaceAccent, action)
+            ViewCompat.setTooltipText(button, t(label))
+            parent.addView(button)
+            return button
+        }
         if(!narrow)icon(left,"sparkles","학습 도우미"){assistantMenu()}
-        fun tool(name:String,label:String,value:InkCanvasView.Tool){icon(center,name,label,view.tool==value){if(value==InkCanvasView.Tool.PEN&&view.tool==value)penSettingsSheet()else{view.tool=value;if(value==InkCanvasView.Tool.IMAGE)insertObject(value,100f,150f)}}}
-        tool("lasso","올가미",InkCanvasView.Tool.LASSO);tool("pen","펜",InkCanvasView.Tool.PEN);tool("eraser","지우개",InkCanvasView.Tool.ERASER);tool("text","텍스트",InkCanvasView.Tool.TEXT)
+        fun tool(name:String,label:String,value:InkCanvasView.Tool){
+            val active = view.tool == value
+            val button = icon(center,name,label,active){if(value==InkCanvasView.Tool.PEN&&view.tool==value)penSettingsSheet()else{view.tool=value;if(value==InkCanvasView.Tool.IMAGE)insertObject(value,100f,150f)}}
+            if (active) selectedTool = button
+        }
+        tool("pen","펜",InkCanvasView.Tool.PEN)
+        tool("eraser","지우개",InkCanvasView.Tool.ERASER)
+        tool("shape","도형",InkCanvasView.Tool.SHAPE)
+        tool("highlighter","형광펜",InkCanvasView.Tool.HIGHLIGHTER)
+        tool("lasso","올가미",InkCanvasView.Tool.LASSO)
+        tool("text","텍스트",InkCanvasView.Tool.TEXT)
         if(!narrow){tool("sticky","스티키 노트",InkCanvasView.Tool.STICKY);tool("image","이미지",InkCanvasView.Tool.IMAGE)}
         icon(center,"chevron-down","도구 더보기"){toolMenu()}
-        if(!narrow)center.addView(ui.divider())
+        if(!narrow)center.addView(ui.divider(workspaceLine,24))
         icon(center,"ruler","자",view.ruler){view.ruler=!view.ruler;view.invalidate();renderEditorToolbar()}
         icon(center,"mic","오디오 녹음",audio.recording){toggleRecording();renderEditorToolbar()}
-        if(!narrow)icon(right,"share","공유와 내보내기"){exportMenu(document?:return@icon,true)}
+        if(!narrow)icon(right,"share","공유와 내보내기"){exportMenu(document?:return@icon)}
         icon(right,"search","문서 검색"){searchDocument()}
         icon(right,"ocr","현재 페이지 손글씨 인식"){recognize(false,false)}
         icon(right,"sidebar","페이지 관리",pageSidebar!=null){togglePages()}
-        ViewCompat.setTooltipText(right.getChildAt(right.childCount-1),t("페이지 관리"))
         icon(right,"more","더 보기"){editorMenu()}
-        val tools=horizontal(center).apply{isHorizontalScrollBarEnabled=true;getChildAt(0).layoutParams=FrameLayout.LayoutParams(-2,-1)}
+        val tools=horizontal(center).apply{isFillViewport=true;getChildAt(0).layoutParams=FrameLayout.LayoutParams(-2,-1)}
         bar.addView(left);bar.addView(tools,LinearLayout.LayoutParams(0,-1,1f));bar.addView(right)
+        tools.post {
+            tools.scrollTo(previousScroll, 0)
+            selectedTool?.let { button ->
+                if (button.left < tools.scrollX) tools.scrollTo(button.left, 0)
+                else if (button.right > tools.scrollX + tools.width) tools.scrollTo(button.right - tools.width, 0)
+            }
+        }
     }
     private fun updateUndoPill(){
         val pill=undoPill?:return;val view=inkView?:return;val narrow=editorWidth()/ui.density<=840;pill.removeAllViews()
         pill.layoutParams=(pill.layoutParams as FrameLayout.LayoutParams).apply{width=dp(if(narrow)102 else 146);height=dp(if(narrow)48 else 68)}
-        val undo=ui.iconButton("undo","실행 취소",Color.WHITE,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.undo();updateUndoPill()}.apply{isEnabled=view.canUndo;alpha=if(isEnabled)1f else .32f}
-        val redo=ui.iconButton("redo","다시 실행",Color.WHITE,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.redo();updateUndoPill()}.apply{isEnabled=view.canRedo;alpha=if(isEnabled)1f else .32f}
+        val undo=ui.iconButton("undo","실행 취소",ui.ink,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.undo();updateUndoPill()}.apply{isEnabled=view.canUndo;alpha=if(isEnabled)1f else .32f}
+        val redo=ui.iconButton("redo","다시 실행",ui.ink,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.redo();updateUndoPill()}.apply{isEnabled=view.canRedo;alpha=if(isEnabled)1f else .32f}
         pill.addView(undo);pill.addView(redo,LinearLayout.LayoutParams(dp(if(narrow)42 else 57),dp(if(narrow)40 else 52)).apply{leftMargin=dp(6)})
     }
     private fun renderActiveDock(){
@@ -708,37 +751,38 @@ open class MainActivity:ComponentActivity(){
         }
         val narrow=editorWidth()/ui.density<=840
         val dock=ui.row().apply{gravity=Gravity.CENTER;clipChildren=false;clipToPadding=false;visibility=if(textEditor?.active==true)View.GONE else View.VISIBLE};activeDock=dock
-        val menu=ui.row().apply{gravity=Gravity.CENTER_VERTICAL;setPadding(dp(if(narrow)7 else 10),dp(6),dp(if(narrow)7 else 10),dp(6));background=ui.rounded(ui.color("#f7171717"),if(narrow)18f else 21f);elevation=0f}
+        val menu=ui.row().apply{gravity=Gravity.CENTER_VERTICAL;setPadding(dp(if(narrow)7 else 10),dp(6),dp(if(narrow)7 else 10),dp(6));background=ui.rounded(workspacePanel,16f,workspaceLine);elevation=0f}
         fun add(item:View,width:Int?=null,height:Int=45){menu.addView(item,LinearLayout.LayoutParams(if(width==null)item.layoutParams?.width?:-2 else dp(width),dp(height)).apply{if(menu.childCount>0)leftMargin=dp(7)})}
-        fun divider(){if(narrow)return;add(ui.divider().apply{setPadding(0,0,0,0)},7,36);(menu.getChildAt(menu.childCount-1) as View).background=ui.rounded(Color.TRANSPARENT);val last=menu.getChildAt(menu.childCount-1);last.setBackgroundColor(0x21ffffff);last.scaleX=1f/7f}
-        fun icon(name:String,label:String,selected:Boolean=false,action:()->Unit){add(ui.iconButton(name,label,ui.color("#f4f4f4"),45,45,25,selected,ui.color("#327c92"),Color.WHITE,action),45)}
+        fun divider(){if(narrow)return;add(ui.divider().apply{setPadding(0,0,0,0)},7,36);(menu.getChildAt(menu.childCount-1) as View).background=ui.rounded(Color.TRANSPARENT);val last=menu.getChildAt(menu.childCount-1);last.setBackgroundColor(workspaceLine);last.scaleX=1f/7f}
+        fun icon(name:String,label:String,selected:Boolean=false,action:()->Unit){add(ui.iconButton(name,label,ui.ink,45,45,22,selected,workspaceSelected,workspaceAccent,action),45)}
         fun named(name:String,label:String,selected:Boolean=false,arrow:Boolean=false,action:()->Unit){
-            val item=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(10),0,dp(10),0);background=ui.rounded(if(selected)ui.color("#30ffffff")else ui.color("#12ffffff"),14f);setOnClickListener{action()};contentDescription=t(label)}
-            val nameLabel=ui.text(label,13f,Color.WHITE,true).apply{gravity=Gravity.CENTER;setSingleLine();ellipsize=android.text.TextUtils.TruncateAt.END}
-            item.addView(ui.icon(name,Color.WHITE,24));item.addView(nameLabel,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(7)})
-            if(arrow)item.addView(ui.icon("chevron-down",Color.WHITE,18))
+            val item=ui.row().apply{gravity=Gravity.CENTER;setPadding(dp(10),0,dp(10),0);background=ui.rounded(if(selected)workspaceSelected else ui.color("#f0f2f7"),14f);setOnClickListener{action()};contentDescription=t(label)}
+            val tint=if(selected) workspaceAccent else ui.ink
+            val nameLabel=ui.text(label,13f,tint,true).apply{gravity=Gravity.CENTER;setSingleLine();ellipsize=android.text.TextUtils.TruncateAt.END}
+            item.addView(ui.icon(name,tint,20));item.addView(nameLabel,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(7)})
+            if(arrow)item.addView(ui.icon("chevron-down",tint,16))
             val nameWidth=ceil(nameLabel.paint.measureText(nameLabel.text.toString())/ui.density).toInt()+24+27+if(arrow)18 else 0
             add(item,max(112,nameWidth),44)
         }
-        fun label(value:String){add(ui.text(value,12f,ui.color("#b5b5b5"),true).apply{gravity=Gravity.CENTER;maxLines=2},110)}
-        fun width(value:Float){val item=FrameLayout(this).apply{background=ui.rounded(if(abs(value-currentWidth())<.2f)ui.color("#17ffffff")else Color.TRANSPARENT,13f);setOnClickListener{setCurrentWidth(value);saveSettings();renderActiveDock()};contentDescription="굵기 $value"}
-            item.addView(View(this).apply{background=ui.rounded(Color.WHITE,99f)},FrameLayout.LayoutParams(dp(28),dp((value/2.2f).coerceIn(2f,13f)),Gravity.CENTER));add(item,45)}
+        fun label(value:String){add(ui.text(value,12f,ui.muted,true).apply{gravity=Gravity.CENTER;maxLines=2},110)}
+        fun width(value:Float){val item=FrameLayout(this).apply{background=ui.rounded(if(abs(value-currentWidth())<.2f)workspaceSelected else Color.TRANSPARENT,13f);setOnClickListener{setCurrentWidth(value);saveSettings();renderActiveDock()};contentDescription="굵기 $value"}
+            item.addView(View(this).apply{background=ui.rounded(ui.ink,99f)},FrameLayout.LayoutParams(dp(28),dp((value/2.2f).coerceIn(2f,13f)),Gravity.CENTER));add(item,45)}
         fun slider(){
-            val holder=ui.row().apply{setPadding(dp(8),0,dp(8),0);background=ui.rounded(ui.color("#14ffffff"),12f)}
-            val output=ui.text("${widthText(currentWidth())}px",12f,Color.WHITE,true)
+            val holder=ui.row().apply{setPadding(dp(8),0,dp(8),0);background=ui.rounded(ui.color("#f0f2f7"),12f)}
+            val output=ui.text("${widthText(currentWidth())}px",12f,ui.ink,true)
             val max=when(view.tool){InkCanvasView.Tool.ERASER->180f;InkCanvasView.Tool.HIGHLIGHTER->120f;else->80f}
-            val seek=SeekBar(this).apply{this.max=(max*2).toInt();progress=(currentWidth()*2).toInt();minimumWidth=0;setPadding(0,0,0,0);progressTintList=android.content.res.ColorStateList.valueOf(ui.color("#7dd3fc"));thumb=ui.rounded(Color.WHITE,50f).apply{setSize(dp(17),dp(17))};thumbOffset=0}
+            val seek=SeekBar(this).apply{this.max=(max*2).toInt();progress=(currentWidth()*2).toInt();minimumWidth=0;setPadding(0,0,0,0);progressTintList=android.content.res.ColorStateList.valueOf(workspaceAccent);thumb=ui.rounded(workspaceAccent,50f).apply{setSize(dp(17),dp(17))};thumbOffset=0}
             seek.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,user:Boolean){if(user){setCurrentWidth(max(.5f,p/2f));output.text="${widthText(currentWidth())}px"}};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){saveSettings()}})
             holder.addView(seek,LinearLayout.LayoutParams(0,dp(30),1f));holder.addView(output,LinearLayout.LayoutParams(dp(42),-2).apply{leftMargin=dp(7)});add(holder,if(narrow)108 else 126,39)
         }
-        fun colors(values:List<String>,current:String,onColor:(String)->Unit){values.forEach{value->add(ui.swatch(value,current.equals(value,true)){onColor(value);if(view.tool!=InkCanvasView.Tool.STICKY)settings.put(when(view.tool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},view.inkColor);saveSettings();renderActiveDock()},39,39)}}
+        fun colors(values:List<String>,current:String,onColor:(String)->Unit){values.forEach{value->add(ui.swatch(value,current.equals(value,true),workspaceAccent){onColor(value);if(view.tool!=InkCanvasView.Tool.STICKY)settings.put(when(view.tool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},view.inkColor);saveSettings();renderActiveDock()},39,39)}}
         val palette=if(view.tool==InkCanvasView.Tool.HIGHLIGHTER)listOf("#f5df39","#80e2ff","#ff9fc2","#a8ef82","#b9a3ff")else listOf("#111827","#147bd1","#ffffff","#d93939","#2a9d66","#7a57c7")
         when(view.tool){
-            InkCanvasView.Tool.PEN->{val brushes=mapOf("fountain" to "만년필","ballpoint" to "볼펜","gel" to "젤펜","brush" to "브러시","pencil" to "연필","fineliner" to "파인라이너","calligraphy" to "캘리그래피","marker" to "마커");named(if(view.brush in listOf("fountain","ballpoint","brush","pencil"))view.brush else "pen",brushes[view.brush]?:"펜",arrow=true){penMenu()};divider();listOf(2f,4.2f,8.5f).forEach(::width);slider();icon("settings","펜 설정"){penSettingsSheet()};divider();colors(palette,view.inkColor){view.inkColor=it;settings.put("inkColor",it);saveSettings()};add(ui.iconButton("plus","색상 추가",Color.WHITE,39,39,18){colorMenu()}.apply{background=GradientDrawable().apply{setColor(Color.TRANSPARENT);shape=GradientDrawable.OVAL;setStroke(dp(2),0xb3ffffff.toInt(),dp(4).toFloat(),dp(3).toFloat())}},39,39)}
-            InkCanvasView.Tool.HIGHLIGHTER->{named("highlighter","형광펜"){};divider();listOf(12f,22f,34f).forEach(::width);slider();divider();colors(palette,view.inkColor){view.inkColor=it};add(ui.iconButton("plus","색상 추가",Color.WHITE,39,39,18){colorMenu()}.apply{background=GradientDrawable().apply{setColor(Color.TRANSPARENT);shape=GradientDrawable.OVAL;setStroke(dp(2),0xb3ffffff.toInt(),dp(4).toFloat(),dp(3).toFloat())}},39,39)}
+            InkCanvasView.Tool.PEN->{val brushes=mapOf("fountain" to "만년필","ballpoint" to "볼펜","gel" to "젤펜","brush" to "브러시","pencil" to "연필","fineliner" to "파인라이너","calligraphy" to "캘리그래피","marker" to "마커");named(if(view.brush in listOf("fountain","ballpoint","brush","pencil"))view.brush else "pen",brushes[view.brush]?:"펜",arrow=true){penMenu()};divider();listOf(2f,4.2f,8.5f).forEach(::width);slider();icon("settings","펜 설정"){penSettingsSheet()};divider();colors(palette,view.inkColor){view.inkColor=it;settings.put("inkColor",it);saveSettings()};add(ui.iconButton("plus","색상 추가",ui.ink,39,39,18){colorMenu()}.apply{background=GradientDrawable().apply{setColor(Color.TRANSPARENT);shape=GradientDrawable.OVAL;setStroke(dp(2),workspaceLine,dp(4).toFloat(),dp(3).toFloat())}},39,39)}
+            InkCanvasView.Tool.HIGHLIGHTER->{named("highlighter","형광펜"){};divider();listOf(12f,22f,34f).forEach(::width);slider();divider();colors(palette,view.inkColor){view.inkColor=it};add(ui.iconButton("plus","색상 추가",ui.ink,39,39,18){colorMenu()}.apply{background=GradientDrawable().apply{setColor(Color.TRANSPARENT);shape=GradientDrawable.OVAL;setStroke(dp(2),workspaceLine,dp(4).toFloat(),dp(3).toFloat())}},39,39)}
             InkCanvasView.Tool.ERASER->{named("eraser","획",!view.preciseEraser&&!view.wholeEraser){view.preciseEraser=false;view.wholeEraser=false;renderActiveDock()};named("lasso","정밀",view.preciseEraser){view.preciseEraser=true;view.wholeEraser=false;renderActiveDock()};named("trash","전체",view.wholeEraser){view.wholeEraser=true;view.preciseEraser=false;renderActiveDock()};divider();listOf(12f,26f,48f).forEach(::width);slider();icon("trash","페이지 지우기"){clearPage()}}
-            InkCanvasView.Tool.LASSO->{named("lasso","자유형 선택",true){};icon("check-circle","전체 선택"){view.selectAll()};icon("copy","붙여넣기"){pasteSelection()};divider();label("필기 · 텍스트 · 이미지")}
-            InkCanvasView.Tool.SHAPE->{listOf("line","curve","arc","rectangle","rounded-rectangle","square","ellipse","circle","triangle","diamond","pentagon","hexagon","starshape","trapezoid","parallelogram","heartshape","cloudshape","speech","arrow","double-arrow").forEach{shape->icon(shape,shape,view.shape==shape){view.shape=shape;renderActiveDock()}};divider();listOf(2f,4f,8f).forEach(::width);slider();colors(palette.take(5),view.inkColor){view.inkColor=it}}
+            InkCanvasView.Tool.LASSO->{named("lasso","자유형 선택",true){};icon("check-circle","전체 선택"){view.selectAll()};icon("copy","붙여넣기"){pasteSelection()}}
+            InkCanvasView.Tool.SHAPE->{named("shape","그려서 도형",view.shape=="freehand"){view.shape="freehand";renderActiveDock()};divider();listOf("line","curve","arc","rectangle","rounded-rectangle","square","ellipse","circle","triangle","diamond","pentagon","hexagon","starshape","trapezoid","parallelogram","heartshape","cloudshape","speech","arrow","double-arrow").forEach{shape->icon(shape,shape,view.shape==shape){view.shape=shape;renderActiveDock()}};divider();listOf(2f,4f,8f).forEach(::width);slider();colors(palette.take(5),view.inkColor){view.inkColor=it}}
             InkCanvasView.Tool.TEXT->{named("text","텍스트 추가",true){textEditor?.finish();message("페이지를 탭해 입력")};divider();textEditor?.toolbar()?.let{add(it)} }
             InkCanvasView.Tool.STICKY->{named("sticky","스티키 노트",true){};divider();colors(listOf("#ffe58d","#ffd2dc","#cfefff","#d8f5ce","#ddd2ff"),settings.optString("stickyColor","#ffe58d")){settings.put("stickyColor",it)};label("페이지를 탭해 추가")}
             InkCanvasView.Tool.TAPE->{named("tape","암기 테이프",true){};divider();colors(listOf("#4c91dd","#cf5b74","#6f63c7","#2c9878","#d38a32"),view.inkColor){view.inkColor=it};label("탭하면 정답 보기")}
@@ -761,14 +805,14 @@ open class MainActivity:ComponentActivity(){
                 if(divider)child.scaleX=1f
                 if(child is LinearLayout){child.setPadding(0,0,0,0);for(j in 0 until child.childCount){val inner=child.getChildAt(j);if(inner is TextView||j>0&&inner is ImageView)inner.visibility=View.GONE}}
             }
-            val scroll=ScrollView(this).apply{isVerticalScrollBarEnabled=false;background=ui.rounded(ui.color("#f7171717"),21f);addView(menu,ViewGroup.LayoutParams(dp(66),-2))}
+            val scroll=ScrollView(this).apply{isVerticalScrollBarEnabled=false;background=ui.rounded(workspacePanel,16f,workspaceLine);addView(menu,ViewGroup.LayoutParams(dp(66),-2))}
             val height=dp(min(700,resources.configuration.screenHeightDp-140).coerceAtLeast(160));dock.addView(scroll,LinearLayout.LayoutParams(dp(66),height));dock.addView(grip(),LinearLayout.LayoutParams(dp(24),dp(44)).apply{topMargin=dp(7)})
             surface.addView(dock,FrameLayout.LayoutParams(dp(66),-2,Gravity.CENTER_VERTICAL or if(position=="left")Gravity.LEFT else Gravity.RIGHT).apply{leftMargin=dp(14);rightMargin=dp(14)})
             undoPill?.layoutParams=(undoPill?.layoutParams as? FrameLayout.LayoutParams)?.apply{gravity=Gravity.BOTTOM or Gravity.LEFT;topMargin=0;bottomMargin=dp(18)}
             return
         }
         val maxWidth=(availableWidth-dp(if(narrow)24 else 64)).coerceAtLeast(dp(160));menu.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(dp(60),View.MeasureSpec.EXACTLY))
-        val scroll=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=true;clipToOutline=true;background=ui.rounded(ui.color("#f7171717"),21f);elevation=dp(8).toFloat();addView(menu,ViewGroup.LayoutParams(-2,dp(60)))}
+        val scroll=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=true;clipToOutline=true;background=ui.rounded(workspacePanel,16f,workspaceLine);elevation=dp(4).toFloat();addView(menu,ViewGroup.LayoutParams(-2,dp(60)))}
         dock.addView(scroll,LinearLayout.LayoutParams(min(menu.measuredWidth,maxWidth),dp(60)))
         if(!narrow)dock.addView(grip(),LinearLayout.LayoutParams(dp(24),dp(44)).apply{leftMargin=dp(7)})
         val gravity=when(position){"bottom"->Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL;"left"->Gravity.CENTER_VERTICAL or Gravity.LEFT;"right"->Gravity.CENTER_VERTICAL or Gravity.RIGHT;else->Gravity.TOP or Gravity.CENTER_HORIZONTAL}
@@ -973,7 +1017,7 @@ open class MainActivity:ComponentActivity(){
 
     private fun editorMenu(){
         val doc=document?:return;val view=inkView?:return;val content=showSheet(doc.title,"문서 옵션")
-        menuItem(content,"파일 내보내기","export","노트 파일 또는 PDF로 저장합니다."){exportMenu(doc,false)}
+        menuItem(content,"파일 내보내기","export","노트 파일 또는 PDF로 저장합니다."){exportMenu(doc)}
         menuItem(content,"다른 문서를 새 창에서 열기","notebook","문서를 선택하면 별도 창으로 열립니다. 분할 화면 배치는 기기에서 조절합니다."){
             work("문서 목록을 여는 중…",{repository.documents().filter{!it.trashed&&it.id!=doc.id}}){other->
                 if(other.isEmpty())message("다른 문서를 먼저 만들어 주세요.")else choose("다른 창에서 열 문서",other.map{it.title}){openDocumentWindow(other[it].id)}
@@ -989,17 +1033,19 @@ open class MainActivity:ComponentActivity(){
         menuItem(content,if(view.readOnly)"편집 모드로 전환"else"읽기 모드",if(view.readOnly)"eye-off"else"read","실수로 필기되지 않도록 편집을 잠급니다."){view.readOnly=!view.readOnly;if(view.readOnly)view.tool=InkCanvasView.Tool.HAND}
         menuItem(content,if(view.continuous)"한 페이지 보기"else"연속 페이지 보기","sidebar"){changePageMode(!view.continuous)}
         menuItem(content,"페이지 맞춤","fit"){view.resetZoom()}
-        menuItem(content,"노트 가져오기","import",".ifnote 파일을 추가합니다."){pick("note")}
+        menuItem(content,"노트 가져오기","import","BADNOTE, PDF, 이미지, Xournal 노트를 새 문서로 엽니다."){pick("note")}
         menuItem(content,"PDF 가져오기","page-plus","PDF 각 페이지를 노트 배경으로 추가하고 텍스트를 검색합니다."){pick("appendPdf")}
         menuItem(content,"설정","settings"){showSettings()}
     }
-    private fun exportMenu(doc:DocumentInfo,share:Boolean){
+    private fun exportMenu(doc:DocumentInfo){
         val content=showSheet("Export","공유 및 내보내기")
         fun export(format:String,toShare:Boolean=false){inkView?.finishContact();afterSaved{fileExport.prepare(doc,format,toShare,ids.getOrNull(inkView?.currentIndex?:0))}}
         menuItem(content,"노트 파일 (.ifnote)","export","필기·이미지·PDF 배경·녹음을 보존합니다. 다시 가져와 편집할 수 있습니다."){export("ifnote")}
         menuItem(content,"이전 버전 JSON (.ifnote)","export","3.x 형식으로 내보냅니다. PDF 배경은 페이지별 이미지로 포함됩니다."){export("legacy")}
         menuItem(content,"PDF 파일 (.pdf)","page-plus","모든 페이지를 필기와 배경이 포함된 PDF로 저장합니다."){export("pdf")}
-        menuItem(content,"기기 공유","share","지원되는 앱으로 편집 가능한 노트를 공유합니다."){export("ifnote",true)}
+        menuItem(content,"PDF 공유","share","Goodnotes, Samsung Notes, Notability 등 PDF를 지원하는 앱으로 보냅니다."){export("pdf",true)}
+        menuItem(content,"BADNOTE 노트 공유","share","편집 가능한 .ifnote를 보냅니다."){export("ifnote",true)}
+        menuItem(content,"Xournal++ (.xopp)","export","필기 획을 편집할 수 있습니다. PDF 배경이나 복잡한 요소가 있는 페이지는 이미지로 포함됩니다."){export("xopp")}
         menuItem(content,"PDF 주석 내보내기","bookmark","필기, 텍스트, 도형 주석을 XFDF 파일로 저장합니다."){export("xfdf")}
         if(document?.id==doc.id)menuItem(content,"현재 페이지 PNG","image"){export("png")}
     }
@@ -1008,9 +1054,11 @@ open class MainActivity:ComponentActivity(){
         val mime=when(mode){"pdf","appendPdf"->"application/pdf";"image"->"image/*";else->"*/*"}
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime),REQUEST_IMPORT)
     }
-    private fun uriName(uri:Uri):String=contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use{if(it.moveToFirst())it.getString(0)else null}?:"가져온 노트"
+    private fun uriName(uri: Uri): String =
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: uri.lastPathSegment ?: "가져온 노트"
     private fun importUri(uri:Uri,mode:String){
-        val name=uriName(uri)
+        val targetFolder = folder
         val target=document;val index=(inkView?.currentIndex?:0)+1
         val owner=java.lang.ref.WeakReference(this)
         if(mode=="image"){
@@ -1033,12 +1081,26 @@ open class MainActivity:ComponentActivity(){
                 }
                 if(pendingInsert===position)pendingInsert=null
             }
-        }else work("파일을 가져오는 중…",{
-            val input=requireNotNull(contentResolver.openInputStream(uri)){"파일을 열 수 없습니다."}
-            input.use{if(mode=="pdf"||mode=="appendPdf"||name.endsWith(".pdf",true))PdfImporter.import(repository,it,name.removeSuffix(".pdf"),folder,if(mode=="appendPdf")target?.id else null,index){id,changed,error->
-                    owner.get()?.let{activity->activity.runOnUiThread{if(!activity.isFinishing&&!activity.isDestroyed)activity.pdfImportChanged(id,changed,error)}}}
-                else repository.importNote(it,folder)}
-        }){doc->openDocument(doc.id,if(mode=="appendPdf")index else 0)}
+        } else work("파일을 가져오는 중…", {
+            val name = uriName(uri)
+            val mime = contentResolver.getType(uri)
+            val format = if (mode == "pdf" || mode == "appendPdf") NoteInterchange.Format.PDF
+                else NoteInterchange.format(name, mime)
+            val title = NoteInterchange.title(name)
+            requireNotNull(contentResolver.openInputStream(uri)) { "파일을 열 수 없습니다." }.use { input ->
+                when (format) {
+                    NoteInterchange.Format.PDF -> PdfImporter.import(repository, input, title, targetFolder,
+                        if (mode == "appendPdf") target?.id else null, index) { id, changed, error ->
+                        owner.get()?.let { activity -> activity.runOnUiThread {
+                            if (!activity.isFinishing && !activity.isDestroyed) activity.pdfImportChanged(id, changed, error)
+                        } }
+                    }
+                    NoteInterchange.Format.IMAGE -> NoteInterchange.importImage(repository, input, title, targetFolder, mime.orEmpty())
+                    NoteInterchange.Format.XOURNAL -> NoteInterchange.importXournal(repository, input, title, targetFolder)
+                    NoteInterchange.Format.BADNOTE -> repository.importNote(input, targetFolder)
+                }
+            }
+        }) { doc -> openDocument(doc.id, if (mode == "appendPdf") index else 0) }
     }
     private fun pdfImportChanged(documentId:String,pagesChanged:Boolean,error:String?){
         if(error!=null){message(when(error){"pdfImportCancelled"->"PDF 가져오기를 중단했습니다.";"pdfTextTooLarge"->"PDF 원문 텍스트가 너무 큽니다.";
@@ -1062,11 +1124,16 @@ open class MainActivity:ComponentActivity(){
     override fun onNewIntent(intent:Intent){super.onNewIntent(intent);setIntent(intent);handleIncoming(intent)}
     private fun handleIncoming(intent:Intent?){
         DocumentWindows.documentId(intent)?.let{id->if(document?.id!=id)openDocument(id);return}
-        if(intent?.action==Intent.ACTION_SEND&&intent.type=="application/pdf"){
-            @Suppress("DEPRECATION") val uri=intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-            if(uri!=null)importUri(uri,"pdf")
-            intent.action=Intent.ACTION_MAIN
+        val uri = when (intent?.action) {
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+            }
+            Intent.ACTION_VIEW -> intent.data
+            else -> return
         }
+        intent.action = Intent.ACTION_MAIN
+        if (uri?.scheme == android.content.ContentResolver.SCHEME_CONTENT) importUri(uri, "note")
     }
     private fun closeSearchDrawer(){
         documentSearch?.cancel()
@@ -1380,8 +1447,8 @@ open class MainActivity:ComponentActivity(){
                 choose("손글씨 OCR 언어",ocrNames){i->settings.put("ocrLanguagePolicy",ocrPolicies[i]);saveSettings();scheduleOcr();showSettings()}
             })
         toggle("스타일러스 전용 필기","손바닥과 손가락 입력을 필기에서 제외합니다.","stylusOnly",true)
-        toggle("낙서해서 지우기","같은 영역을 여러 번 왕복해 덮은 펜 획을 지웁니다.","scribbleErase",true)
-        toggle("그려서 도형 만들기","직선을 그린 뒤 잠시 유지하면 정돈된 도형으로 변환합니다.","drawHold",true)
+        toggle("낙서해서 지우기","펜으로 글자 위를 지그재그로 문지르면 반복해서 닿은 필기를 지웁니다.","scribbleErase",true)
+        toggle("그려서 도형 만들기","펜으로 선·타원·사각형을 그린 뒤 잠깐 멈추면 도형으로 변환합니다.","drawHold",true)
         toggle("스타일러스 정보 표시","필압, 기울기, 입력 장치를 화면에 표시합니다.","telemetry",false)
         val opacity=ui.col();val output=ui.text("${(settings.f("hudTextOpacity",1f)*100).toInt()}%",12f,ui.ink,true).apply{gravity=Gravity.RIGHT};opacity.addView(output)
         opacity.addView(range((settings.f("hudTextOpacity",1f)*100).toInt(),35,100){value->output.text="$value%";settings.put("hudTextOpacity",value/100f);applyHudOpacity();saveSettings()},LinearLayout.LayoutParams(dp(160),dp(28)))
@@ -1404,7 +1471,7 @@ open class MainActivity:ComponentActivity(){
     }
     private fun gestureGuide(){
         val content=showSheet("Quick Guide","제스처 사용법")
-        listOf(Triple("gesture","두 손가락 핀치","페이지 중심을 유지하며 8%~800% 확대·축소합니다."),Triple("undo","두 손가락 탭","실행 취소합니다."),Triple("redo","세 손가락 탭","다시 실행합니다."),Triple("arrow","두 손가락 좌우 쓸기","이전 또는 다음 페이지로 이동합니다."),Triple("eraser","낙서해서 지우기","필기 위를 빠르게 지그재그로 문질러 지웁니다."),Triple("shape","그린 뒤 길게 유지","직선이나 닫힌 원을 정돈된 도형으로 변환합니다.")).forEach{(icon,title,description)->menuItem(content,title,icon,description){}}
+        listOf(Triple("gesture","두 손가락 핀치","페이지 중심을 유지하며 8%~800% 확대·축소합니다."),Triple("undo","두 손가락 탭","실행 취소합니다."),Triple("redo","세 손가락 탭","다시 실행합니다."),Triple("arrow","두 손가락 좌우 쓸기","이전 또는 다음 페이지로 이동합니다."),Triple("eraser","낙서해서 지우기","필기 위를 빠르게 지그재그로 문질러 지웁니다."),Triple("shape","그린 뒤 길게 유지","펜을 댄 채 잠깐 멈추거나 도형 도구에서 그려서 도형을 선택해 선·타원·사각형을 만들 수 있습니다.")).forEach{(icon,title,description)->menuItem(content,title,icon,description){}}
     }
     private fun assistantMenu(){
         val content=showSheet("On-device","학습 도우미")
@@ -1481,7 +1548,7 @@ open class MainActivity:ComponentActivity(){
     }
     private fun penSettingsSheet(){
         val view=inkView?:return;val content=showSheet("Writing Tool","펜 세부 설정",680)
-        val preview=object:View(this){val renderer=NoteRenderer();override fun onDraw(canvas:android.graphics.Canvas){canvas.drawColor(ui.color("#f9f7f2"));canvas.save();canvas.scale(width/760f,height/150f);val points=(40..720 step 8).map{x->val f=(x-40)/680f;InkPoint(x.toFloat(),76f+sin(f*PI*3).toFloat()*24f,.12f+sin(f*PI).toFloat()*.83f)};renderer.stroke(canvas,json("brush" to view.brush,"color" to view.inkColor,"width" to view.inkWidth*2,"settings" to view.penSettings),points);canvas.restore()}}
+        val preview=object:View(this){val renderer=NoteRenderer();override fun onDraw(canvas:android.graphics.Canvas){canvas.drawColor(ui.color("#f9f7f2"));canvas.save();canvas.scale(width/760f,height/150f);val points=(40..720 step 8).map{x->val f=(x-40)/680f;InkPoint(x.toFloat(),76f+sin(f*PI*3).toFloat()*24f,.12f+sin(f*PI).toFloat()*.83f)};renderer.stroke(canvas,json("id" to "pen-preview","brush" to view.brush,"pencilTexture" to "graphite","color" to view.inkColor,"width" to view.inkWidth*2,"settings" to view.penSettings),points);canvas.restore()}}
         preview.background=ui.rounded(ui.color("#f9f7f2"),15f,ui.color("#dfe3e8"));preview.clipToOutline=true
         content.addView(preview,LinearLayout.LayoutParams(-1,dp(150)).apply{bottomMargin=dp(18)})
         val fields=if(view.brush=="pencil")listOf("hardness" to "펜촉 경도","grain" to "흑연 입자","tiltShade" to "기울기 음영","pressure" to "압력 민감도","smoothing" to "획 안정화","opacity" to "농도")else listOf("pressure" to "압력 민감도","sharpness" to "펜촉 선명도","smoothing" to "획 안정화","taper" to "시작·끝 테이퍼","opacity" to "불투명도")

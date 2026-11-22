@@ -145,7 +145,7 @@ object InkGeometry {
             for(i in 0 until raw.length()){val p=raw.optJSONObject(i)?:continue
                 val x=p.f("x");val y=p.f("y");left=min(left,x);top=min(top,y);right=max(right,x);bottom=max(bottom,y);found=true}
             if(!found)return InkBounds(0f,0f,0f,0f)
-            val r = obj.f("width",4f) / 2
+            val r = obj.f("width",4f) * if (GraphiteBrush.isGraphite(obj)) 2.6f else .5f
             return InkBounds(left-r,top-r,right+r,bottom+r)
         }
         if (obj.optString("type") == "shape" || (obj.optString("type") == "tape" && obj.has("x1") && obj.has("x2"))) {
@@ -925,39 +925,104 @@ object InkGeometry {
                     if(run.optString("kind")=="size")run.put("value",size(run.f("value",28f))) }} }
         }
     }
-    fun recognizeShape(points: List<InkPoint>): String? {
-        if(points.size<5) return null
-        val a=points.first();val b=points.last();val length=points.zipWithNext().sumOf{distance(it.first,it.second).toDouble()}.toFloat()
-        if(length<45) return null
-        if(distance(a,b)>length*.94f) return "line"
-        val box=InkBounds(points.minOf{it.x},points.minOf{it.y},points.maxOf{it.x},points.maxOf{it.y})
-        if(box.width<30||box.height<30||distance(a,b)>max(box.width,box.height)*.22f)return null
-        val cx=(box.left+box.right)/2;val cy=(box.top+box.bottom)/2
-        val radial=points.map{abs(hypot((it.x-cx)/(box.width/2),(it.y-cy)/(box.height/2))-1)}.average()
-        if(radial<.14)return "ellipse"
-        val edge=points.count{min(min(abs(it.x-box.left),abs(it.x-box.right)),min(abs(it.y-box.top),abs(it.y-box.bottom)))<min(box.width,box.height)*.10f}
-        if(edge>points.size*.88)return "rectangle"
-        return null
+    internal data class RecognizedShape(val name: String, val x1: Float, val y1: Float, val x2: Float, val y2: Float)
+
+    private fun pathLength(points: List<InkPoint>): Float {
+        var length = 0f
+        for (i in 1 until points.size) length += distance(points[i - 1], points[i])
+        return length
     }
-    /** CSS-pixel/dp thresholds and principal-axis sweeps match the 3.x input behavior.
-     * Reversals are measured from extrema, not individual samples: dense S Pen events
-     * and perfectly horizontal scratches must behave exactly like sparse events.
-     */
+
+    /** Equal-length samples give a slow corner and a fast edge the same weight per unit of ink. */
+    private fun evenlySpaced(points: List<InkPoint>, length: Float, count: Int): List<InkPoint> = buildList {
+        add(points.first())
+        val spacing = length / (count - 1)
+        var walked = 0f
+        for (i in 1 until points.size) {
+            val a = points[i - 1]
+            val b = points[i]
+            val segment = distance(a, b)
+            while (size < count - 1 && size * spacing <= walked + segment && segment > 0f) {
+                val ratio = ((size * spacing - walked) / segment).coerceIn(0f, 1f)
+                add(InkPoint(a.x + ratio * (b.x - a.x), a.y + ratio * (b.y - a.y)))
+            }
+            walked += segment
+        }
+        add(points.last())
+    }
+
+    internal fun recognizeShape(points: List<InkPoint>, screenScale: Float): RecognizedShape? {
+        if (points.size < 2 || screenScale <= 0f) return null
+        val length = pathLength(points)
+        if (length * screenScale < 18f) return null
+        val start = points.first()
+        val end = points.last()
+        val separation = distance(start, end)
+        if (separation >= length * .93f) {
+            val tolerance = (separation * screenScale * .065f).coerceIn(2f, 8f) / screenScale
+            if (points.all { segmentDistance(it, start, end) <= tolerance })
+                return RecognizedShape("line", start.x, start.y, end.x, end.y)
+        }
+        if (points.size < 4) return null
+        val box = pointBounds(points)
+        val major = max(box.width, box.height)
+        val minor = min(box.width, box.height)
+        if (minor * screenScale < 12f || minor / major < .22f ||
+            separation > max(5f / screenScale, major * .25f)) return null
+
+        val cx = (box.left + box.right) / 2
+        val cy = (box.top + box.bottom) / 2
+        val normalized = evenlySpaced(points, length, 48).map {
+            InkPoint((it.x - cx) * 2 / box.width, (it.y - cy) * 2 / box.height)
+        }
+        var winding = 0f
+        var angularTravel = 0f
+        var previous = atan2(normalized.first().y, normalized.first().x)
+        for (i in 1 until normalized.size) {
+            val angle = atan2(normalized[i].y, normalized[i].x)
+            val difference = angle - previous
+            val turn = atan2(sin(difference), cos(difference))
+            winding += turn
+            angularTravel += abs(turn)
+            previous = angle
+        }
+        if (abs(winding) !in 5.15f..7.15f || angularTravel > abs(winding) + .9f) return null
+
+        val cornerCount = listOf(-1f to -1f, 1f to -1f, 1f to 1f, -1f to 1f).count { (x, y) ->
+            normalized.any { abs(it.x - x) < .26f && abs(it.y - y) < .26f }
+        }
+        val edgeError = normalized.map { min(abs(1 - abs(it.x)), abs(1 - abs(it.y))) }.average()
+        val radialError = normalized.map { abs(hypot(it.x, it.y) - 1) }.average()
+        val shape = when {
+            cornerCount >= 3 && edgeError < .15 -> "rectangle"
+            radialError < .16 -> "ellipse"
+            else -> return null
+        }
+        return RecognizedShape(shape, box.left, box.top, box.right, box.bottom)
+    }
+
+    private fun pointBounds(points: List<InkPoint>) = InkBounds(points.minOf { it.x }, points.minOf { it.y },
+        points.maxOf { it.x }, points.maxOf { it.y })
+
+    /** Reversals are measured from extrema so batched and sparse input produce the same sweeps. */
     fun scratchSweeps(points: List<InkPoint>, screenScale: Float): List<IntRange> {
-        if(points.size < 10 || screenScale <= 0f) return emptyList()
-        val cx=points.map { it.x.toDouble() }.average()
-        val cy=points.map { it.y.toDouble() }.average()
+        if(points.size < 4 || screenScale <= 0f) return emptyList()
+        val length = pathLength(points) * screenScale
+        if (length < 40f) return emptyList()
+        val sampled = evenlySpaced(points, length / screenScale, 32)
+        val cx=sampled.map { it.x.toDouble() }.average()
+        val cy=sampled.map { it.y.toDouble() }.average()
         var xx=0.0; var yy=0.0; var xy=0.0
-        for(p in points){val x=p.x-cx;val y=p.y-cy;xx+=x*x;yy+=y*y;xy+=x*y}
+        for(p in sampled){val x=p.x-cx;val y=p.y-cy;xx+=x*x;yy+=y*y;xy+=x*y}
         val angle=.5*atan2(2*xy,xx-yy);val cos=cos(angle).toFloat();val sin=sin(angle).toFloat()
         val x=FloatArray(points.size){(points[it].x*cos+points[it].y*sin)*screenScale}
         val y=FloatArray(points.size){(-points[it].x*sin+points[it].y*cos)*screenScale}
         val left=x.min();val width=x.max()-left;val height=y.max()-y.min()
-        if(width<24 || width>560 || width<height*1.5f) return emptyList()
-        var length=0f;var along=0f;var across=0f
-        for(i in 1..points.lastIndex){val dx=abs(x[i]-x[i-1]);val dy=abs(y[i]-y[i-1]);along+=dx;across+=dy;length+=hypot(dx,dy)}
-        if(along<across*3 || length/max(1f,hypot(width,height))<3.5f) return emptyList()
-        val noise=max(2.5f,width*.025f);val minimum=max(12f,width*.6f);val middle=left+width/2
+        if(width<16 || width<height*1.2f) return emptyList()
+        var along=0f;var across=0f
+        for(i in 1..points.lastIndex){along+=abs(x[i]-x[i-1]);across+=abs(y[i]-y[i-1])}
+        if(along<across*2 || along<width*2.25f) return emptyList()
+        val noise=max(1.8f,width*.035f);val minimum=max(8f,width*.47f);val middle=left+width/2
         val sweeps=mutableListOf<IntRange>()
         var start=0;var extreme=0;var direction=0
         fun accept(){if(abs(x[extreme]-x[start])>=minimum && (x[start]-middle)*(x[extreme]-middle)<=0)sweeps+=start..extreme}
@@ -969,7 +1034,7 @@ object InkGeometry {
             accept();start=extreme;extreme=i;direction=if(reversal>0)1 else -1
         }
         if(direction!=0)accept()
-        return if(sweeps.size>=4)sweeps else emptyList()
+        return if(sweeps.size>=3)sweeps else emptyList()
     }
 
     fun deliberateScratch(points: List<InkPoint>,screenScale: Float) = scratchSweeps(points,screenScale).isNotEmpty()
@@ -990,17 +1055,22 @@ object InkGeometry {
         return false
     }
 
-    fun scratchTargets(objects:List<JSONObject>,points:List<InkPoint>,screenScale:Float):List<JSONObject>{
+    fun scratchTargets(objects:List<JSONObject>,points:List<InkPoint>,screenScale:Float):List<JSONObject> =
+        scratchTargets(points, screenScale) { objects.filter { obj -> bounds(obj).overlaps(it) } }
+
+    internal fun scratchTargets(points: List<InkPoint>, screenScale: Float,
+                                candidates: (InkBounds) -> List<JSONObject>): List<JSONObject> {
         val sweeps=scratchSweeps(points,screenScale)
         if(sweeps.isEmpty())return emptyList()
-        val hitRadius=2f/screenScale
-        val box=InkBounds(points.minOf{it.x},points.minOf{it.y},points.maxOf{it.x},points.maxOf{it.y}).expanded(hitRadius)
-        return objects.filter { obj ->
-            if(obj.optString("type")!="stroke"||obj.optString("brush")=="highlighter"||obj.optBoolean("locked")||obj.optBoolean("hidden")||!bounds(obj).overlaps(box))false
-            else {
-                val ink=pagePoints(obj);var hits=0
-                sweeps.any{range->pathsMeet(ink,points.subList(range.first,range.last+1),hitRadius+obj.f("width",4f)*.28f)&&++hits>=3}
-            }
+        val hitRadius=2.5f/screenScale
+        val paths = sweeps.map { range -> points.subList(range.first, range.last + 1) }
+        return candidates(pointBounds(points).expanded(hitRadius)).filter { obj ->
+            if (obj.optString("type") != "stroke" || obj.optString("brush") == "highlighter" ||
+                obj.optBoolean("locked") || obj.optBoolean("hidden")) return@filter false
+            val ink = pagePoints(obj)
+            val radius = hitRadius + obj.f("width",4f) / 2
+            var hits = 0
+            paths.any { pathsMeet(ink, it, radius) && ++hits >= 2 }
         }
     }
 }
