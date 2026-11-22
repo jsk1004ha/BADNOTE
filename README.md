@@ -1,10 +1,10 @@
-# bad note 4.1.1 beta — Kotlin native
+# bad note 4.1.2 beta — Kotlin native
 
 갤럭시 탭·S Pen용 Android 필기 앱입니다. 라이브러리, 필기 편집기, 저장, PDF, 공유, OCR, 녹음과 설정을 Kotlin으로 전면 교체했습니다. 앱의 편집 화면에서 JavaScript나 WebView를 사용하지 않습니다. WebView는 기존 설치판의 IndexedDB를 읽는 일회성 이전에만 사용합니다.
 
-## 4.1.1 베타
+## 4.1.2 개발 베타
 
-OCR 처리·결과 교정·검색과 Kotlin 네이티브 기능을 보완한 `4.1.1-beta.1`입니다. [베타 릴리스](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.1.1-beta.1)에서 수동 설치할 수 있습니다. 베타는 자동 업데이트 대상에서 제외하며, [정식 4.0.1](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.0.1)을 유지합니다. 베타 사용 결과를 확인한 뒤 정식 배포를 진행합니다.
+한글 구성 획·낮은 소수점의 영역 분석, 페이지 캐시, 원본·교정 연결과 OCR 입력 수명을 개선하는 `4.1.2-beta.1` 개발 단계입니다. 검증에 성공한 빌드만 [베타 릴리스](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.1.2-beta.1)에 게시합니다. 이번 APK는 기존 앱과 별개인 `com.inkforge.note5.debug` 테스트판입니다. [설치·지원 범위](docs/RELEASE-4.1.2-BETA-KO.md)와 [구현 기록](docs/OCR-4.1.2-IMPLEMENTATION-KO.md)을 확인해 주세요. 베타는 자동 업데이트 대상에서 제외하며 [정식 4.0.1](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.0.1)을 유지합니다.
 
 필기 OCR의 실제 인식률과 물리 Galaxy/S Pen 지연은 아직 측정하지 않았습니다. 구현과 검증 범위는 [네이티브 OCR 통합 기록](docs/OCR-NATIVE-IMPLEMENTATION-KO.md)에 정리했습니다.
 
@@ -28,7 +28,7 @@ OCR 처리·결과 교정·검색과 Kotlin 네이티브 기능을 보완한 `4.
 - 연속/단일 페이지, 페이지 추가·복제·이동·삭제, 북마크·목차·문서 탭·최근 페이지 복원
 - 중첩 폴더, 즐겨찾기, 태그, 검색, 휴지통과 복원
 - 원본 PDF 보관 및 화면에 보이는 영역의 타일 렌더링, PDF 삽입, `.ifnote`/PDF/PNG/XFDF 내보내기
-- ML Kit 한글·영문 및 선택 언어 필기 OCR, 유휴 OCR 검색 색인, 이미지 OCR, 손글씨 수식과 기기 내 계산
+- ML Kit 한글·영문 및 선택 언어 필기 OCR, 유휴 OCR 검색 색인, 이미지 OCR, 수식 직접 입력과 기기 내 계산(전용 손글씨 수식 엔진은 미지원)
 - 마이크 녹음·재생, 한국어·영어·일본어·중국어·포르투갈어 사전, 앱 업데이트 확인
 
 ## 대용량 내보내기와 공유

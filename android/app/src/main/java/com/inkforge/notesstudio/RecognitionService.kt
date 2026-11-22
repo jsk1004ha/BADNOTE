@@ -1,6 +1,7 @@
 package com.inkforge.notesstudio
 
 import android.graphics.Bitmap
+import com.inkforge.ocr.contracts.MathRecognitionUnavailable
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
@@ -126,6 +127,12 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
         queueMaintenance()
     }
 
+    /** Check before allocating a raster fallback while a timed-out SDK Task still owns its input. */
+    internal fun requireAvailable() {
+        if (closing.get() || inactive.get() || blocked.get())
+            error(if (closing.get()) "recognizerClosed" else if (inactive.get()) "recognizerInactive" else "recognizerCircuitOpen")
+    }
+
     internal fun <T> infer(timeoutSeconds: Long, start: () -> Task<T>, finished: () -> Unit = {}): T {
         if (closing.get() || inactive.get() || blocked.get()) {
             finished()
@@ -188,19 +195,24 @@ class RecognitionService(private val lowMemory: Boolean = false) : Closeable {
         }
     }
 
-    /** Existing equation action uses the same ink preparation without a competing recognizer. */
+    /** A language recognizer must never report a successful mathematics conversion. */
     fun handwriting(objects: List<JSONObject>, width: Float, height: Float, language: String = "ko", math: Boolean = false): String {
+        if (math) error(MathRecognitionUnavailable.ERROR_CODE)
         val layout = PageOcrLayout.analyze(objects, width, height)
         require(layout.regions.isNotEmpty()) { "인식할 필기가 없습니다." }
         return layout.regions.joinToString("\n") { region ->
-            recognizeRegion(region, if (math) "en-primary" else language).first().candidates.firstOrNull().orEmpty()
+            recognizeRegion(region, language).first().candidates.firstOrNull().orEmpty()
         }
     }
 
-    fun image(bitmap: Bitmap, language: String): String {
-        val client = if (language == "ko") TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+    fun image(bitmap: Bitmap, language: String, actualCompletion: () -> Unit = {}): String {
+        val client = try {
+            if (language == "ko") TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
             else TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        return infer(30, { client.process(InputImage.fromBitmap(bitmap, 0)) }, { client.close() }).text
+        } catch (error: Exception) { actualCompletion(); throw error }
+        return infer(30, { client.process(InputImage.fromBitmap(bitmap, 0)) }, {
+            try { client.close() } finally { actualCompletion() }
+        }).text
     }
 
     override fun close() {
