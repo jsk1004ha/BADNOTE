@@ -23,8 +23,8 @@ android {
     defaultConfig {
         minSdk 23
         targetSdk 36
-        versionCode 431
-        versionName '4.2.1'
+        versionCode 432
+        versionName '4.2.2'
         testInstrumentationRunner(productivityTests ? 'com.inkforge.notesstudio.ProductivityInstrumentation' :
             (vectorPdfTests ? 'com.inkforge.notesstudio.VectorPdfInstrumentation' : 'com.inkforge.notesstudio.NativeSmokeInstrumentation'))
         ndk {

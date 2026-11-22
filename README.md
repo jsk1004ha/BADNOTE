@@ -1,6 +1,6 @@
-# BADNOTE 4.2.1
+# BADNOTE 4.2.2
 
-갤럭시 탭·S Pen용 Android 필기 앱입니다. [정식 4.2.1 변경 사항](docs/RELEASE-4.2.1-KO.md)과 [설치 파일](https://github.com/jsk1004ha/BADNOTE/releases/latest)을 확인할 수 있습니다.
+갤럭시 탭·S Pen용 Android 필기 앱입니다. [정식 4.2.2 변경 사항](docs/RELEASE-4.2.2-KO.md)과 [설치 파일](https://github.com/jsk1004ha/BADNOTE/releases/latest)을 확인할 수 있습니다.
 
 **프로젝트 루트의 android/가 현재 앱 소스입니다.** docs/archive/의 구버전 기록은 현재 작업 기준으로 사용하지 마십시오.
 
