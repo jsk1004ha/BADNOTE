@@ -327,7 +327,7 @@ internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> St
         listOf(
             Triple("stylusOnly", "스타일러스 전용 필기", "손바닥과 손가락 입력을 필기에서 제외합니다."),
             Triple("scribbleErase", "낙서해서 지우기", "펜으로 글자 위를 지그재그로 문지르면 반복해서 닿은 필기를 지웁니다."),
-            Triple("drawHold", "그려서 도형 만들기", "펜으로 선·타원·사각형을 그린 뒤 잠깐 멈추면 도형으로 변환합니다."),
+            Triple("drawHold", "그려서 도형 만들기", "일반 펜으로 그린 뒤 펜촉을 댄 채 멈추면 직선·곡선·원·타원·사각형으로 변환합니다."),
             Triple("telemetry", "스타일러스 정보 표시", "필압, 기울기, 입력 장치를 화면에 표시합니다."),
             Triple("continuous", "연속 페이지 보기", "모든 페이지를 세로로 이어 표시합니다."),
             Triple("autoOcr", "손글씨 OCR 자동 등록", "필기를 인식해 문서 검색에 등록합니다."),

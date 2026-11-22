@@ -5,6 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -24,6 +25,53 @@ class InkWorkspaceTest {
             assertEquals("ellipse", InkGeometry.recognizeShape(oval, scale)?.name)
             assertNull(InkGeometry.recognizeShape(oval.take(8), scale))
             assertNull(InkGeometry.recognizeShape(listOf(point(0f, 0f), point(4f, 1f)), scale))
+        }
+    }
+
+    @Test fun heldRoundShapesAllowAModestGapAndOvershoot() {
+        for (scale in listOf(.35f, .8f, 2.7f)) for (direction in listOf(-1, 1)) {
+            fun roundStroke(sweep: Double, yRadius: Float = 22f) = (0..32).map { i ->
+                val angle = direction * (.48 + i * sweep / 32)
+                val wobble = 1 + .035f * sin(4 * angle).toFloat()
+                InkPoint(300 + 23 * cos(angle).toFloat() * wobble / scale,
+                    500 + yRadius * sin(angle).toFloat() * wobble / scale)
+            }
+            val incomplete = roundStroke(2 * PI - .96)
+            assertNull(InkGeometry.recognizeShape(incomplete, scale))
+            val snapped = requireNotNull(InkGeometry.recognizeShape(incomplete, scale, held = true))
+            assertEquals("circle", snapped.name)
+            assertEquals(snapped.x2 - snapped.x1, snapped.y2 - snapped.y1, .001f)
+            assertEquals("circle", InkGeometry.recognizeShape(roundStroke(2 * PI + .66), scale, held = true)?.name)
+            assertEquals("ellipse", InkGeometry.recognizeShape(roundStroke(2 * PI, 14f), scale, held = true)?.name)
+            assertNull(InkGeometry.recognizeShape(roundStroke(2.5 * PI), scale, held = true))
+        }
+    }
+
+    @Test fun heldOpenCurvesPreserveTheirBendWithoutSnappingZigzags() {
+        for (scale in listOf(.35f, .8f, 2.7f)) {
+            fun point(x: Float, y: Float) = InkPoint(200 + x / scale, 350 + y / scale)
+            val arc = (0..24).map { i ->
+                val angle = i * PI / 24
+                point(-34 * cos(angle).toFloat(), 24 * sin(angle).toFloat())
+            }
+            val curve = requireNotNull(InkGeometry.recognizeShape(arc, scale, held = true))
+            assertEquals("curve", curve.name)
+            assertEquals(arc.first().x, curve.x1, .001f)
+            assertEquals(arc.last().x, curve.x2, .001f)
+            val control = requireNotNull(curve.control)
+            assertTrue((control.y - curve.y1) * scale > 30)
+            assertTrue(abs(control.x - (curve.x1 + curve.x2) / 2) * scale < 2f)
+
+            val sidewaysSemicircle = (0..32).map { i ->
+                val angle = i * PI / 32
+                point(110 * sin(angle).toFloat(), -110 * cos(angle).toFloat())
+            }
+            assertEquals("curve", InkGeometry.recognizeShape(sidewaysSemicircle, scale, held = true)?.name)
+
+            val chevron = listOf(point(-34f, 0f), point(-17f, 12f), point(0f, 24f), point(34f, 0f))
+            assertNull(InkGeometry.recognizeShape(chevron, scale, held = true))
+            val wave = (0..24).map { i -> point(i * 3f, 12 * sin(i * PI / 12).toFloat()) }
+            assertNull(InkGeometry.recognizeShape(wave, scale, held = true))
         }
     }
 

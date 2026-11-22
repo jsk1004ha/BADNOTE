@@ -3,6 +3,7 @@ package com.inkforge.notesstudio
 import android.content.Context
 import android.graphics.*
 import android.os.Build
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import org.json.JSONArray
@@ -239,9 +240,9 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private var touchX=0f;private var touchY=0f;private var touchSpan=0f;private var touchTravel=0f
     private var touchStartTime=0L;private var maxTouches=0
     private var heldShape=false
-    private var holdAnchor: InkPoint? = null
+    private var holdAnchorIndex = -1
     private val holdDelay = 450L
-    private val hold = Runnable { convertHeldShape() }
+    private val hold = Runnable { convertHeldShape(SystemClock.uptimeMillis()) }
     private val screenScale get() = scale / resources.displayMetrics.density
     private val drawingFreehandShape get() = contactTool == Tool.SHAPE && live?.optString("type") == "stroke"
 
@@ -788,7 +789,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){
                 consumeEvent(event,pIndex)
                 // MotionEvent time also covers a pause whose delayed callback is still queued.
-                holdAnchor?.let { if (event.eventTime - it.time >= holdDelay) convertHeldShape() }
+                convertHeldShape(event.eventTime)
                 finishContact();performClick();return true
             }
             return true
@@ -834,7 +835,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     private fun beginInk(p:InkPoint){
         frontStroke=null
         erasing=false;eraserPoint=null;points=mutableListOf(p);pointPublication.clear();pointPublication.append(p);heldShape=false;contactTool=tool
-        holdAnchor = p.takeIf { tool == Tool.PEN && drawHold && !ruler }
+        holdAnchorIndex = if (tool == Tool.PEN && drawHold && !ruler) 0 else -1
         contactState=if(tool==Tool.LASSO)ContactState.SELECTING else ContactState.DRAWING
         val page=contactPage?:return
         if(tool!=Tool.LASSO&&tool!=Tool.HAND&&tool!=Tool.LASER)clearSearchHighlights(page.id)
@@ -904,11 +905,12 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         if (live?.optString("type") == "stroke") {
             points += p
             pointPublication.append(p)
-            val anchor = holdAnchor
-            if (anchor != null && InkGeometry.distance(anchor, p) * screenScale >= 2.5f) {
-                holdAnchor = p
+            val anchor = points.getOrNull(holdAnchorIndex)
+            if (anchor != null && InkGeometry.distance(anchor, p) * screenScale >= 3.5f) {
+                holdAnchorIndex = points.lastIndex
                 removeCallbacks(hold)
-                postDelayed(hold, holdDelay)
+                // MotionEvent and the View's timer both use Android uptime, including batched moves.
+                postDelayed(hold, (p.time + holdDelay - SystemClock.uptimeMillis()).coerceAtLeast(0L))
             }
             return
         }
@@ -921,22 +923,27 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             else->Unit
         }
     }
-    private fun convertHeldShape(){
+    private fun convertHeldShape(now: Long){
         if (pointer < 0 || erasing || heldShape || contactTool != Tool.PEN || !drawHold || ruler) return
-        if (scribbleErase && InkGeometry.deliberateScratch(points, screenScale)) return
-        val shape = fittedShape() ?: return
+        if (holdAnchorIndex <= 0 || now - points[holdAnchorIndex].time < holdDelay) return
+        // Samples from the stationary part of the contact should not change the fitted path.
+        val outline = points.subList(0, holdAnchorIndex + 1)
+        if (scribbleErase && InkGeometry.deliberateScratch(outline, screenScale)) return
+        val shape = fittedShape(outline, held = true) ?: return
         abandonFrontStroke()
         live = shape
         heldShape = true
         invalidate()
     }
-    private fun fittedShape(): JSONObject? {
+    private fun fittedShape(path: List<InkPoint> = points, held: Boolean = false): JSONObject? {
         val source = live ?: return null
-        val recognized = InkGeometry.recognizeShape(points, screenScale) ?: return null
+        val recognized = InkGeometry.recognizeShape(path, screenScale, held) ?: return null
         return json("id" to uid("shape"), "type" to "shape", "shape" to recognized.name,
             "color" to source.getString("color"), "width" to source.getDouble("width"),
             "screenWidth" to source.getDouble("screenWidth"), "x1" to recognized.x1, "y1" to recognized.y1,
-            "x2" to recognized.x2, "y2" to recognized.y2)
+            "x2" to recognized.x2, "y2" to recognized.y2).apply {
+            recognized.control?.let { put("cx", it.x); put("cy", it.y) }
+        }
     }
     private fun abandonFrontStroke() {
         if (!frontContact) return
@@ -1054,7 +1061,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                 pictures[page.id]?.takeUnless{it.dirty}?.append(obj)
             }
         }
-        live=null;points.clear();pointPublication.clear();heldShape=false;holdAnchor=null
+        live=null;points.clear();pointPublication.clear();heldShape=false;holdAnchorIndex=-1
     }
     fun finishContact(){
         removeCallbacks(hold);if(frontContact)updateFront();val page=contactPage
@@ -1118,7 +1125,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
         // The contact latch always ends here; a physically held key survives only a normal lift.
         if(!preserveHeldKey)keyEraser=false
         stylusButtons.reset()
-        contactTool=null;heldShape=false;holdAnchor=null;eraserPoint=null;contactState=state;invalidate()
+        contactTool=null;heldShape=false;holdAnchorIndex=-1;eraserPoint=null;contactState=state;invalidate()
         if(hadContact)onContactChanged(false)
     }
     private fun positions(page:NotePage):Map<String,Int>{

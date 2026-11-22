@@ -8,6 +8,9 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import org.json.JSONArray
 import java.io.File
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 internal object InkWorkspaceChecks {
     fun run(activity: MainActivity, ui: (() -> Unit) -> Unit, await: (String, () -> Boolean) -> Unit) {
@@ -91,10 +94,83 @@ internal object InkWorkspaceChecks {
             view.redo()
             check("scratch-me" !in ids())
         }
+        fun trace(path: List<InkPoint>): Long {
+            val down = SystemClock.uptimeMillis() - path.lastIndex * 10L
+            path.forEachIndexed { index, point ->
+                sample(if (index == 0) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE,
+                    point.x, point.y, down, down + index * 10L)
+            }
+            return down
+        }
+        val circle = (0..28).map { i ->
+            val angle = .48 + i * (2 * PI - .96) / 28
+            InkPoint(380 + 100 * cos(angle).toFloat(), 620 + 97 * sin(angle).toFloat())
+        }
+        // Probe the missing right edge of the raw path. Only the snapped preview covers it.
+        fun circlePreviewIsVisible(): Boolean {
+            val left = view.screenPoint(462f, 620f)
+            val right = view.screenPoint(483f, 620f)
+            val probe = Bitmap.createBitmap((right.x - left.x).toInt().coerceAtLeast(1), 9, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = Canvas(probe)
+                canvas.translate(-left.x, 4 - left.y)
+                view.draw(canvas)
+                return (0 until probe.width).any { x ->
+                    val color = probe.getPixel(x, 4)
+                    Color.alpha(color) > 180 && Color.red(color) < 120
+                }
+            } finally { probe.recycle() }
+        }
+        var circleDown = 0L
+        ui {
+            view.drawHold = true
+            check(view.tool == InkCanvasView.Tool.PEN)
+            circleDown = trace(circle)
+            check(!circlePreviewIsVisible()) { "The pen should wait before snapping" }
+        }
+        val end = circle.last()
+        repeat(28) { i ->
+            SystemClock.sleep(15)
+            ui {
+                val jitter = view.resources.displayMetrics.density / view.scale
+                sample(MotionEvent.ACTION_MOVE, end.x + if (i % 2 == 0) jitter else -jitter,
+                    end.y, circleDown, SystemClock.uptimeMillis())
+            }
+        }
+        await("normal pen previews a nearly closed circle while still down") {
+            var preview = false
+            ui { preview = view.hasActiveContact && view.currentPage!!.objects.size == 3 && circlePreviewIsVisible() }
+            preview
+        }
+        ui {
+            sample(MotionEvent.ACTION_UP, end.x, end.y, circleDown, SystemClock.uptimeMillis())
+            val circle = view.currentPage!!.objects.last()
+            check(circle.optString("shape") == "circle") { "The visible circle wasn't committed" }
+            check(kotlin.math.abs((circle.f("x2") - circle.f("x1")) -
+                (circle.f("y2") - circle.f("y1"))) < .01f)
+        }
+
+        val arc = (0..22).map { i ->
+            val angle = i * PI / 22
+            InkPoint(660 - 94 * cos(angle).toFloat(), 650 - 60 * sin(angle).toFloat())
+        }
+        var curveDown = 0L
+        ui { curveDown = trace(arc) }
+        SystemClock.sleep(550)
+        ui {
+            sample(MotionEvent.ACTION_UP, arc.last().x, arc.last().y, curveDown, SystemClock.uptimeMillis())
+            val curve = view.currentPage!!.objects.last()
+            check(curve.optString("shape") == "curve" && curve.f("cy") < 575f) { "The pen didn't keep the open bend" }
+            val quick = trace(circle)
+            sample(MotionEvent.ACTION_UP, end.x, end.y, quick, quick + circle.size * 10L)
+            check(view.currentPage!!.objects.last().optString("type") == "stroke") { "A loop without a hold should stay ink" }
+            view.undo()
+        }
         await("gesture edits committed") {
             repository.page(pageId)?.objects?.let { objects ->
-                objects.size == 3 && objects.count { it.optString("type") == "shape" } == 2 &&
-                    objects.any { it.optString("id") == "locked" }
+                objects.size == 5 && objects.any { it.optString("id") == "locked" } &&
+                    objects.filter { it.optString("type") == "shape" }.map { it.optString("shape") }
+                        .toSet() == setOf("line", "rectangle", "circle", "curve")
             } == true
         }
         graphiteRaster()

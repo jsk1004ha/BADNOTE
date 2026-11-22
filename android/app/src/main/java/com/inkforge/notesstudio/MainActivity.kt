@@ -1448,7 +1448,7 @@ open class MainActivity:ComponentActivity(){
             })
         toggle("스타일러스 전용 필기","손바닥과 손가락 입력을 필기에서 제외합니다.","stylusOnly",true)
         toggle("낙서해서 지우기","펜으로 글자 위를 지그재그로 문지르면 반복해서 닿은 필기를 지웁니다.","scribbleErase",true)
-        toggle("그려서 도형 만들기","펜으로 선·타원·사각형을 그린 뒤 잠깐 멈추면 도형으로 변환합니다.","drawHold",true)
+        toggle("그려서 도형 만들기","일반 펜으로 그린 뒤 펜촉을 댄 채 멈추면 직선·곡선·원·타원·사각형으로 변환합니다.","drawHold",true)
         toggle("스타일러스 정보 표시","필압, 기울기, 입력 장치를 화면에 표시합니다.","telemetry",false)
         val opacity=ui.col();val output=ui.text("${(settings.f("hudTextOpacity",1f)*100).toInt()}%",12f,ui.ink,true).apply{gravity=Gravity.RIGHT};opacity.addView(output)
         opacity.addView(range((settings.f("hudTextOpacity",1f)*100).toInt(),35,100){value->output.text="$value%";settings.put("hudTextOpacity",value/100f);applyHudOpacity();saveSettings()},LinearLayout.LayoutParams(dp(160),dp(28)))
@@ -1471,7 +1471,7 @@ open class MainActivity:ComponentActivity(){
     }
     private fun gestureGuide(){
         val content=showSheet("Quick Guide","제스처 사용법")
-        listOf(Triple("gesture","두 손가락 핀치","페이지 중심을 유지하며 8%~800% 확대·축소합니다."),Triple("undo","두 손가락 탭","실행 취소합니다."),Triple("redo","세 손가락 탭","다시 실행합니다."),Triple("arrow","두 손가락 좌우 쓸기","이전 또는 다음 페이지로 이동합니다."),Triple("eraser","낙서해서 지우기","필기 위를 빠르게 지그재그로 문질러 지웁니다."),Triple("shape","그린 뒤 길게 유지","펜을 댄 채 잠깐 멈추거나 도형 도구에서 그려서 도형을 선택해 선·타원·사각형을 만들 수 있습니다.")).forEach{(icon,title,description)->menuItem(content,title,icon,description){}}
+        listOf(Triple("gesture","두 손가락 핀치","페이지 중심을 유지하며 8%~800% 확대·축소합니다."),Triple("undo","두 손가락 탭","실행 취소합니다."),Triple("redo","세 손가락 탭","다시 실행합니다."),Triple("arrow","두 손가락 좌우 쓸기","이전 또는 다음 페이지로 이동합니다."),Triple("eraser","낙서해서 지우기","필기 위를 빠르게 지그재그로 문질러 지웁니다."),Triple("shape","그린 뒤 길게 유지","일반 펜으로 그린 뒤 펜촉을 댄 채 멈추면 직선·곡선·원·타원·사각형이 나타납니다.")).forEach{(icon,title,description)->menuItem(content,title,icon,description){}}
     }
     private fun assistantMenu(){
         val content=showSheet("On-device","학습 도우미")

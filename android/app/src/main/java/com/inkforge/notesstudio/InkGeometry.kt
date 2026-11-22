@@ -925,7 +925,8 @@ object InkGeometry {
                     if(run.optString("kind")=="size")run.put("value",size(run.f("value",28f))) }} }
         }
     }
-    internal data class RecognizedShape(val name: String, val x1: Float, val y1: Float, val x2: Float, val y2: Float)
+    internal data class RecognizedShape(val name: String, val x1: Float, val y1: Float, val x2: Float, val y2: Float,
+                                        val control: InkPoint? = null)
 
     private fun pathLength(points: List<InkPoint>): Float {
         var length = 0f
@@ -951,7 +952,7 @@ object InkGeometry {
         add(points.last())
     }
 
-    internal fun recognizeShape(points: List<InkPoint>, screenScale: Float): RecognizedShape? {
+    internal fun recognizeShape(points: List<InkPoint>, screenScale: Float, held: Boolean = false): RecognizedShape? {
         if (points.size < 2 || screenScale <= 0f) return null
         val length = pathLength(points)
         if (length * screenScale < 18f) return null
@@ -964,15 +965,24 @@ object InkGeometry {
                 return RecognizedShape("line", start.x, start.y, end.x, end.y)
         }
         if (points.size < 4) return null
+        val samples = evenlySpaced(points, length, 48)
+        return recognizeLoop(points, samples, separation, screenScale, held)
+            ?: if (held && separation >= length * .56f && separation * screenScale >= 20f)
+                recognizeCurve(samples, separation, screenScale) else null
+    }
+
+    private fun recognizeLoop(points: List<InkPoint>, samples: List<InkPoint>, separation: Float,
+                              screenScale: Float, held: Boolean): RecognizedShape? {
         val box = pointBounds(points)
         val major = max(box.width, box.height)
         val minor = min(box.width, box.height)
+        val joinTolerance = if (held) .50f else .25f
         if (minor * screenScale < 12f || minor / major < .22f ||
-            separation > max(5f / screenScale, major * .25f)) return null
+            separation > max(5f / screenScale, major * joinTolerance)) return null
 
         val cx = (box.left + box.right) / 2
         val cy = (box.top + box.bottom) / 2
-        val normalized = evenlySpaced(points, length, 48).map {
+        val normalized = samples.map {
             InkPoint((it.x - cx) * 2 / box.width, (it.y - cy) * 2 / box.height)
         }
         var winding = 0f
@@ -986,19 +996,76 @@ object InkGeometry {
             angularTravel += abs(turn)
             previous = angle
         }
-        if (abs(winding) !in 5.15f..7.15f || angularTravel > abs(winding) + .9f) return null
+        val maxWinding = if (held) 7.55f else 7.15f
+        if (abs(winding) !in 5.15f..maxWinding || angularTravel > abs(winding) + .9f) return null
 
         val cornerCount = listOf(-1f to -1f, 1f to -1f, 1f to 1f, -1f to 1f).count { (x, y) ->
             normalized.any { abs(it.x - x) < .26f && abs(it.y - y) < .26f }
         }
         val edgeError = normalized.map { min(abs(1 - abs(it.x)), abs(1 - abs(it.y))) }.average()
         val radialError = normalized.map { abs(hypot(it.x, it.y) - 1) }.average()
-        val shape = when {
-            cornerCount >= 3 && edgeError < .15 -> "rectangle"
-            radialError < .16 -> "ellipse"
-            else -> return null
+        if (cornerCount >= 3 && edgeError < .15)
+            return RecognizedShape("rectangle", box.left, box.top, box.right, box.bottom)
+        if (radialError >= if (held) .19 else .16) return null
+        if (held && minor >= major * .84f) {
+            val radius = (box.width + box.height) / 4
+            return RecognizedShape("circle", cx - radius, cy - radius, cx + radius, cy + radius)
         }
-        return RecognizedShape(shape, box.left, box.top, box.right, box.bottom)
+        return RecognizedShape("ellipse", box.left, box.top, box.right, box.bottom)
+    }
+
+    /** Fit a single smooth bend to the existing editable quadratic-curve representation. */
+    private fun recognizeCurve(samples: List<InkPoint>, chord: Float, screenScale: Float): RecognizedShape? {
+        val start = samples.first()
+        val end = samples.last()
+        val dx = end.x - start.x
+        val dy = end.y - start.y
+        var above = 0f
+        var below = 0f
+        var controlX = 0f
+        var controlY = 0f
+        var weights = 0f
+        for (i in 1 until samples.lastIndex) {
+            val p = samples[i]
+            val offset = (dx * (p.y - start.y) - dy * (p.x - start.x)) / chord
+            above = max(above, offset)
+            below = max(below, -offset)
+
+            val t = i.toFloat() / samples.lastIndex
+            val u = 1 - t
+            val weight = 2 * u * t
+            controlX += weight * (p.x - u * u * start.x - t * t * end.x)
+            controlY += weight * (p.y - u * u * start.y - t * t * end.y)
+            weights += weight * weight
+        }
+        val bend = max(above, below)
+        if (bend < max(3f / screenScale, chord * .075f) ||
+            min(above, below) > max(1.5f / screenScale, bend * .2f)) return null
+
+        // Check turns over an interval of the resampled path so a pointed V or chevron stays ink.
+        for (i in 3 until samples.size - 3) {
+            val a = samples[i - 3]
+            val b = samples[i]
+            val c = samples[i + 3]
+            val ax = b.x - a.x
+            val ay = b.y - a.y
+            val bx = c.x - b.x
+            val by = c.y - b.y
+            if (abs(atan2(ax * by - ay * bx, ax * bx + ay * by)) > .92f) return null
+        }
+
+        val control = InkPoint(controlX / weights, controlY / weights)
+        val curve = (0..32).map { i ->
+            val t = i / 32f
+            val u = 1 - t
+            InkPoint(u * u * start.x + 2 * u * t * control.x + t * t * end.x,
+                u * u * start.y + 2 * u * t * control.y + t * t * end.y)
+        }
+        val tolerance = max(2f / screenScale, chord * .09f)
+        for (p in samples) {
+            if ((1..curve.lastIndex).none { i -> segmentDistance(p, curve[i - 1], curve[i]) <= tolerance }) return null
+        }
+        return RecognizedShape("curve", start.x, start.y, end.x, end.y, control)
     }
 
     private fun pointBounds(points: List<InkPoint>) = InkBounds(points.minOf { it.x }, points.minOf { it.y },
