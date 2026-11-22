@@ -4,15 +4,12 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.graphics.*
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.*
 
@@ -107,71 +104,22 @@ class NativeFileExport(private val activity:Activity,private val repository:Note
     }
 }
 
-/** One raster page and one JPEG spool at a time, including at 300 MB total asset size. */
+/** PNG uses a bitmap; PDF writes and closes one vector page at a time. */
 object StreamingPdf {
-    fun render(repository:NoteRepository,page:NotePage,width:Int):Bitmap {
-        val height=(width*page.height/page.width).roundToInt().coerceIn(1,5000)
-        val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
-        try{
-            val canvas=Canvas(bitmap);canvas.scale(width/page.width,height/page.height)
-            val imageCache=mutableMapOf<String,Bitmap>()
-            val renderer=NoteRenderer { ref->
-                if(!ref.startsWith("asset:"))null else imageCache.getOrPut(ref){
-                    BackgroundLoader.decodeImage(repository.asset(ref.removePrefix("asset:")),2000)?:error("이미지 자산을 읽지 못했습니다.")
-                }
-            }
-            try{
-                renderer.template(canvas,page)
-                val pdfRef=page.meta.optString("pdfSource")
-                if(pdfRef.startsWith("asset:")){
-                    PdfRenderer(ParcelFileDescriptor.open(repository.asset(pdfRef.removePrefix("asset:")),ParcelFileDescriptor.MODE_READ_ONLY)).use{pdf->
-                        pdf.openPage(page.meta.optInt("pdfPageNumber",1)-1).use{source->
-                            val background=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
-                            try{background.eraseColor(Color.WHITE);source.render(background,null,null,PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-                                canvas.drawBitmap(background,null,RectF(0f,0f,page.width,page.height),null)}finally{background.recycle()}
-                        }}
-                }else if(page.meta.optString("backgroundImage").startsWith("asset:")){
-                    val bg=BackgroundLoader.decodeImage(repository.asset(page.meta.getString("backgroundImage").removePrefix("asset:")),2400)?:error("PDF 배경 자산을 읽지 못했습니다.")
-                    try{canvas.drawBitmap(bg,null,RectF(0f,0f,page.width,page.height),null)}finally{bg.recycle()}
-                }
-                page.objects.forEach{obj->renderer.draw(canvas,obj)
-                    // Images are consumed in order, so a page with hundreds of images stays bounded.
-                    imageCache.values.forEach{it.recycle()};imageCache.clear()}
-            }finally{imageCache.values.forEach{it.recycle()}}
+    fun render(repository: NoteRepository, page: NotePage, width: Int,
+               cancelled: () -> Boolean = { false }): Bitmap {
+        PageExportRenderer.checkCancelled(cancelled)
+        val height = (width * page.height / page.width).roundToInt().coerceIn(1, 5000)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(bitmap)
+            canvas.scale(width / page.width, height / page.height)
+            PageExportRenderer.draw(repository, page, canvas, width, height, cancelled)
             return bitmap
-        }catch(e:Exception){bitmap.recycle();throw e}
+        } catch (error: Throwable) { bitmap.recycle(); throw error }
     }
-    fun write(repository:NoteRepository,id:String,file:File,cancelled:()->Boolean){
-        val ids=repository.pageIds(id)
-        val offsets=LongArray(3+ids.size*3)
-        var position=0L
-        file.outputStream().buffered(ArchiveCodec.BUFFER_SIZE).use{out->
-            fun text(s:String){val bytes=s.toByteArray(Charsets.US_ASCII);out.write(bytes);position+=bytes.size}
-            fun start(number:Int){offsets[number]=position;text("$number 0 obj\n")}
-            text("%PDF-1.4\n")
-            start(1);text("<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
-            start(2);text("<< /Type /Pages /Count ${ids.size} /Kids [${ids.indices.joinToString(" "){"${3+it*3} 0 R"}}] >>\nendobj\n")
-            ids.forEachIndexed{index,pageId->
-                if(cancelled())throw InterruptedIOException("내보내기를 취소했습니다.")
-                val page=requireNotNull(repository.page(pageId));val pageIdNumber=3+index*3
-                val bmp=render(repository,page,1800)
-                val spool=File.createTempFile("pdf-page-",".jpg",repository.workDirectory)
-                try{
-                    val width=bmp.width;val height=bmp.height
-                    try{spool.outputStream().use{require(bmp.compress(Bitmap.CompressFormat.JPEG,90,it))}}finally{bmp.recycle()}
-                    val pw=page.meta.f("pdfPointWidth",595f);val ph=page.meta.f("pdfPointHeight",pw*page.height/page.width)
-                    start(pageIdNumber);text("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pw $ph] /Resources << /XObject << /Im0 ${pageIdNumber+1} 0 R >> >> /Contents ${pageIdNumber+2} 0 R >>\nendobj\n")
-                    start(pageIdNumber+1);text("<< /Type /XObject /Subtype /Image /Width $width /Height $height /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${spool.length()} >>\nstream\n")
-                    spool.inputStream().use{position+=ArchiveCodec.copy(it,out,cancelled)};text("\nendstream\nendobj\n")
-                    val command="q $pw 0 0 $ph 0 0 cm /Im0 Do Q\n"
-                    start(pageIdNumber+2);text("<< /Length ${command.length} >>\nstream\n${command}endstream\nendobj\n")
-                }finally{spool.delete()}
-            }
-            val xref=position;text("xref\n0 ${offsets.size}\n0000000000 65535 f \n")
-            for(i in 1 until offsets.size)text(String.format(Locale.US,"%010d 00000 n \n",offsets[i]))
-            text("trailer\n<< /Size ${offsets.size} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n")
-        }
-    }
+    fun write(repository: NoteRepository, id: String, file: File, cancelled: () -> Boolean) =
+        VectorPdfExport.write(repository, id, file, cancelled)
 }
 
 object XfdfExport{
