@@ -22,6 +22,8 @@ class LegacyCanvasBrush {
     private val smoothing = LegacyBrush.LiveSmoothing()
     private val paths = LivePaths(smoothing)
 
+    internal fun releaseGraphitePreview() { sink.liveGraphite = null }
+
     fun draw(canvas: Canvas, stroke: JSONObject, renderScale: Double = 1.0) {
         execute(canvas) { LegacyBrush.renderTyped(stroke, renderScale, sink) }
     }
@@ -157,6 +159,13 @@ class LegacyCanvasBrush {
         fun abort() { node.endRecording(); node.discardDisplayList() }
     }
 
+    private class GraphitePaths {
+        val bands = Array(GraphiteBrush.opacityBands.size) { Path() }
+        val builder = GraphiteBrush.PathBuilder({ bands.forEach(Path::rewind) }) { band, x, y, radius ->
+            bands[band].addCircle(x.toFloat(), y.toFloat(), radius.toFloat(), Path.Direction.CW)
+        }
+    }
+
     private class CanvasSink : LegacyBrush.DrawingSink {
         private var canvas: Canvas? = null
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -174,6 +183,8 @@ class LegacyCanvasBrush {
         private var recording: BodyRecording? = null
         private var segment = -1
         private val nodeClip = Rect()
+        private val recordedGraphite by lazy { GraphitePaths() }
+        var liveGraphite: GraphitePaths? = null
         var depth = 0
             private set
         private val style: Style get() = styles[depth]
@@ -252,6 +263,28 @@ class LegacyCanvasBrush {
             else path.addArc((x - radius).toFloat(), (y - radius).toFloat(),
                 (x + radius).toFloat(), (y + radius).toFloat(),
                 Math.toDegrees(start).toFloat(), Math.toDegrees(end - start).toFloat())
+        }
+        override fun graphite(stroke: JSONObject, points: List<LegacyBrush.Point>, liveGeneration: Int?) {
+            val graphite = GraphiteBrush.style(stroke)
+            val paths = if (liveGeneration == null || graphite.version < GraphiteBrush.CURRENT_VERSION) recordedGraphite
+                else liveGraphite ?: GraphitePaths().also { liveGraphite = it }
+            paths.builder.update(graphite, points, liveGeneration)
+            save()
+            multiply()
+            fillColor(graphite.color)
+            val previousPath = path
+            try {
+                for (i in paths.bands.indices) {
+                    path = paths.bands[i]
+                    if (!path.isEmpty) {
+                        alpha(graphite.opacity * GraphiteBrush.opacityBands[i])
+                        fill()
+                    }
+                }
+            } finally {
+                path = previousPath
+                restore()
+            }
         }
         private fun prepare(fill: Boolean) {
             paint.style = if (fill) Paint.Style.FILL else Paint.Style.STROKE

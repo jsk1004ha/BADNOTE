@@ -7,6 +7,7 @@ import kotlin.math.*
 class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private val legacyBrush=LegacyCanvasBrush()
+    internal fun releaseGraphitePreview() = legacyBrush.releaseGraphitePreview()
     fun color(value: String,default: Int=Color.BLACK)=try{Color.parseColor(value)}catch(_:Exception){default}
     fun template(canvas: Canvas,page: NotePage) {
         val paperColor = page.meta.optString("paperColor")

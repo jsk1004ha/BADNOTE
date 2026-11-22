@@ -24,6 +24,7 @@ object LegacyBrush {
         fun lineTo(x: Double, y: Double)
         fun quadraticTo(cx: Double, cy: Double, x: Double, y: Double)
         fun arc(x: Double, y: Double, radius: Double, start: Double, end: Double)
+        fun graphite(stroke: JSONObject, points: List<Point>, liveGeneration: Int?)
         fun stroke()
         fun fill()
     }
@@ -392,7 +393,7 @@ object LegacyBrush {
         if (smooth.isEmpty()) return
         val brush = brush(stroke); val settings = settings(stroke); val fallback = defaultSettings(brush)
         if (GraphiteBrush.isGraphite(stroke)) {
-            GraphiteBrush.render(stroke, smooth, sink)
+            sink.graphite(stroke, smooth, live?.geometryVersion)
             return
         }
         val context = WidthContext(stroke)

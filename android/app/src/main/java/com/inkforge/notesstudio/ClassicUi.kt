@@ -29,6 +29,7 @@ class ClassicUi(val context:Context, val translate:(String)->String = {it}) {
     val blue=color("#2f5688")
     val accent=color("#1397ed")
     private val icons:JSONObject by lazy { context.assets.open("icons.json").bufferedReader().use{JSONObject(it.readText())} }
+    private val iconPaths = HashMap<String, List<IconPart>>()
     fun rounded(fill:Int,radius:Float=12f,stroke:Int=Color.TRANSPARENT,width:Float=1f)=GradientDrawable().apply{
         setColor(fill);cornerRadius=radius*density;if(stroke!=Color.TRANSPARENT)setStroke(dp(width).coerceAtLeast(1),stroke)
     }
@@ -39,7 +40,9 @@ class ClassicUi(val context:Context, val translate:(String)->String = {it}) {
         typeface=Typeface.create("sans-serif",if(bold)Typeface.BOLD else Typeface.NORMAL);gravity=Gravity.CENTER_VERTICAL
     }
     fun icon(name:String,tint:Int=ink,size:Int=25)=ImageView(context).apply{
-        setImageDrawable(OriginalIcon(icons.optString(name,icons.optString("info")),tint));scaleType=ImageView.ScaleType.FIT_CENTER
+        val key = if (icons.has(name)) name else "info"
+        val parts = iconPaths.getOrPut(key) { parseIcon(icons.optString(key)) }
+        setImageDrawable(OriginalIcon(parts,tint));scaleType=ImageView.ScaleType.FIT_CENTER
         layoutParams=LinearLayout.LayoutParams(dp(size),dp(size));importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
     fun iconButton(name:String,label:String,tint:Int=ink,width:Int=44,height:Int=width,size:Int=25,
@@ -81,12 +84,9 @@ class ClassicUi(val context:Context, val translate:(String)->String = {it}) {
     }
 }
 
-/** The paths are the original SVG paths, painted with the same 24x24 viewport. */
-private class OriginalIcon(svg:String,private val tint:Int):Drawable(){
-    private data class Part(val path:Path,val filled:Boolean,val stroke:Boolean,val dashed:Boolean)
-    private val parts=mutableListOf<Part>()
-    private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply{strokeWidth=1.8f;strokeCap=Paint.Cap.ROUND;strokeJoin=Paint.Join.ROUND}
-    init{
+private data class IconPart(val path: Path, val filled: Boolean, val stroke: Boolean, val dashed: Boolean)
+
+private fun parseIcon(svg: String): List<IconPart> = buildList {
         val parser=Xml.newPullParser();parser.setInput(StringReader("<svg>$svg</svg>"))
         while(parser.next()!=XmlPullParser.END_DOCUMENT)if(parser.eventType==XmlPullParser.START_TAG){
             fun attr(name:String)=parser.getAttributeValue(null,name)
@@ -98,15 +98,20 @@ private class OriginalIcon(svg:String,private val tint:Int):Drawable(){
                 "ellipse"->Path().apply{addOval(RectF(f("cx")-f("rx"),f("cy")-f("ry"),f("cx")+f("rx"),f("cy")+f("ry")),Path.Direction.CW)}
                 else->null
             }
-            if(path!=null)parts+=Part(path,attr("fill")=="currentColor",attr("stroke")!="none",attr("stroke-dasharray")!=null)
+            if(path!=null)add(IconPart(path,attr("fill")=="currentColor",attr("stroke")!="none",attr("stroke-dasharray")!=null))
         }
-    }
+}
+
+/** The paths are shared by drawables with their own tint and state. */
+private class OriginalIcon(private val parts: List<IconPart>, private val tint:Int):Drawable(){
+    private companion object { val dash = DashPathEffect(floatArrayOf(3f,2f),0f) }
+    private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply{strokeWidth=1.8f;strokeCap=Paint.Cap.ROUND;strokeJoin=Paint.Join.ROUND}
     override fun draw(canvas:Canvas){
         canvas.save();canvas.translate(bounds.left.toFloat(),bounds.top.toFloat());canvas.scale(bounds.width()/24f,bounds.height()/24f)
         paint.color=tint
         parts.forEach{part->
             if(part.filled){paint.style=Paint.Style.FILL;paint.pathEffect=null;canvas.drawPath(part.path,paint)}
-            if(part.stroke){paint.style=Paint.Style.STROKE;paint.pathEffect=if(part.dashed)DashPathEffect(floatArrayOf(3f,2f),0f)else null;canvas.drawPath(part.path,paint)}
+            if(part.stroke){paint.style=Paint.Style.STROKE;paint.pathEffect=if(part.dashed)dash else null;canvas.drawPath(part.path,paint)}
         };canvas.restore()
     }
     override fun setAlpha(alpha:Int){paint.alpha=alpha;invalidateSelf()}

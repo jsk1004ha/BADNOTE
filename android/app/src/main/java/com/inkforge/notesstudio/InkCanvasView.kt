@@ -747,8 +747,11 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     }
     override fun onTouchEvent(event:MotionEvent):Boolean{
         if(telemetry)telemetryText="${if(stylus(event,0))"펜"else"터치"} · 압력 ${String.format(java.util.Locale.US,"%.2f",event.pressure)} · 기울기 ${Math.toDegrees(event.getAxisValue(MotionEvent.AXIS_TILT).toDouble()).roundToInt()}°"
-        requestFocus();parent?.requestDisallowInterceptTouchEvent(true)
         val action=event.actionMasked;val index=event.actionIndex
+        if (action == MotionEvent.ACTION_DOWN) {
+            requestFocus()
+            parent?.requestDisallowInterceptTouchEvent(true)
+        }
         if(contactState==ContactState.CANCELLED&&action!=MotionEvent.ACTION_DOWN)return true
         if(action==MotionEvent.ACTION_DOWN&&contactState==ContactState.CANCELLED)contactState=ContactState.IDLE
         if((0 until event.pointerCount).any{stylus(event,it)})updateButtons(event)
@@ -780,7 +783,6 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
             if(action==MotionEvent.ACTION_POINTER_DOWN)return true // Palm/finger while writing cannot change the viewport.
             if((action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP)&&Build.VERSION.SDK_INT>=33&&event.flags and MotionEvent.FLAG_CANCELED!=0){cancelContact();return true}
             if(action==MotionEvent.ACTION_MOVE){
-                requestUnbufferedDispatch(event)
                 consumeEvent(event,pIndex)
                 // Keep every historical sample, but submit only the event's complete snapshot.
                 updateFront()
@@ -856,9 +858,11 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
                     tool == Tool.PEN && brush == "pencil" -> penSettings.optDouble("opacity", .82)
                     else -> 1f
                 },"settings" to if (freehand) json("smoothing" to 0, "taper" to 0) else penSettings.copyJson(),"createdAt" to System.currentTimeMillis(),
-                "captureSeq" to repository.reserveCaptureSequence(page.id),"captureSessionId" to captureSessionId,
+                "captureSeq" to if (tool == Tool.LASER) null else repository.reserveCaptureSequence(page.id),
+                "captureSessionId" to captureSessionId,
                 "timeBasis" to "session-monotonic","revision" to 1)
             if (tool == Tool.PEN && brush == "pencil") live?.put("pencilTexture", "graphite")
+                ?.put("graphiteVersion", GraphiteBrush.CURRENT_VERSION)
         } else when(tool){
             Tool.SHAPE->live=json("id" to uid("shape"),"type" to "shape","shape" to shape,"color" to inkColor,
                 "width" to pageWidth,"screenWidth" to inkWidth,"x1" to p.x,"y1" to p.y,"x2" to p.x,"y2" to p.y)
@@ -1119,6 +1123,7 @@ class InkCanvasView(context:Context,private val repository:NoteRepository):View(
     }
     private fun resetContact(state:ContactState,preserveHeldKey:Boolean=false){
         val hadContact=hasActiveContact
+        renderer.releaseGraphitePreview()
         eraseBefore.clear();erasePositions.clear();contactOrderChanges.clear();contactAdded.clear();erasing=false
         pointer=-1;contactPage=null;points.clear();pointPublication.clear();live=null;frontStroke=null;moveBefore=emptyList();moveStart=null
         moveIds=emptySet();moveLayers=null;moveDx=0f;moveDy=0f

@@ -89,6 +89,58 @@ class InkWorkspaceTest {
         assertTrue(InkGeometry.scratchTargets(candidates, gestures[1], .65f).isEmpty())
     }
 
+    @Test fun graphiteAppendsOnlyNewGrainsDuringWriting() {
+        val style = graphiteStyle()
+        val points = graphitePoints(360, 2.0)
+        val incremental = Grains()
+        val replay = Grains()
+        for (end in 6..points.size step 6) {
+            val prefix = points.subList(0, end)
+            incremental.path.update(style, prefix, 1)
+            replay.path.update(style, prefix)
+            assertArrayEquals("Graphite differs at sample $end", replay.geometry, incremental.geometry)
+        }
+        println("Graphite grain emissions across 60 frames: ${incremental.emitted} incremental, ${replay.emitted} full replay")
+        assertTrue(incremental.emitted * 20 < replay.emitted)
+    }
+
+    @Test fun graphiteRebuildsAtGrainLimitsAndWhenGeometryIsReplaced() {
+        val style = graphiteStyle()
+        val points = graphitePoints(1750, 3.0)
+        val incremental = Grains()
+        val replay = Grains()
+        for (end in listOf(1, 380, 500, 910, 1100, 1750)) {
+            val prefix = points.subList(0, end)
+            incremental.path.update(style, prefix, 1)
+            replay.path.update(style, prefix)
+            assertArrayEquals("Graphite differs at sample $end", replay.geometry, incremental.geometry)
+        }
+        val emitted = incremental.emitted
+        incremental.path.update(style, points, 1)
+        assertEquals(emitted, incremental.emitted)
+        val replacement = points.map { it.copy(y = it.y + 4) }
+        incremental.path.update(style, replacement, 2)
+        replay.path.update(style, replacement)
+        assertArrayEquals(replay.geometry, incremental.geometry)
+    }
+
+    private fun graphiteStyle() = GraphiteBrush.style(json("id" to "graphite-check",
+        "width" to 4, "graphiteVersion" to GraphiteBrush.CURRENT_VERSION))
+
+    private fun graphitePoints(count: Int, step: Double) = List(count) { i ->
+        LegacyBrush.Point(i * step, sin(i / 16.0) * 20, .5 + .3 * sin(i / 27.0), null, 0.0, 32.0)
+    }
+
+    private class Grains {
+        val geometry = LongArray(4)
+        var emitted = 0
+            private set
+        val path = GraphiteBrush.PathBuilder({ geometry.fill(0) }) { band, x, y, radius ->
+            geometry[band] = ((geometry[band] * 31 + x.toBits()) * 31 + y.toBits()) * 31 + radius.toBits()
+            emitted++
+        }
+    }
+
     @Test fun xournalRoundTripKeepsPageOrderCoordinatesColorAndPressureWidths() {
         val input = """
             <xournal version="0.4.8"><title>Two pages</title>

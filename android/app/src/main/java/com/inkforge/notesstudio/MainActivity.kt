@@ -615,11 +615,13 @@ open class MainActivity:ComponentActivity(){
         canvas.beforePageRead=::afterSaved
         applySettings(canvas)
         canvas.tool=runCatching{InkCanvasView.Tool.valueOf(settings.optString("activeTool","PEN"))}.getOrDefault(InkCanvasView.Tool.PEN)
-        if(canvas.tool==InkCanvasView.Tool.HIGHLIGHTER)canvas.inkColor=settings.optString("highlighterColor","#f5df39")
-        if(canvas.tool==InkCanvasView.Tool.TAPE)canvas.inkColor=settings.optString("tapeColor","#4c91dd")
+        var colorKey = inkColorKey(canvas)
+        var widthKey = inkWidthKey(canvas)
+        canvas.inkColor = savedInkColor(colorKey)
+        canvas.inkWidth = savedInkWidth(widthKey)
         canvas.onPageChanged={position->if(manualOcrPageId!=null&&canvas.currentPage?.id!=manualOcrPageId)
             cancelManualOcr("다른 페이지로 이동해 인식을 취소했습니다.")
-            updatePageLabel();rememberPosition(position);renderSidebar();scheduleOcr()}
+            updatePageLabel();updateUndoPill();rememberPosition(position);renderSidebar();scheduleOcr()}
         canvas.onContactChanged={writing->if(inkView===canvas){
             pageOcr.setWriting(writing)
             if(writing){ocrTask?.let{handler.removeCallbacks(it)};ocrTask=null}else scheduleOcr()
@@ -636,10 +638,20 @@ open class MainActivity:ComponentActivity(){
         canvas.onObjectTap={obj->objectMenu(obj)}
         canvas.onStatus=::message
         canvas.onAppendPage={addPage()}
-        var previousTool=canvas.tool
         canvas.onToolChanged={
             textEditor?.onToolChanged()
-            if(previousTool!=canvas.tool){settings.put(when(previousTool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},canvas.inkColor);canvas.inkColor=settings.optString(when(canvas.tool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},when(canvas.tool){InkCanvasView.Tool.HIGHLIGHTER->"#f5df39";InkCanvasView.Tool.TAPE->"#4c91dd";else->"#111827"});previousTool=canvas.tool}
+            val nextColor = inkColorKey(canvas)
+            val nextWidth = inkWidthKey(canvas)
+            if (colorKey != nextColor) {
+                settings.put(colorKey, canvas.inkColor)
+                canvas.inkColor = savedInkColor(nextColor)
+                colorKey = nextColor
+            }
+            if (widthKey != nextWidth) {
+                settings.put(widthKey, canvas.inkWidth)
+                canvas.inkWidth = savedInkWidth(nextWidth)
+                widthKey = nextWidth
+            }
             renderEditorToolbar();renderActiveDock();settings.put("activeTool",canvas.tool.name);saveSettings()
         }
         canvas.onViewportChanged={updatePageLabel();textEditor?.reposition()}
@@ -703,8 +715,19 @@ open class MainActivity:ComponentActivity(){
             val button = icon(center,name,label,active){if(value==InkCanvasView.Tool.PEN&&view.tool==value)penSettingsSheet()else{view.tool=value;if(value==InkCanvasView.Tool.IMAGE)insertObject(value,100f,150f)}}
             if (active) selectedTool = button
         }
-        tool("pen","펜",InkCanvasView.Tool.PEN)
+        val usingPen = view.tool == InkCanvasView.Tool.PEN && view.brush != "pencil"
+        val pen = icon(center, "pen", "펜", usingPen) {
+            if (usingPen) penSettingsSheet()
+            else selectBrush(if (view.brush != "pencil") view.brush
+                else settings.optString("lastPenBrush", "fountain").takeUnless { it == "pencil" || it.isBlank() } ?: "fountain")
+        }
+        if (usingPen) selectedTool = pen
         tool("eraser","지우개",InkCanvasView.Tool.ERASER)
+        val usingPencil = view.tool == InkCanvasView.Tool.PEN && view.brush == "pencil"
+        val pencil = icon(center, "pencil", "연필", usingPencil) {
+            if (usingPencil) penSettingsSheet() else selectBrush("pencil")
+        }
+        if (usingPencil) selectedTool = pencil
         tool("shape","도형",InkCanvasView.Tool.SHAPE)
         tool("highlighter","형광펜",InkCanvasView.Tool.HIGHLIGHTER)
         tool("lasso","올가미",InkCanvasView.Tool.LASSO)
@@ -730,11 +753,45 @@ open class MainActivity:ComponentActivity(){
         }
     }
     private fun updateUndoPill(){
-        val pill=undoPill?:return;val view=inkView?:return;val narrow=editorWidth()/ui.density<=840;pill.removeAllViews()
-        pill.layoutParams=(pill.layoutParams as FrameLayout.LayoutParams).apply{width=dp(if(narrow)102 else 146);height=dp(if(narrow)48 else 68)}
-        val undo=ui.iconButton("undo","실행 취소",ui.ink,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.undo();updateUndoPill()}.apply{isEnabled=view.canUndo;alpha=if(isEnabled)1f else .32f}
-        val redo=ui.iconButton("redo","다시 실행",ui.ink,if(narrow)42 else 57,if(narrow)40 else 52){textEditor?.finish();view.redo();updateUndoPill()}.apply{isEnabled=view.canRedo;alpha=if(isEnabled)1f else .32f}
-        pill.addView(undo);pill.addView(redo,LinearLayout.LayoutParams(dp(if(narrow)42 else 57),dp(if(narrow)40 else 52)).apply{leftMargin=dp(6)})
+        val pill = undoPill ?: return
+        val view = inkView ?: return
+        if (pill.childCount == 0) {
+            pill.addView(ui.iconButton("undo", "실행 취소", ui.ink, size = 20) {
+                textEditor?.finish()
+                view.undo()
+                updateUndoPill()
+            })
+            pill.addView(ui.iconButton("redo", "다시 실행", ui.ink, size = 20) {
+                textEditor?.finish()
+                view.redo()
+                updateUndoPill()
+            })
+        }
+        val narrow = editorWidth() / ui.density <= 840
+        val width = dp(if (narrow) 102 else 146)
+        val height = dp(if (narrow) 48 else 68)
+        val layout = pill.layoutParams
+        if (layout.width != width || layout.height != height) {
+            layout.width = width
+            layout.height = height
+            pill.layoutParams = layout
+        }
+        for (i in 0 until pill.childCount) {
+            val button = pill.getChildAt(i)
+            val buttonWidth = dp(if (narrow) 42 else 57)
+            val buttonHeight = dp(if (narrow) 40 else 52)
+            val buttonLayout = button.layoutParams as LinearLayout.LayoutParams
+            if (buttonLayout.width != buttonWidth || buttonLayout.height != buttonHeight) {
+                buttonLayout.width = buttonWidth
+                buttonLayout.height = buttonHeight
+                if (i == 1) buttonLayout.marginStart = dp(6)
+                button.layoutParams = buttonLayout
+            }
+            val enabled = if (i == 0) view.canUndo else view.canRedo
+            if (button.isEnabled != enabled) button.isEnabled = enabled
+            val opacity = if (enabled) 1f else .32f
+            if (button.alpha != opacity) button.alpha = opacity
+        }
     }
     private fun renderActiveDock(){
         val surface=editorSurface?:return;val view=inkView?:return;activeDock?.let{surface.removeView(it)}
@@ -752,7 +809,10 @@ open class MainActivity:ComponentActivity(){
         val narrow=editorWidth()/ui.density<=840
         val dock=ui.row().apply{gravity=Gravity.CENTER;clipChildren=false;clipToPadding=false;visibility=if(textEditor?.active==true)View.GONE else View.VISIBLE};activeDock=dock
         val menu=ui.row().apply{gravity=Gravity.CENTER_VERTICAL;setPadding(dp(if(narrow)7 else 10),dp(6),dp(if(narrow)7 else 10),dp(6));background=ui.rounded(workspacePanel,16f,workspaceLine);elevation=0f}
-        fun add(item:View,width:Int?=null,height:Int=45){menu.addView(item,LinearLayout.LayoutParams(if(width==null)item.layoutParams?.width?:-2 else dp(width),dp(height)).apply{if(menu.childCount>0)leftMargin=dp(7)})}
+        fun add(item: View, width: Int? = null, height: Int = 45) {
+            menu.addView(item, LinearLayout.LayoutParams(width?.let { dp(it) } ?: item.layoutParams?.width ?: -2, dp(height))
+                .apply { if (menu.childCount > 0) marginStart = dp(if (narrow) 3 else 7) })
+        }
         fun divider(){if(narrow)return;add(ui.divider().apply{setPadding(0,0,0,0)},7,36);(menu.getChildAt(menu.childCount-1) as View).background=ui.rounded(Color.TRANSPARENT);val last=menu.getChildAt(menu.childCount-1);last.setBackgroundColor(workspaceLine);last.scaleX=1f/7f}
         fun icon(name:String,label:String,selected:Boolean=false,action:()->Unit){add(ui.iconButton(name,label,ui.ink,45,45,22,selected,workspaceSelected,workspaceAccent,action),45)}
         fun named(name:String,label:String,selected:Boolean=false,arrow:Boolean=false,action:()->Unit){
@@ -765,8 +825,32 @@ open class MainActivity:ComponentActivity(){
             add(item,max(112,nameWidth),44)
         }
         fun label(value:String){add(ui.text(value,12f,ui.muted,true).apply{gravity=Gravity.CENTER;maxLines=2},110)}
-        fun width(value:Float){val item=FrameLayout(this).apply{background=ui.rounded(if(abs(value-currentWidth())<.2f)workspaceSelected else Color.TRANSPARENT,13f);setOnClickListener{setCurrentWidth(value);saveSettings();renderActiveDock()};contentDescription="굵기 $value"}
-            item.addView(View(this).apply{background=ui.rounded(ui.ink,99f)},FrameLayout.LayoutParams(dp(28),dp((value/2.2f).coerceIn(2f,13f)),Gravity.CENTER));add(item,45)}
+        fun width(value: Float) {
+            val selected = abs(value - currentWidth()) < .2f
+            val item = FrameLayout(this).apply {
+                background = ui.rounded(if (selected) workspaceSelected else Color.TRANSPARENT, 12f)
+                contentDescription = "굵기 ${widthText(value)}"
+                isSelected = selected
+                isFocusable = true
+                setOnClickListener {
+                    if (selected) widthMenu() else {
+                        setCurrentWidth(value)
+                        saveSettings()
+                        renderActiveDock()
+                    }
+                }
+                ViewCompat.setTooltipText(this, contentDescription)
+                addView(View(this@MainActivity).apply { background = ui.rounded(ui.ink, 99f) },
+                    FrameLayout.LayoutParams(dp(23), dp((value / 2.2f).coerceIn(2f, 13f)), Gravity.CENTER))
+            }
+            add(item, if (narrow) 39 else 45)
+        }
+        fun writingWidths(vararg presets: Float) {
+            val current = currentWidth()
+            val nearest = presets.indices.minBy { abs(presets[it] - current) }
+            if (abs(presets[nearest] - current) >= .2f) presets[nearest] = current
+            presets.forEach(::width)
+        }
         fun slider(){
             val holder=ui.row().apply{setPadding(dp(8),0,dp(8),0);background=ui.rounded(ui.color("#f0f2f7"),12f)}
             val output=ui.text("${widthText(currentWidth())}px",12f,ui.ink,true)
@@ -775,11 +859,53 @@ open class MainActivity:ComponentActivity(){
             seek.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,user:Boolean){if(user){setCurrentWidth(max(.5f,p/2f));output.text="${widthText(currentWidth())}px"}};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){saveSettings()}})
             holder.addView(seek,LinearLayout.LayoutParams(0,dp(30),1f));holder.addView(output,LinearLayout.LayoutParams(dp(42),-2).apply{leftMargin=dp(7)});add(holder,if(narrow)108 else 126,39)
         }
-        fun colors(values:List<String>,current:String,onColor:(String)->Unit){values.forEach{value->add(ui.swatch(value,current.equals(value,true),workspaceAccent){onColor(value);if(view.tool!=InkCanvasView.Tool.STICKY)settings.put(when(view.tool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},view.inkColor);saveSettings();renderActiveDock()},39,39)}}
-        val palette=if(view.tool==InkCanvasView.Tool.HIGHLIGHTER)listOf("#f5df39","#80e2ff","#ff9fc2","#a8ef82","#b9a3ff")else listOf("#111827","#147bd1","#ffffff","#d93939","#2a9d66","#7a57c7")
-        when(view.tool){
-            InkCanvasView.Tool.PEN->{val brushes=mapOf("fountain" to "만년필","ballpoint" to "볼펜","gel" to "젤펜","brush" to "브러시","pencil" to "연필","fineliner" to "파인라이너","calligraphy" to "캘리그래피","marker" to "마커");named(if(view.brush in listOf("fountain","ballpoint","brush","pencil"))view.brush else "pen",brushes[view.brush]?:"펜",arrow=true){penMenu()};divider();listOf(2f,4.2f,8.5f).forEach(::width);slider();icon("settings","펜 설정"){penSettingsSheet()};divider();colors(palette,view.inkColor){view.inkColor=it;settings.put("inkColor",it);saveSettings()};add(ui.iconButton("plus","색상 추가",ui.ink,39,39,18){colorMenu()}.apply{background=GradientDrawable().apply{setColor(Color.TRANSPARENT);shape=GradientDrawable.OVAL;setStroke(dp(2),workspaceLine,dp(4).toFloat(),dp(3).toFloat())}},39,39)}
-            InkCanvasView.Tool.HIGHLIGHTER->{named("highlighter","형광펜"){};divider();listOf(12f,22f,34f).forEach(::width);slider();divider();colors(palette,view.inkColor){view.inkColor=it};add(ui.iconButton("plus","색상 추가",ui.ink,39,39,18){colorMenu()}.apply{background=GradientDrawable().apply{setColor(Color.TRANSPARENT);shape=GradientDrawable.OVAL;setStroke(dp(2),workspaceLine,dp(4).toFloat(),dp(3).toFloat())}},39,39)}
+        fun colors(values: List<String>, current: String, edit: ((String) -> Unit)? = null, onColor: (String) -> Unit) {
+            values.forEach { value ->
+                val active = current.equals(value, true)
+                val swatch = ui.swatch(value, active, workspaceAccent) {
+                    if (active && edit != null) edit(value) else {
+                        onColor(value)
+                        if (view.tool != InkCanvasView.Tool.STICKY) settings.put(inkColorKey(view), view.inkColor)
+                        saveSettings()
+                        renderActiveDock()
+                    }
+                }
+                if (edit != null) swatch.setOnLongClickListener { edit(value); true }
+                add(swatch, 39, 41)
+            }
+        }
+        fun writingPalette() {
+            val slots = if (narrow) 3 else 6
+            val preferred = writingColors(inkColorKey(view)).take(slots)
+            val palette = if (preferred.any { it.equals(view.inkColor, true) }) preferred
+                else preferred.take(slots - 1) + view.inkColor
+            colors(palette, view.inkColor, edit = { colorMenu(preset = it) }) {
+                view.inkColor = it
+            }
+            add(ui.iconButton("plus", "필기 색상 추가", ui.ink, 40, 44, 18) {
+                colorMenu(addPreset = true)
+            }, 40, 44)
+        }
+        val palette = defaultWritingColors("inkColor")
+        when (view.tool) {
+            InkCanvasView.Tool.PEN -> {
+                val names = mapOf("fountain" to "만년필", "ballpoint" to "볼펜", "gel" to "젤펜", "brush" to "브러시",
+                    "pencil" to "연필", "fineliner" to "파인라이너", "calligraphy" to "캘리그래피", "marker" to "마커")
+                val glyph = if (view.brush in setOf("fountain", "ballpoint", "brush", "pencil")) view.brush else "pen"
+                if (narrow) icon(glyph, "펜 종류") { penMenu() }
+                else named(glyph, names[view.brush] ?: "펜", arrow = true) { penMenu() }
+                divider()
+                writingWidths(2f, 4.2f, 8.5f)
+                divider()
+                writingPalette()
+                icon("settings", "펜 설정") { penSettingsSheet() }
+            }
+            InkCanvasView.Tool.HIGHLIGHTER -> {
+                if (!narrow) named("highlighter", "형광펜") { widthMenu() }
+                writingWidths(12f, 22f, 34f)
+                divider()
+                writingPalette()
+            }
             InkCanvasView.Tool.ERASER->{named("eraser","획",!view.preciseEraser&&!view.wholeEraser){view.preciseEraser=false;view.wholeEraser=false;renderActiveDock()};named("lasso","정밀",view.preciseEraser){view.preciseEraser=true;view.wholeEraser=false;renderActiveDock()};named("trash","전체",view.wholeEraser){view.wholeEraser=true;view.preciseEraser=false;renderActiveDock()};divider();listOf(12f,26f,48f).forEach(::width);slider();icon("trash","페이지 지우기"){clearPage()}}
             InkCanvasView.Tool.LASSO->{named("lasso","자유형 선택",true){};icon("check-circle","전체 선택"){view.selectAll()};icon("copy","붙여넣기"){pasteSelection()}}
             InkCanvasView.Tool.SHAPE->{named("shape","그려서 도형",view.shape=="freehand"){view.shape="freehand";renderActiveDock()};divider();listOf("line","curve","arc","rectangle","rounded-rectangle","square","ellipse","circle","triangle","diamond","pentagon","hexagon","starshape","trapezoid","parallelogram","heartshape","cloudshape","speech","arrow","double-arrow").forEach{shape->icon(shape,shape,view.shape==shape){view.shape=shape;renderActiveDock()}};divider();listOf(2f,4f,8f).forEach(::width);slider();colors(palette.take(5),view.inkColor){view.inkColor=it}}
@@ -822,13 +948,68 @@ open class MainActivity:ComponentActivity(){
     }
     private fun currentWidth():Float=inkView?.let{when(it.tool){InkCanvasView.Tool.ERASER->it.eraserRadius;InkCanvasView.Tool.HIGHLIGHTER->it.highlighterWidth;else->it.inkWidth}}?:4.2f
     private fun widthText(value:Float)=if(value%1f==0f)value.toInt().toString()else String.format(java.util.Locale.US,"%.1f",value)
-    private fun setCurrentWidth(value:Float){inkView?.let{when(it.tool){InkCanvasView.Tool.ERASER->{it.eraserRadius=value;settings.put("eraserRadius",value)};InkCanvasView.Tool.HIGHLIGHTER->{it.highlighterWidth=value;settings.put("highlighterWidth",value)};else->{it.inkWidth=value;settings.put("inkWidth",value)}}}}
+    private fun inkColorKey(view: InkCanvasView): String = when (view.tool) {
+        InkCanvasView.Tool.HIGHLIGHTER -> "highlighterColor"
+        InkCanvasView.Tool.TAPE -> "tapeColor"
+        InkCanvasView.Tool.PEN -> if (view.brush == "pencil") "pencilColor" else "inkColor"
+        else -> "inkColor"
+    }
+    private fun inkWidthKey(view: InkCanvasView) =
+        if (view.tool == InkCanvasView.Tool.PEN && view.brush == "pencil") "pencilWidth" else "inkWidth"
+    private fun savedInkColor(key: String) = settings.optString(key, when (key) {
+        "highlighterColor" -> "#f5df39"
+        "tapeColor" -> "#4c91dd"
+        "pencilColor" -> settings.optString("inkColor", "#30343a")
+        else -> "#111827"
+    })
+    private fun savedInkWidth(key: String) = settings.f(key, settings.f("inkWidth", 4.2f))
+
+    private fun setCurrentWidth(value: Float) {
+        val view = inkView ?: return
+        when (view.tool) {
+            InkCanvasView.Tool.ERASER -> {
+                view.eraserRadius = value
+                settings.put("eraserRadius", value)
+            }
+            InkCanvasView.Tool.HIGHLIGHTER -> {
+                view.highlighterWidth = value
+                settings.put("highlighterWidth", value)
+            }
+            else -> {
+                view.inkWidth = value
+                settings.put(inkWidthKey(view), value)
+            }
+        }
+    }
+
+    private fun defaultWritingColors(key: String) = when (key) {
+        "highlighterColor" -> listOf("#f5df39", "#80e2ff", "#ff9fc2", "#a8ef82", "#b9a3ff")
+        "pencilColor" -> listOf("#30343a", "#315b9f", "#a4393e", "#476847", "#fffdf6")
+        else -> listOf("#111827", "#147bd1", "#d93939", "#2a9d66", "#7a57c7", "#ffffff")
+    }
+
+    private fun writingColors(key: String): List<String> {
+        val saved = settings.optJSONObject("writingPalettes")?.optJSONArray(key)
+        return (0 until (saved?.length() ?: 0)).mapNotNull { i ->
+            saved?.optString(i)?.takeIf { it.length == 7 && it.startsWith('#') && it.drop(1).toIntOrNull(16) != null }
+        }.distinct().take(6).ifEmpty { defaultWritingColors(key) }
+    }
+
+    private fun rememberWritingColor(key: String, color: String, replaced: String?) {
+        val palette = writingColors(key).toMutableList()
+        val index = replaced?.let(palette::indexOf) ?: -1
+        if (index >= 0) palette[index] = color
+        else if (color !in palette) palette.add(0, color)
+        val saved = settings.optJSONObject("writingPalettes") ?: JSONObject()
+        saved.put(key, JSONArray(palette.distinct().take(6)))
+        settings.put("writingPalettes", saved)
+    }
     private fun pasteSelection(){clipboard.forEach{inkView?.add(InkGeometry.transform(it,25f,25f).put("id",uid("obj")))}}
     private fun clearPage(){confirm("페이지 지우기","현재 페이지의 모든 필기를 지울까요?"){inkView?.let{v->v.currentPage?.objects?.filter{!it.optBoolean("locked")}?.let{v.changeObjects(it,emptyList())}}}}
     private fun applySettings(view:InkCanvasView){
         view.pdfDarkMode=settings.optBoolean("pdfDarkMode",false)
         view.stylusOnly=settings.optBoolean("stylusOnly",true);view.scribbleErase=settings.optBoolean("scribbleErase",true);view.drawHold=settings.optBoolean("drawHold",true)
-        view.continuous=document?.continuous(settings.optBoolean("continuous",true))?:settings.optBoolean("continuous",true);view.brush=settings.optString("brush","fountain");view.inkColor=settings.optString("inkColor","#111827");view.inkWidth=settings.f("inkWidth",4.2f)
+        view.continuous=document?.continuous(settings.optBoolean("continuous",true))?:settings.optBoolean("continuous",true);view.brush=settings.optString("brush","fountain");view.inkColor=savedInkColor(inkColorKey(view));view.inkWidth=savedInkWidth(inkWidthKey(view))
         view.eraserRadius=settings.f("eraserRadius",22f);view.highlighterWidth=settings.f("highlighterWidth",22f);view.penSettings=settings.optJSONObject("penSettings")?:defaultPenSettings(view.brush);view.preciseEraser=settings.optBoolean("preciseEraser",false)
         status.alpha=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f)
     }
@@ -943,11 +1124,39 @@ open class MainActivity:ComponentActivity(){
         val brushes=listOf("fountain","ballpoint","gel","brush","pencil","fineliner","calligraphy","marker")
         val titles=listOf("만년필","볼펜","젤펜","브러시","연필","파인라이너","캘리그래피","마커")
         val descriptions=listOf("필압과 진행 방향에 반응하는 만년필","압력 변화가 적은 균일한 볼펜","선명한 잉크 코어를 가진 젤펜","큰 굵기 변화와 테이퍼를 가진 브러시","흑연 입자, 압력 농도, 기울기 음영을 사용하는 새 연필 엔진","일정하고 가는 파인라이너","펜 방향에 따른 선 굵기 변화","굵고 일정한 마커")
-        brushes.take(6).forEachIndexed{i,id->menuItem(content,titles[i],if(id in listOf("fountain","ballpoint","brush","pencil"))id else "pen",descriptions[i]){
-            inkView?.let{view->val profiles=settings.optJSONObject("penProfiles")?:JSONObject();profiles.put(view.brush,view.penSettings.copyJson());view.brush=id;view.penSettings=profiles.optJSONObject(id)?.copyJson()?:defaultPenSettings(id);settings.put("penProfiles",profiles);settings.put("penSettings",view.penSettings);view.tool=InkCanvasView.Tool.PEN};settings.put("brush",id);saveSettings()}}
+        brushes.take(6).forEachIndexed { i, id ->
+            menuItem(content, titles[i], if (id in listOf("fountain", "ballpoint", "brush", "pencil")) id else "pen",
+                descriptions[i]) { selectBrush(id) }
+        }
     }
-    private fun colorMenu(selection:Boolean=false){
-        val view=inkView?:return;val content=showSheet("Color Mixer","색상 조합기",720);val hsv=FloatArray(3);Color.colorToHSV(ui.color(view.inkColor),hsv)
+
+    private fun selectBrush(brush: String) {
+        val view = inkView ?: return
+        if (view.brush != brush) {
+            val profiles = settings.optJSONObject("penProfiles") ?: JSONObject()
+            profiles.put(view.brush, view.penSettings.copyJson())
+            if (view.brush != "pencil") settings.put("lastPenBrush", view.brush)
+            view.brush = brush
+            view.penSettings = profiles.optJSONObject(brush)?.copyJson() ?: defaultPenSettings(brush)
+            settings.put("penProfiles", profiles)
+            settings.put("penSettings", view.penSettings)
+        }
+        settings.put("brush", brush)
+        if (brush != "pencil") settings.put("lastPenBrush", brush)
+        view.tool = InkCanvasView.Tool.PEN
+    }
+
+    private fun colorMenu(selection: Boolean = false, preset: String? = null, addPreset: Boolean = false) {
+        val view = inkView ?: return
+        val key = inkColorKey(view)
+        val title = when {
+            preset != null -> "팔레트 색상 수정"
+            addPreset -> "필기 색상 추가"
+            else -> "색상 조합기"
+        }
+        val content = showSheet("", title, 720)
+        val hsv = FloatArray(3)
+        Color.colorToHSV(runCatching { ui.color(preset ?: view.inkColor) }.getOrDefault(ui.ink), hsv)
         val narrow=resources.configuration.screenWidthDp<=840;val layout=if(narrow)ui.col()else ui.row().apply{gravity=Gravity.TOP};val left=ui.col();val right=ui.col()
         val preview=View(this).apply{background=ui.rounded(Color.HSVToColor(hsv),50f)}
         lateinit var spectrum:ClassicSpectrum;lateinit var hue:ClassicHue
@@ -957,6 +1166,17 @@ open class MainActivity:ComponentActivity(){
         val selected=ui.row().apply{setPadding(dp(9),dp(9),dp(9),dp(9));background=ui.rounded(ui.color("#f2f5f8"),13f)}
         selected.addView(preview,LinearLayout.LayoutParams(dp(39),dp(39)));val labels=ui.col();labels.addView(ui.text("현재 색상",12f,ui.ink,true));labels.addView(ui.text("색상판을 누르거나 아래 표에서 고르세요.",10.5f,ui.muted),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(3)})
         selected.addView(labels,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(12)});left.addView(selected)
+        if (addPreset || preset != null) {
+            right.addView(ui.text("현재 도구 팔레트", 12f, ui.ink, true))
+            val palette = ui.row()
+            for (value in writingColors(key)) {
+                palette.addView(ui.swatch(value) {
+                    Color.colorToHSV(ui.color(value), hsv)
+                    update()
+                })
+            }
+            right.addView(palette, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        }
         right.addView(ui.text("색상표",12f,ui.ink,true),LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(10)})
         val colors=listOf("#111827","#374151","#6b7280","#9ca3af","#d1d5db","#ffffff","#7f1d1d","#dc2626","#f97316","#f59e0b","#eab308","#84cc16","#166534","#16a34a","#10b981","#14b8a6","#06b6d4","#0ea5e9","#1e40af","#2563eb","#4f46e5","#7c3aed","#9333ea","#c026d3","#9d174d","#db2777","#f472b6","#fb7185","#fca5a5","#fecaca","#713f12","#a16207","#ca8a04","#d97706","#92400e","#78350f")
         val cell=if(narrow)(resources.configuration.screenWidthDp-34-35)/6 else 42
@@ -968,12 +1188,39 @@ open class MainActivity:ComponentActivity(){
         content.addView(layout,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8);bottomMargin=dp(18)})
         sheetActions(content,"적용", "check"){
             val color=String.format("#%06x",Color.HSVToColor(hsv) and 0xffffff)
-            if(selection){val selected=view.selected().filter{!it.optBoolean("locked")};view.changeObjects(selected,selected.map{it.copyJson().put("color",color)})}else{view.inkColor=color;settings.put(when(view.tool){InkCanvasView.Tool.HIGHLIGHTER->"highlighterColor";InkCanvasView.Tool.TAPE->"tapeColor";else->"inkColor"},color)}
+            if (selection) {
+                val selected = view.selected().filter { !it.optBoolean("locked") }
+                view.changeObjects(selected, selected.map { it.copyJson().put("color", color) })
+            } else {
+                view.inkColor = color
+                settings.put(key, color)
+                if (addPreset || preset != null) rememberWritingColor(key, color, preset)
+            }
             settings.put("recentColors",JSONArray((listOf(color)+(0 until recent.length()).map{recent.optString(it)}).distinct().take(20)));saveSettings();closeSheet();renderActiveDock()
         }
     }
-    private fun widthMenu(){val view=inkView?:return;val highlight=view.tool==InkCanvasView.Tool.HIGHLIGHTER
-        slider("굵기",((if(highlight)view.highlighterWidth else view.inkWidth)*10).toInt(),5,if(highlight)600 else 200){n->if(highlight)view.highlighterWidth=n/10f else{view.inkWidth=n/10f;settings.put("inkWidth",view.inkWidth);saveSettings()}}}
+    private fun widthMenu() {
+        val view = inkView ?: return
+        val limit = when (view.tool) {
+            InkCanvasView.Tool.ERASER -> 180
+            InkCanvasView.Tool.HIGHLIGHTER -> 120
+            else -> 80
+        }
+        var width = currentWidth()
+        val content = showSheet("", "굵기", 400)
+        val label = ui.text(widthText(width), 16f, workspaceAccent, true)
+        content.addView(label)
+        content.addView(range((width * 2).roundToInt(), 1, limit * 2) {
+            width = it / 2f
+            label.text = widthText(width)
+        }, LinearLayout.LayoutParams(-1, dp(44)))
+        sheetActions(content, "적용", "check") {
+            setCurrentWidth(width)
+            saveSettings()
+            closeSheet()
+            renderActiveDock()
+        }
+    }
     private fun eraserMenu(){choose("지우개",listOf("획 지우개","정밀 지우개","지우개 크기")){i->if(i<2){inkView?.preciseEraser=i==1;settings.put("preciseEraser",i==1);saveSettings()}else slider("지우개 크기",inkView?.eraserRadius?.toInt()?:22,3,80){inkView?.eraserRadius=it.toFloat()}}}
     private fun insertObject(tool:InkCanvasView.Tool,x:Float,y:Float){
         if(tool==InkCanvasView.Tool.TEXT){textEditor?.newBox(x,y);return}
@@ -1548,7 +1795,7 @@ open class MainActivity:ComponentActivity(){
     }
     private fun penSettingsSheet(){
         val view=inkView?:return;val content=showSheet("Writing Tool","펜 세부 설정",680)
-        val preview=object:View(this){val renderer=NoteRenderer();override fun onDraw(canvas:android.graphics.Canvas){canvas.drawColor(ui.color("#f9f7f2"));canvas.save();canvas.scale(width/760f,height/150f);val points=(40..720 step 8).map{x->val f=(x-40)/680f;InkPoint(x.toFloat(),76f+sin(f*PI*3).toFloat()*24f,.12f+sin(f*PI).toFloat()*.83f)};renderer.stroke(canvas,json("id" to "pen-preview","brush" to view.brush,"pencilTexture" to "graphite","color" to view.inkColor,"width" to view.inkWidth*2,"settings" to view.penSettings),points);canvas.restore()}}
+        val preview=object:View(this){val renderer=NoteRenderer();override fun onDraw(canvas:android.graphics.Canvas){canvas.drawColor(ui.color("#f9f7f2"));canvas.save();canvas.scale(width/760f,height/150f);val points=(40..720 step 8).map{x->val f=(x-40)/680f;InkPoint(x.toFloat(),76f+sin(f*PI*3).toFloat()*24f,.12f+sin(f*PI).toFloat()*.83f)};renderer.stroke(canvas,json("id" to "pen-preview","brush" to view.brush,"pencilTexture" to "graphite","graphiteVersion" to GraphiteBrush.CURRENT_VERSION,"color" to view.inkColor,"width" to view.inkWidth*2,"settings" to view.penSettings),points);canvas.restore()}}
         preview.background=ui.rounded(ui.color("#f9f7f2"),15f,ui.color("#dfe3e8"));preview.clipToOutline=true
         content.addView(preview,LinearLayout.LayoutParams(-1,dp(150)).apply{bottomMargin=dp(18)})
         val fields=if(view.brush=="pencil")listOf("hardness" to "펜촉 경도","grain" to "흑연 입자","tiltShade" to "기울기 음영","pressure" to "압력 민감도","smoothing" to "획 안정화","opacity" to "농도")else listOf("pressure" to "압력 민감도","sharpness" to "펜촉 선명도","smoothing" to "획 안정화","taper" to "시작·끝 테이퍼","opacity" to "불투명도")
@@ -1609,14 +1856,12 @@ open class MainActivity:ComponentActivity(){
     }
     private fun closeSheet(){
         modal?.let{root.removeView(it)};modal=null
-        if(Build.VERSION.SDK_INT>=31)body.setRenderEffect(null)
         (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.hideSoftInputFromWindow(root.windowToken,0)
     }
     private fun showSheet(eyebrow:String,title:String,width:Int=680):LinearLayout{
         closeSheet();inkView?.finishContact()
         val narrow=resources.configuration.screenWidthDp<=840
         val shade=FrameLayout(this).apply{setBackgroundColor(0x61000000);isClickable=true;setOnClickListener{closeSheet()}}
-        if(Build.VERSION.SDK_INT>=31)body.setRenderEffect(android.graphics.RenderEffect.createBlurEffect(dp(4).toFloat(),dp(4).toFloat(),android.graphics.Shader.TileMode.CLAMP))
         val scroll=ScrollView(this).apply{isFillViewport=false;isVerticalScrollBarEnabled=false;background=ui.rounded(Color.WHITE,22f);clipToOutline=true;elevation=dp(18).toFloat();isClickable=true;setOnClickListener{}}
         val content=ui.col().apply{setPadding(dp(if(narrow)17 else 22),dp(if(narrow)20 else 22),dp(if(narrow)17 else 22),dp(if(narrow)20 else 22));isClickable=true;setOnClickListener{}}
         val header=ui.row().apply{gravity=Gravity.TOP;minimumHeight=dp(56)};val labels=ui.col().apply{setPadding(0,dp(6),0,0)}

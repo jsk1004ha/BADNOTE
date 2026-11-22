@@ -6,6 +6,8 @@ import android.graphics.Color
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import org.json.JSONArray
 import java.io.File
 import kotlin.math.PI
@@ -24,12 +26,25 @@ internal object InkWorkspaceChecks {
             ready
         }
         lateinit var view: InkCanvasView
+        fun control(label: String): View {
+            fun find(view: View): View? {
+                if (view.contentDescription == label) return view
+                if (view is ViewGroup) for (i in 0 until view.childCount) {
+                    find(view.getChildAt(i))?.let { return it }
+                }
+                return null
+            }
+            return checkNotNull(find(activity.window.decorView)) { "Missing editor control $label" }
+        }
+        lateinit var undo: View
         ui {
             view = requireNotNull(activity.inkView)
             view.drawHold = true
             view.scribbleErase = true
             view.stylusOnly = true
             view.tool = InkCanvasView.Tool.PEN
+            undo = control("실행 취소")
+            check(!undo.isEnabled)
         }
         val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 1; toolType = MotionEvent.TOOL_TYPE_STYLUS })
         fun sample(action: Int, x: Float, y: Float, start: Long, tick: Long) {
@@ -53,6 +68,7 @@ internal object InkWorkspaceChecks {
             sample(MotionEvent.ACTION_UP, 440f, 330f, down, SystemClock.uptimeMillis())
             val held = view.currentPage!!.objects.single()
             check(held.optString("shape") == "line") { "A sparse held line wasn't converted" }
+            check(control("실행 취소") === undo && undo.isEnabled) { "Saving a stroke recreated the undo control" }
             val expectedWidth = LegacyBrush.toolStrokeWidthToPage(
                 (view.scale * 1000 / view.resources.displayMetrics.density).toDouble(), view.inkWidth.toDouble())
             check(kotlin.math.abs(held.getDouble("width") - expectedWidth) < .01)
@@ -174,6 +190,25 @@ internal object InkWorkspaceChecks {
             } == true
         }
         graphiteRaster()
+        graphitePreview()
+        ui {
+            val pen = view.brush
+            val penColor = view.inkColor
+            val penWidth = view.inkWidth
+            check(control("연필").performClick())
+            check(view.brush == "pencil" && control("연필").isSelected)
+            check(control("굵기 2").performClick())
+            check(view.inkWidth == 2f)
+            check(control("필기 색상 추가").performClick())
+            check(control("색상 #7f1d1d").performClick())
+            check(control("적용").performClick())
+            val pencilColor = view.inkColor
+            check(pencilColor == "#7f1d1d" && control(pencilColor).isSelected)
+            check(control("펜").performClick())
+            check(view.brush == pen && view.inkColor == penColor && view.inkWidth == penWidth)
+            check(control("연필").performClick())
+            check(view.inkColor == pencilColor && view.inkWidth == 2f && control(pencilColor).isSelected)
+        }
         val output = File.createTempFile("ink-workspace-", ".xopp", repository.workDirectory)
         try {
             // Shapes take the image fallback; exercise the Android parser and embedded PNG storage.
@@ -188,6 +223,35 @@ internal object InkWorkspaceChecks {
             output.delete()
             ui { activity.showLibrary() }
         }
+    }
+
+    private fun graphitePreview() {
+        val renderer = NoteRenderer()
+        val publication = InkPointPublication()
+        val points = (0..80).map { i ->
+            InkPoint(20f + i * 3, 66f + 22f * sin(i / 9.0).toFloat(), .4f + i / 200f, ty = 43f)
+        }
+        val stroke = json("id" to "graphite-preview", "type" to "stroke", "brush" to "pencil",
+            "pencilTexture" to "graphite", "width" to 6, "color" to "#262a30",
+            "graphiteVersion" to GraphiteBrush.CURRENT_VERSION)
+        val bitmap = Bitmap.createBitmap(280, 130, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(bitmap)
+            val live = IntArray(bitmap.width * bitmap.height)
+            val committed = IntArray(live.size)
+            for ((i, point) in points.withIndex()) {
+                publication.append(point)
+                if (i !in setOf(0, 1, 2, 17, 39, points.lastIndex)) continue
+                bitmap.eraseColor(Color.WHITE)
+                renderer.stroke(canvas, stroke, publication.snapshot(), 1.0)
+                bitmap.getPixels(live, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                bitmap.eraseColor(Color.WHITE)
+                val saved = stroke.copyJson().put("points", JSONArray(points.take(i + 1).map(InkPoint::json)))
+                renderer.draw(canvas, saved, 1.0)
+                bitmap.getPixels(committed, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                check(live.contentEquals(committed)) { "Saved graphite changed at sample $i" }
+            }
+        } finally { bitmap.recycle() }
     }
 
     private fun graphiteRaster() {
