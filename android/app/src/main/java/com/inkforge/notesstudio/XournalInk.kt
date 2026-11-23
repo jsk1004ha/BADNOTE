@@ -15,6 +15,7 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 import javax.xml.parsers.SAXParserFactory
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /** Xournal and Xournal++ store page coordinates and pen widths in points. */
 internal object XournalInk {
@@ -262,9 +263,16 @@ internal object XournalInk {
         val base = obj.f("width", 4f) * scale
         val highlighter = obj.optString("brush") == "highlighter"
         val color = rgb(obj.optString("color"))
+        val defaultOpacity = when (obj.optString("brush")) {
+            "highlighter" -> .28
+            "marker", "fineliner" -> .98
+            else -> obj.optJSONObject("settings")?.optDouble("opacity", 1.0)?.takeIf { it.isFinite() } ?: 1.0
+        }
+        val opacity = obj.optDouble("opacity", defaultOpacity).takeIf { it.isFinite() } ?: defaultOpacity
+        val alpha = (opacity.coerceIn(0.0, 1.0) * 255).roundToInt().toString(16).padStart(2, '0')
         val cap = if (external && obj.optString("strokeCap") == "butt" || !external && highlighter) "butt" else "round"
         out.write("<stroke tool=\"${if (highlighter) "highlighter" else "pen"}\" " +
-            "color=\"$color${if (highlighter) "7f" else "ff"}\" capStyle=\"$cap\" width=\"$base")
+            "color=\"$color$alpha\" capStyle=\"$cap\" width=\"$base")
         if (points.size > 1 && !highlighter) for (i in 0 until widths.lastIndex) {
             val width = if (external) widths[i] else (widths[i] + widths[i + 1]) / 2
             out.write(" " + (width * scale).coerceAtLeast(.01))

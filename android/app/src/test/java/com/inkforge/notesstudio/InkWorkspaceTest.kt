@@ -145,10 +145,10 @@ class InkWorkspaceTest {
         val input = """
             <xournal version="0.4.8"><title>Two pages</title>
             <page width="600" height="800"><background type="solid" style="graph" color="#f4f2eaff"/><layer>
-            <stroke tool="pen" color="#182233ff" width="3 1 2">60 80 120 60 300 400</stroke>
+            <stroke tool="pen" color="#182233a4" width="3 1 2">60 80 120 60 300 400</stroke>
             </layer></page>
             <page width="500" height="500"><background type="solid" style="plain" color="white"/><layer>
-            <stroke tool="highlighter" color="#ffff007f" capStyle="butt" width="8">25 50 375 50</stroke>
+            <stroke tool="highlighter" color="#ffff0052" capStyle="butt" width="8">25 50 375 50</stroke>
             </layer></page></xournal>
         """.trimIndent()
         val pages = parse(input.byteInputStream())
@@ -165,6 +165,8 @@ class InkWorkspaceTest {
         XournalInk.write(output, "두 쪽 & 검증", pages.asSequence(), { error("editable strokes were flattened") })
         val reopened = parse(output.toByteArray().inputStream())
         assertEquals(listOf("#182233", "#ffff00"), reopened.map { it.objects.single().getString("color") })
+        assertEquals(164 / 255.0, reopened.first().objects.single().getDouble("opacity"), .0001)
+        assertEquals(82 / 255.0, reopened.last().objects.single().getDouble("opacity"), .0001)
         assertEquals("highlighter", reopened.last().objects.single().getString("brush"))
         assertEquals("butt", reopened.last().objects.single().getString("strokeCap"))
         assertEquals(300.0, reopened.first().objects.single().array("points").getJSONObject(2).getDouble("x") * .6, .001)

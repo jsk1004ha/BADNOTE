@@ -97,13 +97,28 @@ class ProductivityInstrumentation : Instrumentation() {
                 val save = MainActivity::class.java.getDeclaredMethod("saveSettings").apply { isAccessible = true }
                 (field.get(a) as org.json.JSONObject).put("pdfDarkMode", true); save.invoke(a)
                 (field.get(b) as org.json.JSONObject).put("stylusOnly", false); save.invoke(b)
+                val savePen = MainActivity::class.java.getDeclaredMethod("savePenSettings", InkCanvasView::class.java)
+                    .apply { isAccessible = true }
+                val firstCanvas = requireNotNull(a.inkView)
+                firstCanvas.brush = "ballpoint"
+                firstCanvas.penSettings = json("opacity" to .61)
+                savePen.invoke(a, firstCanvas)
+                val secondCanvas = requireNotNull(b.inkView)
+                secondCanvas.brush = "pencil"
+                secondCanvas.penSettings = json("opacity" to .73)
+                savePen.invoke(b, secondCanvas)
             }
             await("independent preference changes") { ordered(repository) {
                 val preferences = org.json.JSONObject(repository.setting("preferences"))
-                preferences.optBoolean("pdfDarkMode") && !preferences.optBoolean("stylusOnly", true)
+                val profiles = preferences.optJSONObject("penProfiles")
+                preferences.optBoolean("pdfDarkMode") && !preferences.optBoolean("stylusOnly", true) &&
+                    profiles?.optJSONObject("ballpoint")?.optDouble("opacity") == .61 &&
+                    profiles?.optJSONObject("pencil")?.optDouble("opacity") == .73
             } }
             ui {
                 b.inkView!!.requestFocus()
+                press(b, KeyEvent.KEYCODE_1)
+                check(b.inkView!!.tool == InkCanvasView.Tool.PEN && b.inkView!!.brush != "pencil")
                 press(b, KeyEvent.KEYCODE_2)
                 check(b.inkView!!.tool == InkCanvasView.Tool.HIGHLIGHTER)
                 press(b, KeyEvent.KEYCODE_Z, KeyEvent.META_CTRL_ON)

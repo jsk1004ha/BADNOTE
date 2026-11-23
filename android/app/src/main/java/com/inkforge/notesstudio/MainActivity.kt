@@ -210,12 +210,25 @@ open class MainActivity:ComponentActivity(){
             JSONObject(it.readText()).optJSONObject(language)}}.getOrNull()
         additions?.keys()?.forEach{key->if(!dictionary.has(key))dictionary.put(key,additions.getString(key))}
     }
-    private fun saveSettings(){
+    private fun saveSettings() = saveSettings(null)
+    private fun saveSettings(editedPenBrush: String?){
         val copy=settings.copyJson()
         val changed=copy.keys().asSequence().filter{copy.opt(it)?.toString()!=settingsBaseline.opt(it)?.toString()}.toList()
         settingsBaseline=copy.copyJson()
-        enqueueSave({val latest=JSONObject(repository.setting("preferences",repository.setting("appSettings","{}")));changed.forEach{latest.put(it,copy.opt(it))}
-            repository.setting("preferences",latest.toString(),true)})
+        enqueueSave({
+            val latest=JSONObject(repository.setting("preferences",repository.setting("appSettings","{}")))
+            changed.filterNot { it == "penProfiles" }.forEach { latest.put(it,copy.opt(it)) }
+            if ("penProfiles" in changed || editedPenBrush != null) {
+                val local = requireNotNull(copy.optJSONObject("penProfiles"))
+                val merged = latest.optJSONObject("penProfiles") ?: JSONObject()
+                local.keys().forEach { brush ->
+                    // Switching tools can seed a legacy profile; only an actual edit replaces one.
+                    if (brush == editedPenBrush || !merged.has(brush)) merged.put(brush, local.get(brush))
+                }
+                latest.put("penProfiles", merged)
+            }
+            repository.setting("preferences",latest.toString(),true)
+        })
     }
     private fun startMigration(){
         setBusy(true,"기존 노트를 이전하고 있습니다. 원본 데이터는 유지됩니다.")
@@ -718,8 +731,7 @@ open class MainActivity:ComponentActivity(){
         val usingPen = view.tool == InkCanvasView.Tool.PEN && view.brush != "pencil"
         val pen = icon(center, "pen", "펜", usingPen) {
             if (usingPen) penSettingsSheet()
-            else selectBrush(if (view.brush != "pencil") view.brush
-                else settings.optString("lastPenBrush", "fountain").takeUnless { it == "pencil" || it.isBlank() } ?: "fountain")
+            else selectPen()
         }
         if (usingPen) selectedTool = pen
         tool("eraser","지우개",InkCanvasView.Tool.ERASER)
@@ -1130,6 +1142,12 @@ open class MainActivity:ComponentActivity(){
         }
     }
 
+    private fun selectPen() {
+        val current = inkView?.brush ?: return
+        val previous = settings.optString("lastPenBrush", "fountain")
+        selectBrush(if (current != "pencil") current else previous.takeUnless { it == "pencil" || it.isBlank() } ?: "fountain")
+    }
+
     private fun selectBrush(brush: String) {
         val view = inkView ?: return
         if (view.brush != brush) {
@@ -1304,7 +1322,7 @@ open class MainActivity:ComponentActivity(){
     private fun uriName(uri: Uri): String =
         contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: uri.lastPathSegment ?: "가져온 노트"
-    private fun importUri(uri:Uri,mode:String){
+    private fun importUri(uri:Uri,mode:String,sharedType:String?=null){
         val targetFolder = folder
         val target=document;val index=(inkView?.currentIndex?:0)+1
         val owner=java.lang.ref.WeakReference(this)
@@ -1330,7 +1348,7 @@ open class MainActivity:ComponentActivity(){
             }
         } else work("파일을 가져오는 중…", {
             val name = uriName(uri)
-            val mime = contentResolver.getType(uri)
+            val mime = contentResolver.getType(uri)?.takeUnless { it == "application/octet-stream" } ?: sharedType
             val format = if (mode == "pdf" || mode == "appendPdf") NoteInterchange.Format.PDF
                 else NoteInterchange.format(name, mime)
             val title = NoteInterchange.title(name)
@@ -1374,13 +1392,14 @@ open class MainActivity:ComponentActivity(){
         val uri = when (intent?.action) {
             Intent.ACTION_SEND -> {
                 @Suppress("DEPRECATION")
-                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+                (intent.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? Uri)
+                    ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
             }
             Intent.ACTION_VIEW -> intent.data
             else -> return
         }
         intent.action = Intent.ACTION_MAIN
-        if (uri?.scheme == android.content.ContentResolver.SCHEME_CONTENT) importUri(uri, "note")
+        if (uri?.scheme == android.content.ContentResolver.SCHEME_CONTENT) importUri(uri, "note", intent.type)
     }
     private fun closeSearchDrawer(){
         documentSearch?.cancel()
@@ -1801,11 +1820,18 @@ open class MainActivity:ComponentActivity(){
         val fields=if(view.brush=="pencil")listOf("hardness" to "펜촉 경도","grain" to "흑연 입자","tiltShade" to "기울기 음영","pressure" to "압력 민감도","smoothing" to "획 안정화","opacity" to "농도")else listOf("pressure" to "압력 민감도","sharpness" to "펜촉 선명도","smoothing" to "획 안정화","taper" to "시작·끝 테이퍼","opacity" to "불투명도")
         fields.chunked(if(resources.configuration.screenWidthDp<=840)1 else 2).forEach{group->val row=ui.row().apply{gravity=Gravity.TOP}
             group.forEachIndexed{i,(key,title)->val field=ui.col();val line=ui.row();line.addView(ui.text(title,12f,ui.color("#4d535b"),true),LinearLayout.LayoutParams(0,-2,1f));val value=(view.penSettings.f(key,defaultPenSettings(view.brush).f(key))*100).roundToInt();val output=ui.text("$value%",11f,ui.color("#617182"));line.addView(output);field.addView(line)
-                field.addView(range(value,if(key=="opacity")20 else 0,if(key=="smoothing")90 else 100){v->view.penSettings.put(key,v/100f);settings.put("penSettings",view.penSettings);output.text="$v%";preview.invalidate();saveSettings()},LinearLayout.LayoutParams(-1,dp(28)).apply{topMargin=dp(6)})
+                field.addView(range(value,if(key=="opacity")20 else 0,if(key=="smoothing")90 else 100){v->view.penSettings.put(key,v/100f);output.text="$v%";preview.invalidate();savePenSettings(view)},LinearLayout.LayoutParams(-1,dp(28)).apply{topMargin=dp(6)})
                 row.addView(field,LinearLayout.LayoutParams(0,-2,1f).apply{if(i>0)leftMargin=dp(18)})}
             if(group.size==1&&resources.configuration.screenWidthDp>840)row.addView(View(this),LinearLayout.LayoutParams(0,1,1f).apply{leftMargin=dp(18)})
             content.addView(row,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(14)})}
-        val actions=ui.row().apply{gravity=Gravity.RIGHT};actions.addView(ui.button("기본값"){view.penSettings=defaultPenSettings(view.brush);settings.put("penSettings",view.penSettings);saveSettings();penSettingsSheet()});actions.addView(ui.button("완료",ui.accent,Color.WHITE,icon="check"){closeSheet()},LinearLayout.LayoutParams(-2,dp(42)).apply{leftMargin=dp(9)});content.addView(actions,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(16)})
+        val actions=ui.row().apply{gravity=Gravity.RIGHT};actions.addView(ui.button("기본값"){view.penSettings=defaultPenSettings(view.brush);savePenSettings(view);penSettingsSheet()});actions.addView(ui.button("완료",ui.accent,Color.WHITE,icon="check"){closeSheet()},LinearLayout.LayoutParams(-2,dp(42)).apply{leftMargin=dp(9)});content.addView(actions,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(16)})
+    }
+    private fun savePenSettings(view: InkCanvasView) {
+        settings.put("penSettings", view.penSettings)
+        val profiles = settings.optJSONObject("penProfiles") ?: JSONObject()
+        profiles.put(view.brush, view.penSettings.copyJson())
+        settings.put("penProfiles", profiles)
+        saveSettings(view.brush)
     }
     private fun defaultPenSettings(brush:String):JSONObject{
         val values=when(brush){"ballpoint"->listOf(.08,.48,.1,.12,1.0);"gel"->listOf(.16,.45,.2,.2,1.0);"brush"->listOf(.95,.28,.35,.72,.96);"pencil"->listOf(.7,.26,0.0,0.0,.78);"fineliner"->listOf(.02,.6,.85,.06,.98);else->listOf(.76,.35,.58,.42,1.0)}
@@ -1937,6 +1963,7 @@ open class MainActivity:ComponentActivity(){
         view.finishContact()
         when(action){EditorShortcuts.Action.UNDO->view.undo();EditorShortcuts.Action.REDO->view.redo()
             EditorShortcuts.Action.SAVE->{view.finishContact();afterSaved{message("저장됨")}}
+            EditorShortcuts.Action.PEN->selectPen()
             else->view.tool=InkCanvasView.Tool.valueOf(action.name)}
     }
     override fun onKeyDown(keyCode:Int,event:KeyEvent):Boolean{
