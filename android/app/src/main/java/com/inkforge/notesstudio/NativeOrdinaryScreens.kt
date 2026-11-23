@@ -57,7 +57,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
     onNewNote: (String) -> Unit, onImport: () -> Unit, onDocument: (String) -> Unit, onDocumentMenu: (String) -> Unit,
     onFavorite: (String) -> Unit, onSelect: (String) -> Unit, onSelectionMode: () -> Unit,
     onSelectedTrash: () -> Unit, onSort: () -> Unit, onListMode: () -> Unit,
-    onSettings: () -> Unit) {
+    onSettings: () -> Unit, updateNotice: @Composable () -> Unit) {
     val visible = remember(documents, state.query, state.folder, state.filter, state.sortByTitle, state.ocrMatches) {
         documents.filter { item ->
             val doc = item.document
@@ -100,14 +100,17 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                 contentPadding = PaddingValues(top = if (state.narrow) 10.dp else 14.dp, bottom = if (state.narrow) 92.dp else 72.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(state.title, color = libraryText, fontSize = 22.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier)
-                        Text("${if (state.filter == "templates") 6 else visible.size}${translate("개")}", color = libraryMuted,
-                            fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 10.dp))
-                        IconAction("search", translate("노트 검색"), icon, Modifier.size(44.dp)) { onSearch() }
-                        Spacer(Modifier.width(6.dp))
-                        IconAction("settings", translate("설정"), icon, Modifier.size(44.dp)) { onSettings() }
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(state.title, color = libraryText, fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier)
+                            Text("${if (state.filter == "templates") 6 else visible.size}${translate("개")}", color = libraryMuted,
+                                fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 10.dp))
+                            IconAction("search", translate("노트 검색"), icon, Modifier.size(44.dp)) { onSearch() }
+                            Spacer(Modifier.width(6.dp))
+                            IconAction("settings", translate("설정"), icon, Modifier.size(44.dp)) { onSettings() }
+                        }
+                        updateNotice()
                     }
                 }
                 if (state.searchOpen || state.query.isNotBlank()) item {

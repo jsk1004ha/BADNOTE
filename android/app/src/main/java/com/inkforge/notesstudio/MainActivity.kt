@@ -59,7 +59,12 @@ open class MainActivity:ComponentActivity(){
     private lateinit var audio:AudioController
     private val recognition by lazy { RecognitionService((getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass<=128) }
     private lateinit var pageOcr:PageOcrCoordinator
-    private val network=Executors.newSingleThreadExecutor()
+    private val updates by lazy {
+        AppUpdateController(this) { install ->
+            inkView?.finishContact()
+            afterSaved(install)
+        }
+    }
     private val backupWorker=Executors.newSingleThreadExecutor()
     private var backupCancel:java.util.concurrent.atomic.AtomicBoolean?=null
     private val app get()=application as NoteApplication
@@ -178,7 +183,18 @@ open class MainActivity:ComponentActivity(){
         blocker=column().apply{gravity=Gravity.CENTER;setBackgroundColor(0xeef5f7fa.toInt());isClickable=true;visibility=View.GONE}
         blockerLabel=text("처리 중…",18);blocker.addView(ProgressBar(this));blocker.addView(blockerLabel)
         blocker.addView(button("취소"){}.apply{setOnClickListener{backupCancel?.set(true);if(::fileExport.isInitialized)fileExport.cancel()}})
-        root.addView(blocker,FrameLayout.LayoutParams(-1,-1));setContentView(root)
+        root.addView(blocker,FrameLayout.LayoutParams(-1,-1))
+        // The Compose host owns the updater's separate Dialog window.
+        val updateDialog = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setContent {
+                NativeAppUpdateDialog(updates.visible, updates.state,
+                    "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", ::t, ui::icon,
+                    updates::dismiss, updates::primaryAction, updates::cancelDownload)
+            }
+        }
+        root.addView(updateDialog, FrameLayout.LayoutParams(0, 0))
+        setContentView(root)
     }
     private fun dp(value:Int)=(value*resources.displayMetrics.density).roundToInt()
     private fun dp(value:Float)=(value*resources.displayMetrics.density).roundToInt()
@@ -459,7 +475,10 @@ open class MainActivity:ComponentActivity(){
                     settings.put("listMode", listMode)
                     saveSettings()
                 },
-                onSettings={showSettings()}) }
+                onSettings={showSettings()},
+                updateNotice={
+                    NativeAppUpdateNotice(updates.notice, ::t, ui::icon, updates::openNotice, updates::dismissNotice)
+                }) }
         }
         body.addView(compose,LinearLayout.LayoutParams(-1,0,1f))
         refreshLibrarySearch = { searchOcrMatches(query) }
@@ -1869,10 +1888,7 @@ open class MainActivity:ComponentActivity(){
                     onBackupEnabled = ::setAutoBackup,
                     onBackupNow = ::runBackupNow,
                     onCancelBackup = { backupCancel?.set(true) },
-                    onUpdate = {
-                        closeSheet()
-                        checkUpdates()
-                    },
+                    onUpdate = updates::open,
                     onClose = ::closeSettings
                 )
             }
@@ -2129,14 +2145,6 @@ open class MainActivity:ComponentActivity(){
         val values=when(brush){"ballpoint"->listOf(.08,.48,.1,.12,1.0);"gel"->listOf(.16,.45,.2,.2,1.0);"brush"->listOf(.95,.28,.35,.72,.96);"pencil"->listOf(.7,.26,0.0,0.0,.78);"fineliner"->listOf(.02,.6,.85,.06,.98);else->listOf(.76,.35,.58,.42,1.0)}
         return json("pressure" to values[0],"smoothing" to values[1],"sharpness" to values[2],"taper" to values[3],"opacity" to values[4],"hardness" to .58,"grain" to .66,"tiltShade" to .82)
     }
-    private fun checkUpdates(){status.text=t("업데이트 확인 중…");network.execute{
-        try{val updater=AppUpdater(this);val release=updater.latest();runOnUiThread{
-            if(release==null)message("최신 버전입니다.")else confirm("${release.version} 업데이트","업데이트 파일을 내려받을까요?"){
-                setBusy(true,"업데이트 다운로드 중…");network.execute{try{val file=updater.download(release);runOnUiThread{setBusy(false);confirm("업데이트 설치","Android 설치 화면을 엽니다."){updater.install(file)}}}
-                catch(e:Exception){runOnUiThread{setBusy(false);message(e.message?:"업데이트 실패")}}}
-            }
-        }}catch(e:Exception){runOnUiThread{message(e.message?:"업데이트 확인 실패")}}
-    }}
     private fun showPagePopover(anchor:View,title:String):LinearLayout{
         closeSheet();inkView?.finishContact()
         val shade=FrameLayout(this).apply{isClickable=true;setOnClickListener{closeSheet()}}
@@ -2306,7 +2314,11 @@ open class MainActivity:ComponentActivity(){
             hasHadWindowFocus = true
         }
     }
-    override fun onResume(){super.onResume();if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}}
+    override fun onResume(){
+        super.onResume()
+        if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}
+        updates.onResume(this !is DocumentActivity)
+    }
     override fun onPause(){textEditor?.finish();pageGrid?.cancelDrag();ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
         if(::pageOcr.isInitialized){pageOcr.setActive(false);recognition.setActive(false)}
         inkView?.finishContact();ocrTask?.let{handler.removeCallbacks(it)};if(audio.recording)stopRecording();super.onPause()}
@@ -2331,7 +2343,7 @@ open class MainActivity:ComponentActivity(){
         documentSearch?.close();documentSearch=null;pageGrid?.dispose();pageGrid=null;thumbnails.close();ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
         backupCancel?.set(true);backupWorker.shutdown();afterSaved{app.windows.releaseAll(this)}
         if(saveFailed){pendingRecordings.forEach(audio::discardPending);pendingRecordings.clear()}
-        audio.close();recognition.close();network.shutdown();super.onDestroy()}
+        audio.close();recognition.close();updates.dispose();super.onDestroy()}
     companion object{
         const val REQUEST_IMPORT=4180;const val REQUEST_AUDIO=4181;const val REQUEST_BACKUP_FOLDER=4182
         internal fun saveCalculatedVariable(repository:NoteRepository,documentId:String,name:String,value:Double){

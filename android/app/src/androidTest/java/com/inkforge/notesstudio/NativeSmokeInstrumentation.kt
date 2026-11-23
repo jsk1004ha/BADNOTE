@@ -124,6 +124,10 @@ class NativeSmokeInstrumentation:Instrumentation(){
                 SettingsSheetChecks.run(this, result)
                 result.putString("passed", "true"); finish(0, result); return
             }
+            if (localChecks?.getString("appUpdateScreenOnly") == "true") {
+                NativeAppUpdateChecks.run(this, result)
+                result.putString("passed", "true"); finish(0, result); return
+            }
             if (localChecks?.getString("libraryPresentationOnly") == "true") {
                 LibraryPresentationChecks.run(this, result, localChecks?.getString("expectStableLibrary") == "true")
                 result.putString("passed", "true"); finish(0, result); return
