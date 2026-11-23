@@ -90,10 +90,14 @@ internal class AppUpdateController(
             UpdateStage.AVAILABLE, UpdateStage.DOWNLOAD_FAILED -> state.release?.let(::download)
             UpdateStage.READY, UpdateStage.INSTALL_FAILED -> install()
             UpdateStage.INSTALL_PERMISSION -> {
-                try {
-                    activity.startActivity(updater.installSettings())
-                } catch (error: Exception) {
-                    failed(UpdateStage.INSTALL_FAILED, error)
+                if (updater.canInstall()) {
+                    state = state.copy(stage = UpdateStage.READY)
+                } else {
+                    try {
+                        activity.startActivity(updater.installSettings())
+                    } catch (error: Exception) {
+                        failed(UpdateStage.INSTALL_FAILED, error)
+                    }
                 }
             }
             UpdateStage.CHECKING, UpdateStage.DOWNLOADING -> Unit

@@ -84,6 +84,13 @@ internal object NativeAppUpdateChecks {
                 (node.text ?: node.contentDescription)?.toString()?.let(labels::add)
                 false
             }
+            checkNotNull(automation.takeScreenshot()).let { bitmap ->
+                try {
+                    File(context.filesDir, "app-update-checks/failure.png").outputStream().use {
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                } finally { bitmap.recycle() }
+            }
             error("App update check timed out: $label; stage=${screen.stage}, " +
                 "actions=${primaryActions.get()}, visible=${labels.take(18)}")
         }

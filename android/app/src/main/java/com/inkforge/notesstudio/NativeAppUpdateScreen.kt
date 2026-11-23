@@ -88,7 +88,10 @@ internal fun NativeAppUpdateDialog(
                     UpdateReleaseNotes(state.release, translate)
                 }
                 Spacer(Modifier.height(22.dp))
-                UpdateActions(state.stage, translate, onDismiss, onPrimary, onCancelDownload)
+                // Replace the previous action's focus and accessibility node when its meaning changes.
+                key(state.stage) {
+                    UpdateActions(state.stage, translate, onDismiss, onPrimary, onCancelDownload)
+                }
             }
         }
     }
@@ -158,7 +161,10 @@ private fun UpdateHeader(
             Text(
                 translate(titleFor(state.stage)), color = updateInk, fontSize = 21.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.semantics { heading(); liveRegion = LiveRegionMode.Polite }
+                modifier = Modifier.semantics {
+                    heading()
+                    liveRegion = LiveRegionMode.Polite
+                }
             )
             if (description != null) {
                 Text(description, color = if (state.stage in failureStages) updateDanger else updateMuted,
@@ -192,7 +198,7 @@ private fun UpdateStatus(
                 Text(installedVersion, color = updateInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
             if (release != null) {
-                UpdateGlyph("arrow", updateMuted.toArgb(), 20, icon)
+                UpdateGlyph("chevron-right", updateMuted.toArgb(), 20, icon)
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(translate("새 버전"), color = updateMuted, fontSize = 11.sp)
                     Text(releaseLabel(release, translate), color = updateAccent, fontSize = 15.sp, fontWeight = FontWeight.Bold)
@@ -274,6 +280,7 @@ private fun UpdatePrimaryButton(label: String, modifier: Modifier, onClick: () -
     Button(
         onClick = onClick, modifier = modifier.heightIn(min = 48.dp),
         colors = ButtonDefaults.buttonColors(containerColor = updateAccent, contentColor = Color.White),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp),
         shape = RoundedCornerShape(14.dp)
     ) {
         Text(label, fontWeight = FontWeight.Bold)

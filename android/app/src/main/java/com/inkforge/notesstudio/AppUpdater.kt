@@ -151,7 +151,7 @@ internal class AppUpdater(private val context: Context) {
                 build = tag.substringAfter('+', "").toIntOrNull(),
                 url = url,
                 size = asset.optLong("size").coerceAtLeast(0),
-                notes = data.optString("body", "").take(12_000).trim(),
+                notes = if (data.isNull("body")) "" else data.getString("body").take(12_000).trim(),
                 sha256 = digest
             )
         }
