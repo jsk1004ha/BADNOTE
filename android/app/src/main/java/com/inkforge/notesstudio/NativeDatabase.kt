@@ -13,7 +13,12 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Entity(tableName = "documents")
-data class DocumentRow(@PrimaryKey val id: String, val body: String, val updated: Long)
+data class DocumentRow(
+    @PrimaryKey val id: String,
+    val body: String,
+    val updated: Long,
+    @ColumnInfo(name = "content_updated_at") val contentUpdatedAt: Long?
+)
 
 @Entity(tableName = "pages", foreignKeys = [ForeignKey(
     entity = DocumentRow::class, parentColumns = ["id"], childColumns = ["document_id"], onDelete = ForeignKey.CASCADE
@@ -64,7 +69,7 @@ data class OcrCacheRow(@PrimaryKey @ColumnInfo(name = "content_key") val content
 
 @Database(entities = [DocumentRow::class, PageRow::class, ObjectRow::class, SettingRow::class,
     PageGenerationRow::class, OcrPageStateRow::class, OcrRegionRow::class,
-    OcrCorrectionRow::class, OcrCacheRow::class], version = 2, exportSchema = false)
+    OcrCorrectionRow::class, OcrCacheRow::class], version = 3, exportSchema = false)
 abstract class NativeDatabase : RoomDatabase() {
     companion object {
         const val NAME = "badnote-native.db"
@@ -113,6 +118,13 @@ abstract class NativeDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // The old write timestamp also includes navigation and settings changes.
+                db.execSQL("ALTER TABLE documents ADD COLUMN content_updated_at INTEGER")
+            }
+        }
+
         private fun createOcrTables(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS page_generation(page_id TEXT NOT NULL PRIMARY KEY,generation INTEGER NOT NULL,next_capture_seq INTEGER NOT NULL,FOREIGN KEY(page_id) REFERENCES pages(id) ON DELETE CASCADE ON UPDATE NO ACTION)")
             db.execSQL("CREATE TABLE IF NOT EXISTS ocr_page_state(page_id TEXT NOT NULL PRIMARY KEY,document_id TEXT NOT NULL,generation INTEGER NOT NULL,digest TEXT NOT NULL,status TEXT NOT NULL,body TEXT NOT NULL,FOREIGN KEY(page_id) REFERENCES pages(id) ON DELETE CASCADE ON UPDATE NO ACTION)")
@@ -124,6 +136,6 @@ abstract class NativeDatabase : RoomDatabase() {
 
         fun open(context: Context, name: String = NAME): NativeDatabase = Room.databaseBuilder(
             context.applicationContext, NativeDatabase::class.java, name
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     }
 }

@@ -45,6 +45,8 @@
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/x-xopp" />
                 <data android:mimeType="application/x-xoj" />
+                <data android:mimeType="application/x-goodnotes" />
+                <data android:mimeType="application/vnd.goodnotes" />
                 <data android:mimeType="image/*" />
             </intent-filter>
             <intent-filter>
@@ -54,6 +56,8 @@
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/x-xopp" />
                 <data android:mimeType="application/x-xoj" />
+                <data android:mimeType="application/x-goodnotes" />
+                <data android:mimeType="application/vnd.goodnotes" />
             </intent-filter>
         </activity>
         <activity

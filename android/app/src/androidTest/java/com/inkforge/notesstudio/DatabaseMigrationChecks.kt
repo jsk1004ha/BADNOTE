@@ -9,6 +9,9 @@ object DatabaseMigrationChecks {
     fun run(context: Context) {
         val name = "ocr-migration-" + UUID.randomUUID() + ".db"
         val path = context.getDatabasePath(name)
+        val originalCreated = 1_579_089_600_000L
+        val originalUpdated = "2021-06-20T14:34:56.789+02:00"
+        val originalBody = """{"unknown":{"keep":true},"createdAt":$originalCreated,"updatedAt":"$originalUpdated"}"""
         path.parentFile?.mkdirs()
         try {
             SQLiteDatabase.openOrCreateDatabase(path, null).use { old ->
@@ -18,7 +21,7 @@ object DatabaseMigrationChecks {
                 old.execSQL("CREATE TABLE objects(id TEXT NOT NULL,page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,position INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(page_id,id))")
                 old.execSQL("CREATE INDEX object_order ON objects(page_id,position)")
                 old.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY,body TEXT NOT NULL)")
-                old.execSQL("INSERT INTO documents VALUES('d','{\"unknown\":{\"keep\":true}}',7)")
+                old.execSQL("INSERT INTO documents VALUES('d',?,7)", arrayOf(originalBody))
                 old.execSQL("INSERT INTO documents VALUES(NULL,'{\"orphan\":\"untouched\"}',8)")
                 old.execSQL("INSERT INTO pages VALUES('p','d',4,'{\"width\":1000,\"newerField\":9}')")
                 old.execSQL("INSERT INTO objects VALUES('z','p',3,'{\"id\":\"z\",\"points\":[{\"x\":1,\"p\":0}]}')")
@@ -30,9 +33,9 @@ object DatabaseMigrationChecks {
             val room = NativeDatabase.open(context, name)
             try {
                 val db = room.openHelper.writableDatabase
-                check(db.version == 2)
-                db.query("SELECT body,updated FROM documents WHERE id='d'").use {
-                    check(it.moveToFirst() && it.getString(0) == "{\"unknown\":{\"keep\":true}}" && it.getLong(1) == 7L)
+                check(db.version == 3)
+                db.query("SELECT body,updated,content_updated_at FROM documents WHERE id='d'").use {
+                    check(it.moveToFirst() && it.getString(0) == originalBody && it.getLong(1) == 7L && it.isNull(2))
                 }
                 db.query("SELECT position,body FROM pages WHERE id='p'").use {
                     check(it.moveToFirst() && it.getInt(0) == 4 && it.getString(1) == "{\"width\":1000,\"newerField\":9}")
@@ -55,6 +58,14 @@ object DatabaseMigrationChecks {
                 db.query("SELECT COUNT(*) FROM ocr_page_state").use { check(it.moveToFirst() && it.getInt(0) == 0) }
             } finally { room.close() }
             NoteRepository(context, name).use { repository ->
+                check(repository.libraryDocuments().single().modifiedAtMillis == 1_624_192_496_789L)
+                repository.putDocument(DocumentInfo("fallback", json("updatedAt" to "invalid", "createdAt" to originalCreated)))
+                repository.putDocument(DocumentInfo("missing", json()))
+                val dates = repository.libraryDocuments()
+                check(dates.map { it.document.id } == listOf("d", "fallback", "missing"))
+                check(dates[1].modifiedAtMillis == originalCreated && dates[2].modifiedAtMillis == null)
+                repository.deleteDocument("fallback")
+                repository.deleteDocument("missing")
                 val page = requireNotNull(repository.page("p"))
                 val digest = OcrInput.pageDigest(page, "ko-primary")
                 val start = repository.generation("p")
@@ -62,10 +73,19 @@ object DatabaseMigrationChecks {
                     "inputDigest" to "first-input", "status" to "complete", "selectedText" to "raw", "rawText" to "raw")
                 val result = json("status" to "complete", "regions" to org.json.JSONArray(listOf(region)))
                 check(repository.putOcrResult("d", "p", start, digest, "ko-primary", result))
-                repository.correctOcrRegion("p", "line:z", "corrected")
+                check(repository.libraryDocuments().single().modifiedAtMillis == 1_624_192_496_789L)
+                val correctionStarted = System.currentTimeMillis()
+                check(repository.correctOcrRegion("p", "line:z", "corrected"))
+                val correctionDate = checkNotNull(repository.libraryDocuments().single().modifiedAtMillis)
+                check(correctionDate >= correctionStarted)
+                android.os.SystemClock.sleep(5)
+                check(repository.correctOcrRegion("p", "line:z", "corrected"))
+                check(repository.libraryDocuments().single().modifiedAtMillis == correctionDate)
                 val original = page.objects.first { it.getString("id") == "z" }
                 val changed = original.copyJson().put("newField", "changed")
+                val editStarted = System.currentTimeMillis()
                 repository.commit("d", "p", ObjectChange(listOf(original), listOf(changed)), mapOf("z" to 0, "a" to 1))
+                check(requireNotNull(repository.libraryDocuments().single().modifiedAtMillis) >= editStarted)
                 check(!repository.putOcrResult("d", "p", start, digest, "ko-primary", result))
                 repository.commit("d", "p", ObjectChange(listOf(changed), listOf(original)), mapOf("z" to 0, "a" to 1))
                 check(OcrInput.pageDigest(requireNotNull(repository.page("p")), "ko-primary") == digest)
@@ -84,8 +104,14 @@ object DatabaseMigrationChecks {
                     OcrInput.pageDigest(requireNotNull(repository.page(duplicate.id)), "ko-primary"))
                 val archive = java.io.File.createTempFile("ocr-sidecar-", ".ifnote", context.cacheDir)
                 try {
+                    val editDate = checkNotNull(repository.libraryDocuments().single().modifiedAtMillis)
+                    fun verifyDate(copy: DocumentInfo) {
+                        check(copy.data.getLong("createdAt") == originalCreated && copy.data.getString("updatedAt") == originalUpdated)
+                        check(repository.libraryDocuments().single { it.document.id == copy.id }.modifiedAtMillis == editDate)
+                    }
                     repository.export("d", archive)
                     val copy = archive.inputStream().use { repository.importArchive(it) }
+                    verifyDate(copy)
                     val copiedPages = repository.pageIds(copy.id)
                     check(copiedPages.size == 2 && copiedPages.all { repository.ocrText(it) == "corrected" })
                     val newPage = copiedPages.first()
@@ -94,6 +120,23 @@ object DatabaseMigrationChecks {
                     check(requireNotNull(repository.page(newPage)).objects.any { it.optString("extra") == "yes" })
                     repository.deleteDocument(copy.id)
                     check(repository.ocrResult(newPage) == null)
+                    val stamp = repository.exportBackup("d", null, archive) { false }
+                    check(stamp == repository.backupStamp("d"))
+                    val restored = archive.inputStream().use { repository.importArchive(it) }
+                    verifyDate(restored)
+                    repository.deleteDocument(restored.id)
+                    LegacyJsonWriter(repository) { false }.write("d", archive)
+                    val legacyCopy = archive.inputStream().use { repository.importLegacy(it) }
+                    verifyDate(legacyCopy)
+                    repository.deleteDocument(legacyCopy.id)
+                    val legacyEdit = "2025-02-10T12:34:56.789Z"
+                    val legacyEdited = org.json.JSONObject(archive.readText()).put("updatedAt", legacyEdit)
+                    val withLegacyEdit = legacyEdited.toString().byteInputStream().use { repository.importLegacy(it) }
+                    check(withLegacyEdit.data.getLong("createdAt") == originalCreated)
+                    check(withLegacyEdit.data.getString("updatedAt") == legacyEdit)
+                    check(repository.libraryDocuments().single { it.document.id == withLegacyEdit.id }.modifiedAtMillis ==
+                        java.time.Instant.parse(legacyEdit).toEpochMilli())
+                    repository.deleteDocument(withLegacyEdit.id)
                 } finally { archive.delete() }
                 val imageDigest = OcrInput.pageDigest(requireNotNull(repository.page("p")), "ko-primary")
                 val imageRegion = json("id" to "image", "strokeIds" to org.json.JSONArray(),
@@ -106,6 +149,13 @@ object DatabaseMigrationChecks {
                 imageRegion.put("inputDigest", "rendered:changed")
                 check(repository.putOcrResult("d", "p", repository.generation("p"), imageDigest, "ko-primary", imageResult))
                 check(repository.ocrText("p") == "image raw")
+                val bookmarkStarted = System.currentTimeMillis()
+                check(repository.setPageBookmark("p", true)?.optBoolean("bookmarked") == true)
+                val bookmarkDate = checkNotNull(repository.libraryDocuments().single().modifiedAtMillis)
+                check(bookmarkDate >= bookmarkStarted)
+                android.os.SystemClock.sleep(5)
+                repository.setPageBookmark("p", true)
+                check(repository.libraryDocuments().single().modifiedAtMillis == bookmarkDate)
             }
             commitHotPathChecks(context, name)
             NativeDatabase.open(context, name).let { again ->
@@ -189,6 +239,11 @@ object DatabaseMigrationChecks {
                 val reversed = appended.reversed()
                 repository.commit(document.id, pageId, ObjectChange(emptyList(), emptyList()), positions(reversed))
                 saved(repository, reversed)
+                val afterReorder = repository.libraryDocuments().single { it.document.id == document.id }.modifiedAtMillis
+                val generationAfterReorder = repository.generation(pageId)
+                repository.commit(document.id, pageId, ObjectChange(emptyList(), emptyList()), positions(reversed))
+                check(repository.generation(pageId) == generationAfterReorder)
+                check(repository.libraryDocuments().single { it.document.id == document.id }.modifiedAtMillis == afterReorder)
 
                 val highSequence = added.copyJson().put("captureSeq", 500L)
                 finalObjects = reversed.map { if (it === added) highSequence else it }
@@ -196,6 +251,7 @@ object DatabaseMigrationChecks {
                 saved(repository, finalObjects)
                 check(repository.reserveCaptureSequence(pageId) == 501L)
                 val beforeFailure = repository.generation(pageId)
+                val dateBeforeFailure = repository.libraryDocuments().single { it.document.id == document.id }.modifiedAtMillis
                 val rollback = IllegalStateException("repository rollback fixture")
                 try {
                     repository.transaction {
@@ -207,6 +263,7 @@ object DatabaseMigrationChecks {
                     check(failure === rollback)
                 }
                 check(repository.generation(pageId) == beforeFailure)
+                check(repository.libraryDocuments().single { it.document.id == document.id }.modifiedAtMillis == dateBeforeFailure)
                 saved(repository, finalObjects)
                 // A migrated page without generation state must reserve above persisted ink, synchronously.
                 inspector.openHelper.writableDatabase.execSQL("DELETE FROM page_generation WHERE page_id=?", arrayOf<Any>(pageId))

@@ -3,6 +3,7 @@ package com.inkforge.notesstudio
 import android.graphics.Bitmap
 import android.util.Base64
 import android.util.Base64InputStream
+import org.json.JSONArray
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -10,17 +11,22 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 internal object NoteInterchange {
-    enum class Format { BADNOTE, PDF, IMAGE, XOURNAL }
+    enum class Format { BADNOTE, PDF, IMAGE, XOURNAL, GOODNOTES, GOODNOTES_BACKUP }
+
+    data class ImportResult(val documents: List<DocumentInfo>, val folders: JSONArray? = null, val skipped: Int = 0) {
+        constructor(document: DocumentInfo) : this(listOf(document))
+    }
 
     fun format(name: String, contentType: String?): Format {
         val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
         val mime = contentType?.substringBefore(';')?.lowercase(Locale.ROOT)
         return when {
+            name.endsWith(".goodnotes.zip", true) -> Format.GOODNOTES_BACKUP
+            extension == "goodnotes" || mime in setOf("application/x-goodnotes", "application/vnd.goodnotes") -> Format.GOODNOTES
             extension == "pdf" || mime == "application/pdf" -> Format.PDF
             extension in setOf("xopp", "xoj") || mime in setOf(XournalInk.MIME, "application/x-xoj") -> Format.XOURNAL
             extension in setOf("jpg", "jpeg", "png", "webp") || mime?.startsWith("image/") == true -> Format.IMAGE
-            extension in setOf("goodnotes", "goodnotes.zip", "sdocx", "sdoc", "note", "one", "onepkg") ||
-                name.endsWith(".goodnotes.zip", true) ->
+            extension in setOf("sdocx", "sdoc", "note", "one", "onepkg") ->
                 error("원본 앱에서 PDF로 내보낸 뒤 BADNOTE에서 가져와 주세요.")
             else -> Format.BADNOTE
         }

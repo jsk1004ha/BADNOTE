@@ -46,9 +46,11 @@ object PdfImporter {
             }
             document.data.put("id", document.id)
             repository.transaction {
-                if (appendTo == null) repository.putDocument(document)
-                if (appendTo == null) repository.putPage(document.id, first, 0)
-                else repository.addPage(document.id, first, insertAt)
+                if (appendTo == null) {
+                    document.data.put("createdAt", System.currentTimeMillis())
+                    repository.putDocument(document)
+                    repository.putPage(document.id, first, 0)
+                } else repository.addPage(document.id, first, insertAt)
             }
             attached = true
             schedule(Job(repository, document.id, first.id, importId, assetId, title, count, changed))
@@ -171,7 +173,7 @@ object PdfImporter {
         return page
     }
 
-    private fun openRenderer(file: File): PdfRenderer {
+    internal fun openRenderer(file: File): PdfRenderer {
         val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         return try { PdfRenderer(descriptor) } catch (error: Exception) { descriptor.close(); throw error }
     }

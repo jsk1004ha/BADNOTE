@@ -12,9 +12,37 @@ import org.json.JSONObject
 import java.io.*
 import java.security.DigestOutputStream
 import java.security.MessageDigest
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoField
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+
+internal data class LibraryDocumentRecord(
+    val document: DocumentInfo,
+    val pageCount: Int,
+    val coverPageId: String?,
+    val coverGeneration: Long,
+    val modifiedAtMillis: Long?
+)
+
+private const val OCR_SEARCH_BATCH_PAGES = 32
+private const val OCR_SEARCH_BATCH_CHARS = 128 * 1024
+private const val CONTENT_EDIT_DATE = "_nativeContentUpdatedAt"
+
+private fun storedDateMillis(value: Any?): Long? = when (value) {
+    is Number -> value.toLong()
+    is String -> runCatching {
+        val date = DateTimeFormatter.ISO_DATE_TIME.parse(value)
+        val instant = if (date.isSupported(ChronoField.INSTANT_SECONDS)) Instant.from(date)
+            else LocalDateTime.from(date).atZone(ZoneId.systemDefault()).toInstant()
+        instant.toEpochMilli()
+    }.getOrNull()
+    else -> null
+}
 
 /** Room owns the single database connection and its schema; opaque JSON stays intact. */
 class NoteRepository(
@@ -209,13 +237,47 @@ class NoteRepository(
     fun documents(): List<DocumentInfo> = readableDatabase.rawQuery("SELECT id,body FROM documents ORDER BY updated DESC", null).use { c ->
         buildList { while (c.moveToNext()) add(DocumentInfo(c.getString(0), JSONObject(c.getString(1)))) }
     }
+    internal fun libraryDocuments(): List<LibraryDocumentRecord> = readableDatabase.rawQuery(
+        """
+            SELECT d.id, d.body,
+                (SELECT COUNT(*) FROM pages WHERE document_id=d.id),
+                cover.id, COALESCE(g.generation, 0), d.content_updated_at
+            FROM documents d
+            LEFT JOIN pages cover ON cover.id=(
+                SELECT id FROM pages WHERE document_id=d.id ORDER BY position,id LIMIT 1
+            )
+            LEFT JOIN page_generation g ON g.page_id=cover.id
+        """.trimIndent(), null
+    ).use { cursor ->
+        val records = ArrayList<LibraryDocumentRecord>(cursor.count)
+        while (cursor.moveToNext()) {
+            val body = JSONObject(cursor.getString(1))
+            val modifiedAt = if (cursor.isNull(5))
+                storedDateMillis(body.opt("updatedAt")) ?: storedDateMillis(body.opt("createdAt"))
+            else cursor.getLong(5)
+            records.add(LibraryDocumentRecord(
+                DocumentInfo(cursor.getString(0), body), cursor.getInt(2),
+                cursor.getString(3), cursor.getLong(4), modifiedAt
+            ))
+        }
+        records.sortWith(compareByDescending<LibraryDocumentRecord> { it.modifiedAtMillis }.thenBy { it.document.id })
+        records
+    }
+
     fun document(id: String): DocumentInfo? = readableDatabase.rawQuery("SELECT body FROM documents WHERE id=?", arrayOf(id)).use {
         if (it.moveToFirst()) DocumentInfo(id, JSONObject(it.getString(0))) else null
     }
-    fun putDocument(doc: DocumentInfo) {
+    fun putDocument(doc: DocumentInfo) = putDocument(doc, null)
+
+    internal fun putEditedDocument(doc: DocumentInfo) = putDocument(doc, System.currentTimeMillis())
+
+    private fun putDocument(doc: DocumentInfo, contentUpdatedAt: Long?) {
         require(!doc.data.has("pages")) { "문서 메타데이터에 페이지 본문을 저장할 수 없습니다." }
         val values = ContentValues().apply {
-            put("id", doc.id); put("body", doc.data.toString()); put("updated", System.currentTimeMillis())
+            put("id", doc.id)
+            put("body", doc.data.toString())
+            put("updated", System.currentTimeMillis())
+            if (contentUpdatedAt != null) put("content_updated_at", contentUpdatedAt)
         }
         // REPLACE would cascade-delete child pages. Update existing rows in place.
         if (writableDatabase.update("documents", values, "id=?", arrayOf(doc.id)) == 0)
@@ -300,9 +362,12 @@ class NoteRepository(
         var committed: JSONObject? = null
         transaction {
             val meta = pageMeta(pageId) ?: return@transaction
-            meta.put("bookmarked", bookmarked)
-            writableDatabase.update("pages", ContentValues().apply { put("body", meta.toString()) }, "id=?", arrayOf(pageId))
-            bumpGeneration(pageId)
+            if (meta.optBoolean("bookmarked") != bookmarked) {
+                meta.put("bookmarked", bookmarked)
+                writableDatabase.update("pages", ContentValues().apply { put("body", meta.toString()) }, "id=?", arrayOf(pageId))
+                bumpGeneration(pageId)
+                markPageDocumentEdited(pageId)
+            }
             committed = meta
         }
         return committed
@@ -350,9 +415,10 @@ class NoteRepository(
             val previous = pageMeta(previousId) ?: return@transaction
             if (previous.optString("pdfImportId") != importId || previous.optString("pdfSource") != source)
                 return@transaction
-            val position = pageIds(documentId).indexOf(previousId)
+            val existing = pageIds(documentId)
+            val position = existing.indexOf(previousId)
             if (position < 0) return@transaction
-            addPage(documentId, page, position + 1)
+            insertPage(documentId, page, position + 1, existing)
             inserted = true
         }
         return inserted
@@ -363,17 +429,19 @@ class NoteRepository(
     private fun putObject(pageId: String, obj: JSONObject, position: Int) {
         writableDatabase.insertWithOnConflict("objects", null, objectValues(pageId, obj, position), SQLiteDatabase.CONFLICT_REPLACE)
     }
-    private fun updateObjectPositions(pageId: String, positions: Map<String, Int>, inserted: Set<String>) {
-        if (positions.isEmpty()) return
+    private fun updateObjectPositions(pageId: String, positions: Map<String, Int>, inserted: Set<String>): Boolean {
+        if (positions.isEmpty()) return false
+        var changed = false
         writableDatabase.compileStatement("UPDATE objects SET position=? WHERE page_id=? AND id=? AND position<>?").use { statement ->
             statement.bindString(2, pageId)
             positions.forEach { (id, position) ->
                 if (id !in inserted) {
                     statement.bindLong(1, position.toLong()); statement.bindString(3, id); statement.bindLong(4, position.toLong())
-                    statement.executeUpdateDelete()
+                    if (statement.executeUpdateDelete() > 0) changed = true
                 }
             }
         }
+        return changed
     }
     fun commit(documentId: String, pageId: String, change: ObjectChange, positions: Map<String, Int>) {
         // JSON encoding must not hold SQLite's write lock: the next DOWN durably reserves its sequence there.
@@ -387,15 +455,35 @@ class NoteRepository(
             objectValues(pageId, obj, positions[id] ?: Int.MAX_VALUE)
         }
         transaction {
-            removals.forEach { writableDatabase.delete("objects", "page_id=? AND id=?", it) }
+            var removed = false
+            removals.forEach { if (writableDatabase.delete("objects", "page_id=? AND id=?", it) > 0) removed = true }
             rows.forEach { writableDatabase.insertWithOnConflict("objects", null, it, SQLiteDatabase.CONFLICT_REPLACE) }
-            updateObjectPositions(pageId, positions, inserted)
-            bumpGeneration(pageId, captureFloor)
-            writableDatabase.execSQL("UPDATE documents SET updated=? WHERE id=?", arrayOf<Any>(System.currentTimeMillis(), documentId))
+            val positionsChanged = updateObjectPositions(pageId, positions, inserted)
+            if (removed || rows.isNotEmpty() || positionsChanged) {
+                bumpGeneration(pageId, captureFloor)
+                markDocumentEdited(documentId)
+            }
         }
     }
+    private fun markDocumentEdited(id: String) {
+        val now = System.currentTimeMillis()
+        writableDatabase.execSQL("UPDATE documents SET updated=?,content_updated_at=? WHERE id=?", arrayOf<Any>(now, now, id))
+    }
+
+    private fun markPageDocumentEdited(pageId: String) {
+        val now = System.currentTimeMillis()
+        writableDatabase.execSQL(
+            "UPDATE documents SET updated=?,content_updated_at=? WHERE id=(SELECT document_id FROM pages WHERE id=?)",
+            arrayOf<Any>(now, now, pageId)
+        )
+    }
+
     fun addPage(doc: String, page: NotePage, position: Int) = transaction {
-        val existing = pageIds(doc)
+        insertPage(doc, page, position)
+        markDocumentEdited(doc)
+    }
+
+    private fun insertPage(doc: String, page: NotePage, position: Int, existing: List<String> = pageIds(doc)) {
         require(position in 0..existing.size) { "페이지 추가 위치가 올바르지 않습니다." }
         // Deletion can leave numeric position gaps; insertion takes a visible list index.
         normalizePagePositions(doc, existing)
@@ -429,11 +517,7 @@ class NoteRepository(
             }
         }.toMutableList()
         val duplicate = NotePage(newId, meta, objects)
-        normalizePagePositions(documentId, existing)
-        val shifted = existing.drop(position)
-        writableDatabase.execSQL("UPDATE pages SET position=position+1 WHERE document_id=? AND position>=?", arrayOf<Any>(documentId, position))
-        shifted.forEach(::bumpGeneration)
-        putPage(documentId, duplicate, position)
+        insertPage(documentId, duplicate, position, existing)
 
         fun mappedRegionId(id: String): String {
             val prefix = when {
@@ -548,6 +632,7 @@ class NoteRepository(
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             }
         }
+        markDocumentEdited(documentId)
         duplicated = duplicate
         }
         return requireNotNull(duplicated)
@@ -578,6 +663,7 @@ class NoteRepository(
                 bumpGeneration(id)
             }
         }
+        markDocumentEdited(doc)
     }
     fun removePage(doc: String, id: String) {
         var stoppedImport: String? = null
@@ -601,7 +687,8 @@ class NoteRepository(
                     stoppedImport = importId
                 }
             }
-            writableDatabase.delete("pages", "document_id=? AND id=?", arrayOf(doc, id))
+            if (writableDatabase.delete("pages", "document_id=? AND id=?", arrayOf(doc, id)) > 0)
+                markDocumentEdited(doc)
         }
         stoppedImport?.let(PdfImporter::cancelImport)
     }
@@ -670,9 +757,15 @@ class NoteRepository(
 
     /** Corrections must still match the original source identity, even on the fast search path. */
     private fun attachOcrCorrections(pageId: String, result: JSONObject): JSONObject {
-        val regions = result.array("regions")
         val corrections = readableDatabase.rawQuery("SELECT body FROM ocr_corrections WHERE page_id=?",
             arrayOf(pageId)).use { c -> buildList { while (c.moveToNext()) add(JSONObject(c.getString(0))) } }
+        return attachOcrCorrections(result, corrections)
+    }
+
+    private fun attachOcrCorrections(result: JSONObject, corrections: List<JSONObject>): JSONObject {
+        result.remove("correctedText")
+        if (corrections.isEmpty()) return result
+        val regions = result.array("regions")
         val identities = regions.objects().groupingBy { it.optString("sourceIdentityDigest") }.eachCount()
         for (i in 0 until regions.length()) {
             val region = regions.optJSONObject(i) ?: continue
@@ -681,7 +774,6 @@ class NoteRepository(
                     identities[region.optString("sourceIdentityDigest")] == 1))
                 region.put("correctedText", matches.single().optString("text"))
         }
-        result.remove("correctedText")
         corrections.singleOrNull { OcrDocumentCorrection.matches(it, result) }?.let {
             result.put("correctedText", it.optString("text"))
         }
@@ -738,6 +830,8 @@ class NoteRepository(
             }, SQLiteDatabase.CONFLICT_REPLACE)
             writableDatabase.delete("ocr_corrections", "page_id=? AND region_id=?",
                 arrayOf(pageId, OcrDocumentCorrection.REGION_ID))
+            if (text != region.optString("correctedText", region.optString("selectedText")) || result.has("correctedText"))
+                markPageDocumentEdited(pageId)
             applied = true
         }
         return applied
@@ -755,6 +849,8 @@ class NoteRepository(
                 put("page_id", pageId); put("region_id", OcrDocumentCorrection.REGION_ID)
                 put("body", correction.toString()); put("updated_at", System.currentTimeMillis())
             }, SQLiteDatabase.CONFLICT_REPLACE)
+            if (text != OcrResultPolicy.visibleText(result) || text != OcrResultPolicy.searchableText(result))
+                markPageDocumentEdited(pageId)
             applied = true
         }
         return applied
@@ -779,20 +875,66 @@ class NoteRepository(
     fun ocrText(pageId: String): String = currentOcrSearchResult(pageId)?.let(OcrResultPolicy::searchableText)
         ?: legacyOcrText(pageId)
     /** Global library search: only valid OCR content or attached user corrections can match. */
-    fun searchOcrDocuments(query: String): Set<String> {
+    fun searchOcrDocuments(query: String): Set<String> = searchOcrDocuments(query) { false }
+
+    fun searchOcrDocuments(query: String, cancelled: () -> Boolean): Set<String> {
         val term = query.trim()
         if (term.isEmpty()) return emptySet()
-        // JSON escapes and SQLite's ASCII-only lower() cannot safely prefilter decoded Unicode text.
-        val candidates = readableDatabase.rawQuery(
-            """SELECT o.page_id,o.document_id FROM ocr_page_state o
+        val isCancelled = { closed || cancelled() }
+        checkSearchCancelled(isCancelled)
+        val matches = LinkedHashSet<String>()
+        // The effective text is formed after decoding JSON and binding corrections.
+        // SQLite's ASCII-only case folding cannot prefilter it safely.
+        readableDatabase.rawQuery(
+            """
+                SELECT o.page_id, o.document_id, o.body, COALESCE((
+                    SELECT SUM(length(c.body)) FROM ocr_corrections c WHERE c.page_id=o.page_id
+                ),0)
+                FROM ocr_page_state o
                 LEFT JOIN page_generation g ON g.page_id=o.page_id
-                WHERE o.generation=COALESCE(g.generation,0)""".trimIndent(),
-            null
+                WHERE o.generation=COALESCE(g.generation,0)
+                ORDER BY o.rowid
+            """.trimIndent(), null
         ).use { cursor ->
-            buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) }
+            data class SearchPage(val id: String, val documentId: String, val body: String)
+            val batch = ArrayList<SearchPage>(OCR_SEARCH_BATCH_PAGES)
+            while (true) {
+                batch.clear()
+                var textChars = 0L
+                while (batch.size < OCR_SEARCH_BATCH_PAGES && textChars < OCR_SEARCH_BATCH_CHARS) {
+                    checkSearchCancelled(isCancelled)
+                    if (!cursor.moveToNext()) break
+                    val documentId = cursor.getString(1)
+                    if (documentId in matches) continue
+                    val body = cursor.getString(2)
+                    batch.add(SearchPage(cursor.getString(0), documentId, body))
+                    // A single large page still needs its full text, but it owns the batch budget.
+                    textChars += body.length + cursor.getLong(3)
+                }
+                if (batch.isEmpty()) break
+                val pageIds = batch.map { it.id }.toTypedArray()
+                val parameters = pageIds.joinToString(",") { "?" }
+                val corrections = HashMap<String, MutableList<JSONObject>>()
+                readableDatabase.rawQuery(
+                    "SELECT page_id,body FROM ocr_corrections WHERE page_id IN ($parameters)", pageIds
+                ).use { rows ->
+                    while (rows.moveToNext()) {
+                        checkSearchCancelled(isCancelled)
+                        corrections.getOrPut(rows.getString(0)) { ArrayList() }.add(JSONObject(rows.getString(1)))
+                    }
+                }
+                for (page in batch) {
+                    checkSearchCancelled(isCancelled)
+                    if (page.documentId in matches) continue
+                    val result = attachOcrCorrections(JSONObject(page.body), corrections[page.id].orEmpty())
+                    if (OcrResultPolicy.searchableText(result).contains(term, ignoreCase = true)) {
+                        matches.add(page.documentId)
+                    }
+                }
+            }
         }
-        return candidates.filter { (pageId, _) -> ocrText(pageId).contains(term, ignoreCase = true) }
-            .mapTo(LinkedHashSet<String>()) { it.second }
+        checkSearchCancelled(isCancelled)
+        return matches
     }
 
     /** Runs on the search worker; no transaction or persistence-queue task spans PDFium work. */
@@ -1125,17 +1267,46 @@ class NoteRepository(
             throw error
         }
     }
+    /** Carry the new edit date in exports while keeping both original date fields. */
+    internal fun portableDocumentMetadata(id: String): JSONObject? = readableDatabase.rawQuery(
+        "SELECT body,content_updated_at FROM documents WHERE id=?", arrayOf(id)
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        JSONObject(cursor.getString(0)).apply {
+            if (!cursor.isNull(1)) put(CONTENT_EDIT_DATE, json(
+                "millis" to cursor.getLong(1),
+                "createdAt" to (opt("createdAt") ?: JSONObject.NULL),
+                "updatedAt" to (opt("updatedAt") ?: JSONObject.NULL)
+            ))
+        }
+    }
+
+    private fun takePortableEditDate(metadata: JSONObject): Long? {
+        val editDate = metadata.optJSONObject(CONTENT_EDIT_DATE) ?: return null
+        val millis = editDate.opt("millis") as? Number ?: return null
+        metadata.remove(CONTENT_EDIT_DATE)
+        // Older apps can edit the public dates while carrying this extension forward.
+        return millis.toLong().takeIf {
+            editDate.opt("createdAt") == (metadata.opt("createdAt") ?: JSONObject.NULL) &&
+                editDate.opt("updatedAt") == (metadata.opt("updatedAt") ?: JSONObject.NULL)
+        }
+    }
+
     /** Incremental backup key without loading strokes or assets. Called on the shared writer. */
-    internal fun backupStamp(id: String): String {
+    internal fun backupStamp(id: String): String = backupStamp(id, requireNotNull(portableDocumentMetadata(id)))
+
+    private fun backupStamp(id: String, metadata: JSONObject): String {
         val digest = MessageDigest.getInstance("SHA-256")
         fun field(value: String) {
             val bytes = value.toByteArray(Charsets.UTF_8)
             digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.size).array())
             digest.update(bytes)
         }
-        val metadata = requireNotNull(document(id)).data.copyJson()
-        metadata.remove("lastPageId"); metadata.remove("lastPageIndex")
-        field(metadata.toString())
+        val stableMetadata = metadata.copyJson().apply {
+            remove("lastPageId")
+            remove("lastPageIndex")
+        }
+        field(stableMetadata.toString())
         readableDatabase.rawQuery("SELECT p.id,p.position,p.body,COALESCE(g.generation,0) FROM pages p " +
             "LEFT JOIN page_generation g ON g.page_id=p.id WHERE p.document_id=? ORDER BY p.position,p.id", arrayOf(id)).use { pages ->
             while (pages.moveToNext()) {
@@ -1161,11 +1332,11 @@ class NoteRepository(
         try {
             transaction {
                 BackupEngine.checkCancelled(cancelled)
-                val doc = document(id) ?: return@transaction
-                if (doc.trashed) return@transaction
+                val manifest = portableDocumentMetadata(id) ?: return@transaction
+                if (manifest.optBoolean("trashed")) return@transaction
                 val ids = pageIds(id)
                 if (ids.any { pageMeta(it)?.optBoolean("pdfImportPending") == true }) return@transaction
-                val current = backupStamp(id)
+                val current = backupStamp(id, manifest)
                 if (current == previousStamp) return@transaction
                 stamp = current
                 check(staging.mkdir())
@@ -1179,7 +1350,7 @@ class NoteRepository(
                     }
                     metadata += name to file
                 }
-                val manifest = doc.data.copyJson().put("format", "badnote-native").put("version", 5).put("pageIds", JSONArray(ids))
+                manifest.put("format", "badnote-native").put("version", 5).put("pageIds", JSONArray(ids))
                 collectAssets(manifest, assets); freeze("manifest.json", manifest)
                 for (pageId in ids) {
                     val body = requireNotNull(page(pageId)).json()
@@ -1202,10 +1373,10 @@ class NoteRepository(
     }
     fun export(id: String, target: File, cancelled: () -> Boolean = { false }, progress: (Int, Long) -> Unit = { _, _ -> }) {
         // Caller uses the repository executor: edits cannot race with this consistent snapshot.
-        val doc = requireNotNull(document(id))
+        val manifest = requireNotNull(portableDocumentMetadata(id))
         val ids = pageIds(id)
         val assets = linkedSetOf<String>()
-        val manifest = doc.data.copyJson().put("format", "badnote-native").put("version", 5).put("pageIds", JSONArray(ids))
+        manifest.put("format", "badnote-native").put("version", 5).put("pageIds", JSONArray(ids))
         collectAssets(manifest, assets)
         val entries = sequence {
             yield(ArchiveCodec.Entry("manifest.json") { ByteArrayInputStream(manifest.toString().toByteArray(Charsets.UTF_8)) })
@@ -1251,9 +1422,10 @@ class NoteRepository(
             metadata.put("id", id).put("folderId", folder).put("trashed", false)
             rewriteAssets(metadata, map)
             rewritePageReferences(metadata, pageMap)
+            val contentUpdatedAt = takePortableEditDate(metadata)
             val doc = DocumentInfo(id, metadata)
             transaction {
-                putDocument(doc)
+                putDocument(doc, contentUpdatedAt)
                 oldPageIds.forEachIndexed { i, old ->
                     require("pages/$old.json" in entries) { "페이지가 누락되었습니다." }
                     val data = JSONObject(File(staging, "pages/$old.json").readText())
@@ -1307,6 +1479,7 @@ class NoteRepository(
                 }
                 publishedAssets += asset(id)
             }
+            val contentUpdatedAt = takePortableEditDate(meta)
             val doc = DocumentInfo(uid("doc"), meta.apply {
                 put("folderId", folder); put("trashed", false); put("version", 5)
             })
@@ -1314,7 +1487,7 @@ class NoteRepository(
             doc.data.put("id", doc.id)
             rewritePageReferences(doc.data, pageMap)
             transaction {
-                putDocument(doc)
+                putDocument(doc, contentUpdatedAt)
                 repeat(pages) { i ->
                     val data = JSONObject(File(stage, "$i.json").readText())
                     val sidecar = data.optJSONObject("_nativeOcrSidecar")?.takeIf { it.has("result") || it.has("corrections") }

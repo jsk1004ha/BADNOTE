@@ -99,9 +99,44 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
         paint.reset();paint.isAntiAlias=true;paint.color=color(obj.optString("color","#172033"));paint.alpha=(obj.f("opacity",1f)*255).toInt().coerceIn(0,255)
         val type=obj.optString("type")
         when(type) {
-            "stroke" -> legacyBrush.draw(canvas,obj,renderScale)
+            "stroke" -> {
+                if (obj.has("fillColor") && obj.optString("goodnotesShape") == "polygon") {
+                    val points = obj.array("points")
+                    val path = Path()
+                    var started = false
+                    for (index in 0 until points.length()) {
+                        val point = points.optJSONObject(index) ?: continue
+                        if (started) path.lineTo(point.f("x"), point.f("y"))
+                        else {
+                            path.moveTo(point.f("x"), point.f("y"))
+                            started = true
+                        }
+                    }
+                    path.close()
+                    paint.color = color(obj.optString("fillColor"), Color.TRANSPARENT)
+                    canvas.drawPath(path, paint)
+                }
+                legacyBrush.draw(canvas,obj,renderScale)
+            }
             "shape" -> shape(canvas,obj)
-            "image" -> image(obj.optString("src"))?.let{canvas.drawBitmap(it,null,RectF(obj.f("x"),obj.f("y"),obj.f("x")+obj.f("w"),obj.f("y")+obj.f("h")),paint)}
+            "image" -> image(obj.optString("src"))?.let { bitmap ->
+                val x = obj.f("x")
+                val y = obj.f("y")
+                val w = obj.f("w")
+                val h = obj.f("h")
+                val crop = obj.optJSONObject("imageCrop")
+                if (crop == null) canvas.drawBitmap(bitmap, null, RectF(x, y, x + w, y + h), paint)
+                else {
+                    val saved = canvas.save()
+                    try {
+                        canvas.clipRect(x, y, x + w, y + h)
+                        val left = x + crop.f("offsetX") * w
+                        val top = y + crop.f("offsetY") * h
+                        val dest = RectF(left, top, left + crop.f("width", 1f) * w, top + crop.f("height", 1f) * h)
+                        canvas.drawBitmap(bitmap, null, dest, paint)
+                    } finally { canvas.restoreToCount(saved) }
+                }
+            }
             "tape" -> {
                 val b=InkGeometry.unrotatedBounds(obj);paint.color=color(obj.optString("color","#4c91dd"));paint.alpha=if(obj.optBoolean("revealed"))32 else 255
                 canvas.drawRoundRect(b.left,b.top,b.right,b.bottom,7f,7f,paint)
@@ -135,8 +170,16 @@ class NoteRenderer(private val image: (String)->Bitmap? = { null }) {
     private fun shape(canvas:Canvas,obj:JSONObject){
         val x1=obj.f("x1");val y1=obj.f("y1");val x2=obj.f("x2");val y2=obj.f("y2")
         val bounds=RectF(min(x1,x2),min(y1,y2),max(x1,x2),max(y1,y2))
+        val shape = obj.optString("shape","line")
+        if (obj.has("fillColor") && (shape == "rectangle" || shape == "ellipse")) {
+            val border = paint.color
+            paint.style = Paint.Style.FILL
+            paint.color = color(obj.optString("fillColor"), Color.TRANSPARENT)
+            if (shape == "rectangle") canvas.drawRect(bounds, paint) else canvas.drawOval(bounds, paint)
+            paint.color = border
+        }
         paint.style=Paint.Style.STROKE;paint.strokeWidth=obj.f("width",3f);paint.strokeCap=Paint.Cap.ROUND;paint.strokeJoin=Paint.Join.ROUND
-        when(val shape=obj.optString("shape","line")){
+        when(shape){
             "ellipse","circle"->canvas.drawOval(bounds,paint)
             "rectangle","square"->canvas.drawRect(bounds,paint)
             "rounded-rectangle"->canvas.drawRoundRect(bounds,min(bounds.width(),bounds.height())*.12f,min(bounds.width(),bounds.height())*.12f,paint)

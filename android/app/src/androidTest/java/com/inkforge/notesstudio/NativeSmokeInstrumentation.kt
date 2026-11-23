@@ -107,6 +107,19 @@ class NativeSmokeInstrumentation:Instrumentation(){
         try{
             check(targetContext.packageName.endsWith(".debug"),"Refusing to test a release app")
             if(android.os.Build.VERSION.SDK_INT>=33)android.graphics.HardwareRenderer.setDrawingEnabled(true)
+            if (localChecks?.getString("goodnotesOnly") == "true") {
+                GoodnotesImportChecks.run(targetContext, result)
+                result.putString("passed", "true"); finish(0, result); return
+            }
+            if (localChecks?.getString("libraryDatesOnly") == "true") {
+                LibraryDateChecks.run(this, result, reopen = localChecks?.getString("dateChecksReopen") == "true")
+                result.putString("passed", "true"); finish(0, result); return
+            }
+            if (localChecks?.getString("libraryOcrSearchOnly") == "true") {
+                LibraryOcrSearchChecks.run(targetContext, result,
+                    verifyCancellation = localChecks?.getString("verifyOcrCancellation") == "true")
+                result.putString("passed", "true"); finish(0, result); return
+            }
             if (localChecks?.getString("settingsSheetOnly") == "true") {
                 SettingsSheetChecks.run(this, result)
                 result.putString("passed", "true"); finish(0, result); return
@@ -162,7 +175,7 @@ class NativeSmokeInstrumentation:Instrumentation(){
             if(ocrOnly){RecognitionServiceTaskChecks.run();result.putString("ocrTasks","real_task_permit_timeout_recovery_failure_verified");result.putString("passed","true");finish(0,result);return}
             if(s3Only){S3ClosureChecks.run(targetContext,this);result.putString("passed","true");result.putString("s3Closure","held_save_digest_bookmark_phone_status_verified");finish(0,result);return}
             DatabaseMigrationChecks.run(targetContext)
-            if(migrationOnly){result.putString("migration","v1_to_v2_records_null_keys_generation_correction_verified");result.putString("passed","true");finish(0,result);return}
+            if(migrationOnly){result.putString("migration","v1_to_v3_dates_exports_null_keys_generation_correction_verified");result.putString("passed","true");finish(0,result);return}
             val filledWorkload=localChecks?.getString("filledInkOnly")=="true"
             val manyPageWorkload=localChecks?.getString("manyPagesOnly")=="true"
             val loadingWorkload=localChecks?.getString("loadingOnly")=="true"

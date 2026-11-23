@@ -1,6 +1,6 @@
 # Android 빌드 — 4.2.2
 
-현재 버전은 **4.2.2 / versionCode 432**입니다. 실제 값은 [app/build.gradle](app/build.gradle)에서 읽습니다. 프로젝트 루트에서 실행하며 .worktrees/ 사본을 빌드하지 않습니다.
+현재 버전은 **4.2.2 / versionCode 433**입니다. 실제 값은 [app/build.gradle](app/build.gradle)에서 읽습니다. 프로젝트 루트에서 실행하며 .worktrees/ 사본을 빌드하지 않습니다.
 
 ## 요구 사항
 
@@ -46,6 +46,6 @@ Native Android regressions 워크플로는 도구·JVM·lint·에뮬레이터 �
 
 ## APK 확인
 
-    python tools/verify_apk.py build/apk/bad-note-Android-4.2.2-Update.apk --build-tools <SDK>/build-tools/36.1.0 --expected-package com.inkforge.note4 --expected-version-code 432 --expected-version-name 4.2.2 --expected-certificate 45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847 --pdfium-manifest build/dependencies/pdfium-8086/verification.json
+    python tools/verify_apk.py build/apk/bad-note-Android-4.2.2-Update.apk --build-tools <SDK>/build-tools/36.1.0 --expected-package com.inkforge.note4 --expected-version-code 433 --expected-version-name 4.2.2 --expected-certificate 45bc9430d2c32457c5d944561176a7ec861b29f6bcb1b4244806307c9f3d0847 --pdfium-manifest build/dependencies/pdfium-8086/verification.json
 
 현재 네이티브 구조와 자료 구분은 [네이티브 안내](../docs/NATIVE-KO.md), [문서 안내](../docs/README.md)를 참고하십시오.

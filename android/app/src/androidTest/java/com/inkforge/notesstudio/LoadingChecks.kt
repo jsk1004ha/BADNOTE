@@ -131,7 +131,35 @@ object LoadingChecks {
             await("replacement preview paints current persisted page") { seenReplacement.get() == Color.GREEN }
             check(!replacementSawStale.get()) { "Detached renderer resurrected its stale blue thumbnail" }
             await("detached unpublished bitmap released") { detachedPrivateBitmap.get()?.isRecycled == true }
-            return "selected_page_overtakes_offscreen_preview_cancelled_callbacks_generation_fanout_detach_pixels_verified"
+            val previous = repository.executor.submit<LibraryDocumentRecord> {
+                repository.libraryDocuments().single()
+            }.get(20, TimeUnit.SECONDS)
+            val pageId = requireNotNull(previous.coverPageId)
+            check(pageId == ids.first() && previous.pageCount == ids.size)
+            fun bindCover(row: LibraryDocumentRecord) = ui {
+                requireNotNull(loader).bind(replacement, document.id, row.coverPageId, row.coverGeneration)
+            }
+            fun pixel() = ui {
+                replacement.loadBitmap?.invoke()?.let { it.getPixel(it.width / 2, it.height / 2) }
+            }
+            bindCover(previous)
+            await("versioned green thumbnail") { pixel() == Color.GREEN }
+            val renders = renderNumber.get()
+            bindCover(previous)
+            check(pixel() == Color.GREEN && renderNumber.get() == renders) { "Unchanged cover rendered again" }
+
+            // Persist an edit without notifying this loader, as another document window would.
+            val revised = repository.executor.submit<LibraryDocumentRecord> {
+                val current = requireNotNull(repository.page(pageId))
+                val red = coloredPage(pageId, "#ff0000")
+                repository.commit(document.id, pageId, ObjectChange(current.objects, red.objects), emptyMap())
+                repository.libraryDocuments().single()
+            }.get(20, TimeUnit.SECONDS)
+            check(revised.document.data.optLong("createdAt") == previous.document.data.optLong("createdAt"))
+            check(revised.coverPageId == pageId && revised.coverGeneration > previous.coverGeneration)
+            bindCover(revised)
+            await("other-window edit replaces the cached cover") { pixel() == Color.RED }
+            return "selected_page_priority_cancelled_callbacks_generation_fanout_detach_and_library_cover_revision_verified"
         } finally {
             releaseRead.countDown(); releaseFirstRender.countDown(); releaseDetachedRender.countDown()
             ui { loader?.close(); host?.let { (it.parent as? ViewGroup)?.removeView(it) } }

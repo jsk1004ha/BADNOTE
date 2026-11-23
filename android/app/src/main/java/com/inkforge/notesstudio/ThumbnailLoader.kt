@@ -32,6 +32,7 @@ internal class ThumbnailLoader(
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
         // Published bitmaps can still be held by a View or a display list after eviction.
     }
+    private val coverGenerations = LruCache<String, Long>(256)
     private val listeners = LinkedHashMap<String, LinkedHashSet<Binding>>()
     private val generations = HashMap<String, Long>()
     private val failed = HashMap<String, Long>()
@@ -43,10 +44,21 @@ internal class ThumbnailLoader(
         get() = listeners.entries.count { (key, views) -> views.all { it.bitmap == null } && cache.get(key) == null && failed[key] != generation(key) } +
             if (active?.cancelled == true) 1 else 0
 
-    fun bind(view: NotePreview, documentId: String?, pageId: String?) {
+    fun bind(view: NotePreview, documentId: String?, pageId: String?) =
+        bind(view, documentId, pageId, null)
+
+    fun bind(view: NotePreview, documentId: String?, pageId: String?, sourceGeneration: Long?) {
         require(pageId != null || documentId != null)
         view.onPreviewDetached?.invoke()
-        val binding = Binding(view, pageId ?: "doc:$documentId", documentId, pageId)
+        val key = pageId ?: "doc:$documentId"
+        // A different activity can change the cover through the shared repository.
+        if (sourceGeneration != null && coverGenerations.put(key, sourceGeneration) != sourceGeneration) {
+            if (cache.get(key) != null || listeners.containsKey(key) ||
+                active?.binding?.key == key || failed.containsKey(key)) {
+                invalidate(key)
+            }
+        }
+        val binding = Binding(view, key, documentId, pageId)
         view.onPreviewAttached = { attach(binding) }
         view.onPreviewDetached = { detach(binding) }
         view.loadBitmap = {
@@ -149,7 +161,7 @@ internal class ThumbnailLoader(
     override fun close() {
         if (closed) return
         closed = true
-        cancelPending(); cache.evictAll(); generations.clear()
+        cancelPending(); cache.evictAll(); generations.clear(); coverGenerations.evictAll()
         worker.shutdown()
     }
 }

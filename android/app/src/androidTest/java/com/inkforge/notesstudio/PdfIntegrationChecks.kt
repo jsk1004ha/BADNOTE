@@ -62,6 +62,7 @@ object PdfIntegrationChecks {
                         if (!pagesChanged) { failure.set(error); complete.countDown() }
                     })
                 }
+                val createdAt = document.data.getLong("createdAt")
                 val firstId = repository.pageIds(document.id).first()
                 val firstPage = requireNotNull(repository.page(firstId))
                 check(firstPage.meta.optInt("pdfPointWidth") > 0 && firstPage.meta.optInt("pdfPointHeight") > 0)
@@ -73,6 +74,9 @@ object PdfIntegrationChecks {
                 check(failure.get() == null) { "pdfIndexFailed:${failure.get()}" }
                 val imported = repository.pageIds(document.id)
                 check(imported.size == 3)
+                check(repository.libraryDocuments().single().modifiedAtMillis == createdAt) {
+                    "Background PDF indexing changed the new note date"
+                }
                 check("한글" in requireNotNull(repository.pageMeta(imported[0])).optString("pdfText"))
                 check("Rotated cropped" in requireNotNull(repository.pageMeta(imported[1])).optString("pdfText"))
                 check(requireNotNull(repository.pageMeta(imported[2])).optString("pdfText").isBlank())
@@ -106,7 +110,9 @@ object PdfIntegrationChecks {
                 extra.meta.put("unknownPageField", "kept")
                 extra.objects += json("id" to "stroke-kept", "type" to "stroke", "points" to JSONArray())
                 extra.objects += json("id" to "image-kept", "type" to "image", "src" to "asset:$pngId", "unknownObjectField" to 17)
+                val editStarted = System.currentTimeMillis()
                 repository.addPage(document.id, extra, 3)
+                check(checkNotNull(repository.libraryDocuments().single().modifiedAtMillis) >= editStarted)
                 val region = json("id" to "line:stroke-kept", "strokeIds" to JSONArray(listOf("stroke-kept")),
                     "inputDigest" to "binding-kept", "status" to "complete", "rawText" to "raw", "selectedText" to "raw")
                 val result = json("policy" to "ko-primary", "status" to "complete", "regions" to JSONArray(listOf(region)))

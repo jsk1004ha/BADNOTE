@@ -1,6 +1,6 @@
 # BADNOTE 4.2.2
 
-갤럭시 탭·S Pen용 Android 필기 앱입니다. [정식 4.2.2 변경 사항](docs/RELEASE-4.2.2-KO.md)과 [설치 파일](https://github.com/jsk1004ha/BADNOTE/releases/latest)을 확인할 수 있습니다.
+갤럭시 탭·S Pen용 Android 필기 앱입니다. [정식 4.2.2 통합판 변경 사항](docs/RELEASE-4.2.2-KO.md)과 [설치 파일](https://github.com/jsk1004ha/BADNOTE/releases/tag/v4.2.2%2B433)을 확인할 수 있습니다.
 
 **프로젝트 루트의 android/가 현재 앱 소스입니다.** docs/archive/의 구버전 기록은 현재 작업 기준으로 사용하지 마십시오.
 
@@ -66,7 +66,8 @@ SDK·서명 설정과 개별 Gradle 명령은 [Android 빌드 안내](android/RE
 
 ### 다른 앱의 노트
 
-- **Goodnotes · Samsung Notes · Notability** — 원본 앱에서 PDF로 내보낸 뒤 라이브러리의 **노트 가져오기**에서 열 수 있습니다. BADNOTE에서는 기존 필기가 PDF 배경으로 들어오며, 그 위에 새 필기를 추가할 수 있습니다. 반대로 BADNOTE의 **PDF 공유**로 다른 앱에 페이지를 보낼 수 있습니다.
+- **Goodnotes** — 라이브러리의 **노트 가져오기**에서 `.goodnotes`와 `.goodnotes.zip`을 열 수 있습니다. 지원하는 필기·텍스트·이미지·도형은 편집 가능한 객체로, PDF 배경은 페이지 배경으로 가져옵니다. 백업의 폴더 구조도 복원합니다. PDF 스티커는 이미지로 변환합니다. 가림 테이프·녹음 등 빠진 요소가 있으면 가져오기 결과에 표시합니다.
+- **Samsung Notes · Notability** — 원본 앱에서 PDF로 내보낸 뒤 **노트 가져오기**에서 열 수 있습니다. 기존 페이지를 배경으로 가져오고 그 위에 새 필기를 추가할 수 있습니다.
 - **Xournal / Xournal++** — 일반 XML 기반 `.xoj`·`.xopp` 파일의 펜 획, 형광펜, 기본 텍스트와 내장 이미지를 가져올 수 있습니다. `.xopp`로 내보낸 일반 필기 획은 Xournal++에서 다시 편집할 수 있습니다. PDF 배경, 지움 영역, 연필 질감 등 Xournal에서 같은 모양을 표현하기 어려운 페이지는 이미지로 포함됩니다. 외부 파일을 참조하는 Xournal 배경이 있다면 원본 앱에서 PDF로 내보내세요.
 - **이미지** — PNG·JPEG·WebP를 라이브러리에서 새 노트로 열거나 Android 공유 메뉴에서 BADNOTE로 보낼 수 있습니다.
 

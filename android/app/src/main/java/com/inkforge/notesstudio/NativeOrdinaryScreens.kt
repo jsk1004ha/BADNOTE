@@ -30,7 +30,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import kotlin.math.floor
 
 internal data class LibraryFolderUi(val id: String, val title: String, val parentId: String, val color: Color, val count: Int)
-internal data class LibraryDocumentUi(val document: DocumentInfo, val date: String, val pages: Int)
+internal data class LibraryDocumentUi(val record: LibraryDocumentRecord, val date: String) {
+    val document get() = record.document
+    val pages get() = record.pageCount
+}
 internal data class LibraryUiState(val title: String, val folder: String, val filter: String,
     val query: String, val folders: List<LibraryFolderUi>, val path: List<LibraryFolderUi>,
     val listMode: Boolean, val sortByTitle: Boolean, val selectionMode: Boolean,
@@ -47,7 +50,7 @@ private val libraryBorder = Color(0xffe0e4ec)
 
 @Composable
 internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryDocumentUi>,
-    preview: (String, Int) -> View, icon: (String, Int, Int) -> View,
+    preview: (LibraryDocumentUi, Int) -> View, icon: (String, Int, Int) -> View,
     translate: (String) -> String, onQuery: (String) -> Unit, onSearch: () -> Unit,
     onFilter: (String) -> Unit,
     onFolder: (String) -> Unit, onFolderMenu: (String) -> Unit, onNewFolder: () -> Unit,
@@ -211,7 +214,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
 
 @Composable
 private fun LibraryCard(item: LibraryDocumentUi, listMode: Boolean, selected: Boolean,
-    preview: (String, Int) -> View, icon: (String, Int, Int) -> View, translate: (String) -> String,
+    preview: (LibraryDocumentUi, Int) -> View, icon: (String, Int, Int) -> View, translate: (String) -> String,
     onOpen: () -> Unit, onMenu: () -> Unit,
     onFavorite: () -> Unit, onSelect: () -> Unit, selectionMode: Boolean, modifier: Modifier) {
     val doc = item.document
@@ -219,8 +222,8 @@ private fun LibraryCard(item: LibraryDocumentUi, listMode: Boolean, selected: Bo
         .getOrDefault(0xff2f7fb7.toInt())
     @Composable fun Cover(modifier: Modifier) {
         Box(modifier.background(Color.White, RoundedCornerShape(12.dp))) {
-            key(doc.id, coverColor) {
-                AndroidView(factory = { preview(doc.id, coverColor) }, modifier = Modifier.fillMaxSize())
+            key(doc.id, coverColor, item.record.coverPageId, item.record.coverGeneration) {
+                AndroidView(factory = { preview(item, coverColor) }, modifier = Modifier.fillMaxSize())
             }
             IconAction(if (selectionMode) "check-circle" else "star",
                 translate(if (selectionMode) "문서 선택" else "즐겨찾기"), icon,

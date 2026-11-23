@@ -36,6 +36,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import kotlin.math.*
 
@@ -95,8 +96,9 @@ open class MainActivity:ComponentActivity(){
     private var saveFailed=false
     private var libraryGeneration=0
     private var refreshLibraryRows: (() -> Unit)? = null
+    private var refreshLibrarySearch: (() -> Unit)? = null
     private var hasHadWindowFocus = false
-    private var librarySearchGeneration=0L
+    @Volatile private var librarySearchGeneration=0L
     private var librarySearchTask:Runnable?=null
     private var lastActivityIntentHandled=false
     private val ui by lazy { ClassicUi(this,::t) }
@@ -277,19 +279,32 @@ open class MainActivity:ComponentActivity(){
         }
     }
     private fun afterSaved(action:()->Unit){if(saves.isEmpty()&&!saving&&!saveFailed)action()else enqueueSave({},action)}
-    private fun <T> work(label:String,operation:()->T,abandoned:(T)->Unit={},complete:(T)->Unit){
+    private fun <T> work(label: String, operation: () -> T, abandoned: (T) -> Unit = {},
+                         onFailure: () -> Unit = {}, complete: (T) -> Unit) {
         setBusy(true,label)
         afterSaved{repository.executor.execute{
             try{val result=operation();runOnUiThread{setBusy(false);if(!isFinishing&&!isDestroyed)complete(result)else abandoned(result)}}
-            catch(e:Exception){runOnUiThread{setBusy(false);message(e.message?:"작업 실패")}}
+            catch (e: Exception) {
+                runOnUiThread {
+                    setBusy(false)
+                    message(e.message ?: "작업 실패")
+                    onFailure()
+                }
+            }
         }}
     }
+    private fun cancelLibrarySearch() {
+        librarySearchGeneration++
+        librarySearchTask?.let(handler::removeCallbacks)
+        librarySearchTask = null
+    }
+
     private fun clearScreen(){
         textEditor?.finish();textEditor=null
         pageGrid?.dispose();pageGrid=null;thumbnails.cancelPending()
         refreshLibraryRows = null
-        librarySearchTask?.let{handler.removeCallbacks(it)}
-        librarySearchGeneration++
+        refreshLibrarySearch = null
+        cancelLibrarySearch()
         cancelManualOcr("손글씨 인식을 취소했습니다.")
         ocrStatusRow=null;ocrStatusText=null;ocrCancelButton=null
         closeSearchDrawer()
@@ -370,17 +385,24 @@ open class MainActivity:ComponentActivity(){
             ))
         }
         fun searchOcrMatches(value:String){
-            val request=++librarySearchGeneration
-            librarySearchTask?.let{handler.removeCallbacks(it)}
+            cancelLibrarySearch()
+            val request = librarySearchGeneration
             state.value=state.value.copy(ocrMatches=emptySet())
             if(value.isBlank())return
             librarySearchTask=Runnable{
                 if(generation!=libraryGeneration||request!=librarySearchGeneration||document!=null)return@Runnable
                 repository.executor.execute{
-                    val matches=repository.searchOcrDocuments(value)
+                    val matches = try {
+                        repository.searchOcrDocuments(value) { request != librarySearchGeneration }
+                    } catch (_: CancellationException) {
+                        return@execute
+                    }
                     runOnUiThread{
                         if(generation==libraryGeneration&&request==librarySearchGeneration&&
-                            document==null&&query==value)state.value=state.value.copy(ocrMatches=matches)
+                            document==null&&query==value) {
+                            librarySearchTask = null
+                            state.value = state.value.copy(ocrMatches = matches)
+                        }
                     }
                 }
             }.also{handler.postDelayed(it,320)}
@@ -388,7 +410,11 @@ open class MainActivity:ComponentActivity(){
         val compose=ComposeView(this).apply{
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent { NativeLibraryScreen(state.value,documentState.value,
-                {id,cover->thumbnail(id,null).apply{coverColor=cover}},
+                { item, cover ->
+                    val record = item.record
+                    thumbnail(record.document.id, record.coverPageId,
+                        record.coverGeneration.takeIf { record.coverPageId != null }).apply { coverColor = cover }
+                },
                 {name,tint,size->ui.icon(name,tint,size)},::t,
                 onQuery = {
                     query = it
@@ -436,17 +462,17 @@ open class MainActivity:ComponentActivity(){
                 onSettings={showSettings()}) }
         }
         body.addView(compose,LinearLayout.LayoutParams(-1,0,1f))
+        refreshLibrarySearch = { searchOcrMatches(query) }
         searchOcrMatches(query)
         val refreshRows = {
             repository.executor.execute{
-                val docs=repository.documents()
-                val pageCounts=repository.pageCounts()
-                val counts = docs.asSequence().filterNot { it.trashed }.groupingBy { it.folder }.eachCount()
+                val documents = repository.libraryDocuments()
+                val counts = documents.asSequence().map { it.document }.filterNot { it.trashed }
+                    .groupingBy { it.folder }.eachCount()
                 val dateFormat = SimpleDateFormat("yyyy. M. d.", Locale.getDefault())
-                val legacyDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
-                val rows = docs.map { LibraryDocumentUi(
-                    it, formatDocumentDate(it.data, dateFormat, legacyDateFormat), pageCounts[it.id] ?: 0
-                ) }
+                val rows = documents.map { record ->
+                    LibraryDocumentUi(record, record.modifiedAtMillis?.let { dateFormat.format(Date(it)) }.orEmpty())
+                }
                 runOnUiThread {
                     if (generation == libraryGeneration && document == null && !isDestroyed) {
                         val countedFolders = allFolders.map { it.copy(count = counts[it.id] ?: 0) }
@@ -522,7 +548,12 @@ open class MainActivity:ComponentActivity(){
         val list=ui.col();main.addView(list)
         fun render(){
             val generation=++libraryGeneration
-            repository.executor.execute{val docs=repository.documents();val pageCounts=repository.pageCounts();runOnUiThread{
+            repository.executor.execute{
+                val records=repository.libraryDocuments()
+                val docs=records.map{it.document}
+                val byId=records.associateBy{it.document.id}
+                val dateFormat=SimpleDateFormat("yyyy. M. d.",Locale.getDefault())
+                runOnUiThread{
                 if(generation!=libraryGeneration||document!=null)return@runOnUiThread
                 list.removeAllViews();folderStrip.removeAllViews()
                 val children=if(libraryFilter=="all"&&query.isBlank())folders.objects().filter{it.optString("id")!="root"&&it.optString("parentId","root")==folder}else emptyList()
@@ -554,7 +585,11 @@ open class MainActivity:ComponentActivity(){
                 val columns=if(settings.optBoolean("listMode"))1 else if(narrow)2 else ((available+gap)/(164+gap)).coerceAtLeast(1)
                 val cardWidth=(available-gap*(columns-1))/columns
                 visible.chunked(columns).forEach{group->val line=ui.row().apply{gravity=Gravity.TOP}
-                    group.forEachIndexed{n,doc->line.addView(documentCard(doc,cardWidth,settings.optBoolean("listMode"),pageCounts[doc.id]?:0),LinearLayout.LayoutParams(dp(cardWidth),-2).apply{if(n>0)leftMargin=dp(gap)})}
+                    group.forEachIndexed{n,doc->
+                        val record=byId.getValue(doc.id)
+                        val date=record.modifiedAtMillis?.let{dateFormat.format(Date(it))}.orEmpty()
+                        line.addView(documentCard(doc,cardWidth,settings.optBoolean("listMode"),record.pageCount,date),LinearLayout.LayoutParams(dp(cardWidth),-2).apply{if(n>0)leftMargin=dp(gap)})
+                    }
                     list.addView(line,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(if(settings.optBoolean("listMode"))8 else if(narrow)25 else 34)})
                 }
                 if(selectionMode&&selectedDocuments.isNotEmpty())list.addView(ui.button("선택한 문서를 휴지통으로 이동",ui.color("#4a2020"),Color.WHITE){
@@ -567,7 +602,7 @@ open class MainActivity:ComponentActivity(){
             listOf(Triple("folder","문서","all"),Triple("star","즐겨찾기","favorite"),Triple("plus-circle","신규","new"),Triple("store","템플릿","templates"),Triple("settings","설정","settings")).forEach{(icon,label,key)->val item=ui.col().apply{gravity=Gravity.CENTER;setOnClickListener{when(key){"new"->newNote();"settings"->showSettings();else->filter(key)}}};val tint=if(key==libraryFilter)ui.color("#55b8f5")else ui.color("#8d8d91");item.addView(ui.icon(icon,tint,23));item.addView(ui.text(label,10f,tint),LinearLayout.LayoutParams(-2,-2).apply{topMargin=dp(3)});mobile.addView(item,LinearLayout.LayoutParams(0,dp(64),1f))};body.addView(mobile)}
         render()
     }
-    private fun documentCard(doc:DocumentInfo,width:Int,listMode:Boolean,pageCount:Int):View{
+    private fun documentCard(doc:DocumentInfo,width:Int,listMode:Boolean,pageCount:Int,dateText:String):View{
         val card=if(listMode)ui.row()else ui.col();card.contentDescription="${doc.title} 열기"
         card.setOnClickListener{if(selectionMode){if(!selectedDocuments.add(doc.id))selectedDocuments.remove(doc.id);showLibrary()}else openDocument(doc.id)}
         val cover=FrameLayout(this).apply{background=ui.rounded(Color.WHITE,12f);clipToOutline=true;elevation=dp(5).toFloat()}
@@ -576,22 +611,12 @@ open class MainActivity:ComponentActivity(){
         cover.addView(favorite,FrameLayout.LayoutParams(dp(32),dp(32),Gravity.TOP or Gravity.RIGHT).apply{topMargin=dp(7);rightMargin=dp(7)})
         card.addView(cover,LinearLayout.LayoutParams(dp(if(listMode)72 else width),dp(if(listMode)96 else (width/.72f).roundToInt())))
         val meta=ui.col();val title=ui.row();title.addView(ui.text(doc.title,if(listMode)15f else 14f,ui.color("#f2f2f2"),true).apply{maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END},LinearLayout.LayoutParams(0,-2,1f));title.addView(ui.iconButton("chevron-down","문서 메뉴",ui.color("#aaaaaa"),24,24,17){documentMenu(doc)})
-        meta.addView(title);val subtitle=ui.row();val date=ui.text(formatDocumentDate(doc.data),11f,ui.color("#777777"));subtitle.addView(date,LinearLayout.LayoutParams(0,-2,1f));val pages=ui.text("${pageCount}페이지",11f,ui.color("#777777"));subtitle.addView(pages);meta.addView(subtitle,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
+        meta.addView(title);val subtitle=ui.row();val date=ui.text(dateText,11f,ui.color("#777777"));subtitle.addView(date,LinearLayout.LayoutParams(0,-2,1f));val pages=ui.text("${pageCount}페이지",11f,ui.color("#777777"));subtitle.addView(pages);meta.addView(subtitle,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
         card.addView(meta,if(listMode)LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(14)}else LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
         return card
     }
-    private fun formatDocumentDate(
-        data: JSONObject,
-        format: SimpleDateFormat = SimpleDateFormat("yyyy. M. d.", Locale.getDefault()),
-        legacyFormat: SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
-    ): String {
-        val value = data.opt("updatedAt") ?: data.opt("createdAt") ?: return ""
-        val date = if (value is Number) Date(value.toLong())
-            else runCatching { legacyFormat.parse(value.toString()) }.getOrNull()
-        return date?.let(format::format).orEmpty()
-    }
-    private fun thumbnail(documentId:String?,pageId:String?):NotePreview=
-        NotePreview(this).also{thumbnails.bind(it,documentId,pageId)}
+    private fun thumbnail(documentId: String?, pageId: String?, sourceGeneration: Long? = null): NotePreview =
+        NotePreview(this).also { thumbnails.bind(it, documentId, pageId, sourceGeneration) }
     private fun newNote(initialTemplate:String="grid"){
         var template=initialTemplate;val content=showSheet("새 문서","노트 템플릿 선택",680)
         content.addView(ui.text("노트 제목",12f,ui.color("#5d626a"),true),LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(7)})
@@ -615,11 +640,18 @@ open class MainActivity:ComponentActivity(){
             val copy=folders.toString();work("폴더 정리 중…",{repository.transaction{repository.documents().filter{it.folder==id}.forEach{repository.putDocument(DocumentInfo(it.id,it.data.put("folderId",parent)))};repository.setting("folders",copy,true)}}){if(folder==id)folder=parent;showLibrary()}
         }
     }}
-    private fun mutateDocument(doc:DocumentInfo,change:JSONObject.()->Unit){
+    private fun mutateDocument(doc:DocumentInfo,contentEdit:Boolean=false,change:JSONObject.()->Unit){
         val data=doc.data.copyJson().apply(change)
         val changed=data.keys().asSequence().filter{data.opt(it)?.toString()!=doc.data.opt(it)?.toString()}.toList()
         if(document?.id==doc.id)document=DocumentInfo(doc.id,data)
-        enqueueSave({val latest=requireNotNull(repository.document(doc.id));changed.forEach{latest.data.put(it,data.opt(it))};repository.putDocument(latest)}){
+        enqueueSave({
+            val latest=requireNotNull(repository.document(doc.id))
+            val updates=changed.filter { latest.data.opt(it)?.toString()!=data.opt(it)?.toString() }
+            if(updates.isNotEmpty()){
+                updates.forEach{latest.data.put(it,data.opt(it))}
+                if(contentEdit)repository.putEditedDocument(latest) else repository.putDocument(latest)
+            }
+        }){
             if(document==null)showLibrary()}
     }
     private fun documentMenu(doc:DocumentInfo){
@@ -627,10 +659,10 @@ open class MainActivity:ComponentActivity(){
         choose(doc.title,options){i->if(doc.trashed){if(i==0)mutateDocument(doc){put("trashed",false)}else confirm("영구 삭제",doc.title){
             work("삭제 중…",{repository.deleteDocument(doc.id)}){showLibrary()}}}
             else when(i){
-                0->prompt("노트 이름",doc.title){value->mutateDocument(doc){put("title",value)}}
+                0->prompt("노트 이름",doc.title){value->mutateDocument(doc,contentEdit=true){put("title",value)}}
                 1->{val choices=listOf(json("id" to "root","title" to "문서"))+folders.objects().filter{it.optString("id")!="root"};choose("폴더로 이동",choices.map{it.optString("title")}){n->mutateDocument(doc){put("folderId",choices[n].getString("id"))}}}
-                2->prompt("태그 (쉼표로 구분)",doc.data.array("tags").let{a->(0 until a.length()).joinToString(", "){a.optString(it)}}){value->mutateDocument(doc){put("tags",JSONArray(value.split(',').map{it.trim()}.filter{it.isNotBlank()}))}}
-                3->work("노트 복제 중…",{val file=File.createTempFile("duplicate-",".ifnote",repository.workDirectory);try{repository.export(doc.id,file);file.inputStream().use{repository.importArchive(it,doc.folder)}.also{it.data.put("title","${doc.title} 사본");repository.putDocument(it)}}finally{file.delete()}}){showLibrary()}
+                2->prompt("태그 (쉼표로 구분)",doc.data.array("tags").let{a->(0 until a.length()).joinToString(", "){a.optString(it)}}){value->mutateDocument(doc,contentEdit=true){put("tags",JSONArray(value.split(',').map{it.trim()}.filter{it.isNotBlank()}))}}
+                3->work("노트 복제 중…",{val file=File.createTempFile("duplicate-",".ifnote",repository.workDirectory);try{repository.export(doc.id,file);file.inputStream().use{repository.importArchive(it,doc.folder)}.also{it.data.put("title","${doc.title} 사본");repository.putEditedDocument(it)}}finally{file.delete()}}){showLibrary()}
                 4->exportMenu(doc)
                 5->exportMenu(doc)
                 6->mutateDocument(doc){put("trashed",true)}
@@ -645,13 +677,22 @@ open class MainActivity:ComponentActivity(){
         if(this is DocumentActivity&&DocumentWindows.documentId(intent)?.let{it!=id}==true){openDocumentWindow(id);return}
         inkView?.finishContact()
         thumbnails.cancelPending()
+        val interruptedSearch = refreshLibrarySearch.takeIf { document == null && librarySearchTask != null }
+        if (interruptedSearch != null) cancelLibrarySearch()
+        fun restoreSearch() {
+            if (!isDestroyed && !isFinishing && document == null && librarySearchTask == null &&
+                interruptedSearch === refreshLibrarySearch) {
+                interruptedSearch?.invoke()
+            }
+        }
         work("노트를 여는 중…",{
             val doc=requireNotNull(repository.document(id)){"노트를 찾을 수 없습니다."}
             val pageMetas=repository.pageMetas(id);require(pageMetas.isNotEmpty()){"페이지가 없습니다."}
             Triple(doc,pageMetas.map{it.getString("id")},pageMetas)
-        }){(doc,pageIds,pageMetas)->
+        }, onFailure = ::restoreSearch) { (doc, pageIds, pageMetas) ->
             val existing=app.windows.claim(id,this)
             if(existing!=null){
+                restoreSearch()
                 if(existing.isDestroyed||existing.isFinishing)existing.afterSaved{
                     app.windows.release(id,existing);if(!isDestroyed&&!isFinishing)openDocument(id,index,onOpened)
                 }else{DocumentWindows.focus(existing);message("이 문서는 열려 있는 창에서 이어서 편집합니다.")}
@@ -1217,7 +1258,7 @@ open class MainActivity:ComponentActivity(){
     private fun outlineMenu(){val doc=document?:return;loadOutline{entries->
         choose("목차",listOf("현재 페이지를 목차에 추가")+entries.map{it.optString("title",it.optString("text"))}){index->
             if(index==0)prompt("목차 제목",""){title->val data=doc.data.copyJson();val list=data.optJSONArray("outlines")?:data.array("outline");list.put(json("id" to uid("outline"),"title" to title,"pageId" to ids[inkView?.currentIndex?:0],"pageIndex" to (inkView?.currentIndex?:0)));data.put("outlines",list);document=DocumentInfo(doc.id,data)
-                enqueueSave({repository.document(doc.id)?.let{it.data.put("outlines",list);repository.putDocument(it)}})}
+                enqueueSave({repository.document(doc.id)?.let{it.data.put("outlines",list);repository.putEditedDocument(it)}})}
             else{val entry=entries[index-1];val byId=ids.indexOf(entry.optString("pageId"));inkView?.goTo(if(byId>=0)byId else entry.optInt("pageIndex"))}
         }}
     }
@@ -1404,7 +1445,7 @@ open class MainActivity:ComponentActivity(){
         menuItem(content,if(view.readOnly)"편집 모드로 전환"else"읽기 모드",if(view.readOnly)"eye-off"else"read","실수로 필기되지 않도록 편집을 잠급니다."){view.readOnly=!view.readOnly;if(view.readOnly)view.tool=InkCanvasView.Tool.HAND}
         menuItem(content,if(view.continuous)"한 페이지 보기"else"연속 페이지 보기","sidebar"){changePageMode(!view.continuous)}
         menuItem(content,"페이지 맞춤","fit"){view.resetZoom()}
-        menuItem(content,"노트 가져오기","import","BADNOTE, PDF, 이미지, Xournal 노트를 새 문서로 엽니다."){pick("note")}
+        menuItem(content,"노트 가져오기","import","BADNOTE, Goodnotes, PDF, 이미지, Xournal"){pick("note")}
         menuItem(content,"PDF 가져오기","page-plus","PDF 각 페이지를 노트 배경으로 추가하고 텍스트를 검색합니다."){pick("appendPdf")}
         menuItem(content,"설정","settings"){showSettings()}
     }
@@ -1460,18 +1501,35 @@ open class MainActivity:ComponentActivity(){
             val title = NoteInterchange.title(name)
             requireNotNull(contentResolver.openInputStream(uri)) { "파일을 열 수 없습니다." }.use { input ->
                 when (format) {
-                    NoteInterchange.Format.PDF -> PdfImporter.import(repository, input, title, targetFolder,
+                    NoteInterchange.Format.GOODNOTES, NoteInterchange.Format.GOODNOTES_BACKUP ->
+                        GoodnotesImporter.read(repository, input, title, targetFolder,
+                            backup = format == NoteInterchange.Format.GOODNOTES_BACKUP)
+                    NoteInterchange.Format.PDF -> NoteInterchange.ImportResult(PdfImporter.import(repository, input, title, targetFolder,
                         if (mode == "appendPdf") target?.id else null, index) { id, changed, error ->
                         owner.get()?.let { activity -> activity.runOnUiThread {
                             if (!activity.isFinishing && !activity.isDestroyed) activity.pdfImportChanged(id, changed, error)
                         } }
-                    }
-                    NoteInterchange.Format.IMAGE -> NoteInterchange.importImage(repository, input, title, targetFolder, mime.orEmpty())
-                    NoteInterchange.Format.XOURNAL -> NoteInterchange.importXournal(repository, input, title, targetFolder)
-                    NoteInterchange.Format.BADNOTE -> repository.importNote(input, targetFolder)
+                    })
+                    NoteInterchange.Format.IMAGE -> NoteInterchange.ImportResult(
+                        NoteInterchange.importImage(repository, input, title, targetFolder, mime.orEmpty()))
+                    NoteInterchange.Format.XOURNAL -> NoteInterchange.ImportResult(
+                        NoteInterchange.importXournal(repository, input, title, targetFolder))
+                    NoteInterchange.Format.BADNOTE -> NoteInterchange.ImportResult(repository.importNote(input, targetFolder))
                 }
             }
-        }) { doc -> openDocument(doc.id, if (mode == "appendPdf") index else 0) }
+        }) { imported ->
+            val notice = "${imported.skipped}개 요소를 완전히 가져오지 못했습니다."
+            if (imported.folders != null) {
+                folders = imported.folders
+                showLibrary()
+                message(if (imported.skipped > 0) "${imported.documents.size}개 노트를 가져왔습니다. $notice"
+                    else "${imported.documents.size}개 노트를 가져왔습니다.")
+            } else {
+                openDocument(imported.documents.single().id, if (mode == "appendPdf") index else 0) {
+                    if (imported.skipped > 0) message(notice)
+                }
+            }
+        }
     }
     private fun pdfImportChanged(documentId:String,pagesChanged:Boolean,error:String?){
         if(error!=null){message(when(error){"pdfImportCancelled"->"PDF 가져오기를 중단했습니다.";"pdfTextTooLarge"->"PDF 원문 텍스트가 너무 큽니다.";
@@ -2268,7 +2326,9 @@ open class MainActivity:ComponentActivity(){
         if(::repository.isInitialized)repository.clearOcrMemoryCache()
         recognition.releaseIdle()
     }}
-    override fun onDestroy(){documentSearch?.close();documentSearch=null;pageGrid?.dispose();pageGrid=null;thumbnails.close();ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
+    override fun onDestroy(){
+        cancelLibrarySearch()
+        documentSearch?.close();documentSearch=null;pageGrid?.dispose();pageGrid=null;thumbnails.close();ocrTask?.let{handler.removeCallbacks(it)};pageOcr.close();inkView?.close();migration?.close()
         backupCancel?.set(true);backupWorker.shutdown();afterSaved{app.windows.releaseAll(this)}
         if(saveFailed){pendingRecordings.forEach(audio::discardPending);pendingRecordings.clear()}
         audio.close();recognition.close();network.shutdown();super.onDestroy()}
@@ -2277,7 +2337,8 @@ open class MainActivity:ComponentActivity(){
         internal fun saveCalculatedVariable(repository:NoteRepository,documentId:String,name:String,value:Double){
             val latest=repository.document(documentId)?:return
             val variables=latest.data.optJSONObject("variables")?.copyJson()?:JSONObject()
-            variables.put(name,value);latest.data.put("variables",variables);repository.putDocument(latest)
+            if(variables.optDouble(name)==value)return
+            variables.put(name,value);latest.data.put("variables",variables);repository.putEditedDocument(latest)
         }
         internal fun withoutAudioClip(clips:JSONArray,clipId:String)=JSONArray().apply{
             for(index in 0 until clips.length()){
@@ -2289,7 +2350,7 @@ open class MainActivity:ComponentActivity(){
             val latest=repository.document(documentId)?:return
             val clips=latest.data.optJSONArray("audio")?:return
             val remaining=withoutAudioClip(clips,clipId)
-            if(remaining.length()!=clips.length()){latest.data.put("audio",remaining);repository.putDocument(latest)}
+            if(remaining.length()!=clips.length()){latest.data.put("audio",remaining);repository.putEditedDocument(latest)}
         }
     }
 }

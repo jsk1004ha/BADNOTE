@@ -64,7 +64,7 @@ class AudioController(private val context:Context,private val repository:NoteRep
         try{repository.transaction{
             val latest=requireNotNull(repository.document(documentId)){"녹음할 노트가 없습니다."}
             val clips=latest.data.array("audio");clips.put(clip);latest.data.put("audio",clips)
-            repository.putDocument(latest)
+            repository.putEditedDocument(latest)
         }}catch(error:Exception){
             val referenced=runCatching{repository.document(documentId)?.data?.array("audio")?.objects()
                 ?.any{it.optString("src")=="asset:${recording.assetId}"}==true}.getOrDefault(true)

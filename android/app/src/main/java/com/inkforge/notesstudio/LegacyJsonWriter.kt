@@ -27,16 +27,16 @@ class LegacyJsonWriter(private val repository: NoteRepository, private val cance
     private val temporaryAssets = HashMap<String, File>()
 
     fun write(documentId: String, target: File) {
-        val document = requireNotNull(repository.document(documentId)) { "내보낼 노트가 없습니다." }
+        val metadata = requireNotNull(repository.portableDocumentMetadata(documentId)) { "내보낼 노트가 없습니다." }
         val ids = repository.pageIds(documentId)
         require(ids.isNotEmpty()) { "내보낼 페이지가 없습니다." }
         val generations = ids.associateWith(repository::generation)
-        val originalDocument = document.data.toString()
+        val originalDocument = metadata.toString()
         try {
             FileOutputStream(target).use { stream ->
                 output = BufferedWriter(OutputStreamWriter(stream, StandardCharsets.UTF_8), 64 * 1024)
                 output.write('{'.code)
-                val metadata = document.data.copyJson().put("version", 3)
+                metadata.put("version", 3)
                 metadata.remove("pages")
                 var comma = false
                 metadata.keys().asSequence().toList().forEach { key ->
@@ -70,7 +70,7 @@ class LegacyJsonWriter(private val repository: NoteRepository, private val cance
                 }
                 output.write("]}")
                 output.flush()
-                require(repository.document(documentId)?.data?.toString() == originalDocument &&
+                require(repository.portableDocumentMetadata(documentId)?.toString() == originalDocument &&
                     repository.pageIds(documentId) == ids &&
                     ids.all { repository.generation(it) == generations[it] }) {
                     "내보내는 동안 노트가 변경되었습니다. 다시 시도해 주세요."
