@@ -1022,7 +1022,9 @@ open class MainActivity:ComponentActivity(){
         view.pdfDarkMode=settings.optBoolean("pdfDarkMode",false)
         view.stylusOnly=settings.optBoolean("stylusOnly",true);view.scribbleErase=settings.optBoolean("scribbleErase",true);view.drawHold=settings.optBoolean("drawHold",true)
         view.continuous=document?.continuous(settings.optBoolean("continuous",true))?:settings.optBoolean("continuous",true);view.brush=settings.optString("brush","fountain");view.inkColor=savedInkColor(inkColorKey(view));view.inkWidth=savedInkWidth(inkWidthKey(view))
-        view.eraserRadius=settings.f("eraserRadius",22f);view.highlighterWidth=settings.f("highlighterWidth",22f);view.penSettings=settings.optJSONObject("penSettings")?:defaultPenSettings(view.brush);view.preciseEraser=settings.optBoolean("preciseEraser",false)
+        view.eraserRadius=settings.f("eraserRadius",22f);view.highlighterWidth=settings.f("highlighterWidth",22f);view.preciseEraser=settings.optBoolean("preciseEraser",false)
+        view.penSettings = (settings.optJSONObject("penProfiles")?.optJSONObject(view.brush)
+            ?: settings.optJSONObject("penSettings"))?.copyJson() ?: defaultPenSettings(view.brush)
         status.alpha=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f)
     }
     private fun updatePageLabel(){pageLabel?.text="${(inkView?.currentIndex?:0)+1} / ${ids.size}";pageLabel?.contentDescription="${t("페이지 관리")}, ${(inkView?.currentIndex?:0)+1} / ${ids.size}";zoomLabel?.text="${inkView?.zoomPercent()?:100}%";updateUndoPill()}
