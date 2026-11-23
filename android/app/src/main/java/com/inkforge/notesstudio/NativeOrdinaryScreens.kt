@@ -1,8 +1,6 @@
 package com.inkforge.notesstudio
 
 import android.view.View
-import android.content.res.ColorStateList
-import android.widget.CheckBox
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,9 +10,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalConfiguration
 import kotlin.math.floor
-import org.json.JSONObject
 
 internal data class LibraryFolderUi(val id: String, val title: String, val parentId: String, val color: Color, val count: Int)
 internal data class LibraryDocumentUi(val document: DocumentInfo, val date: String, val pages: Int)
@@ -38,7 +35,7 @@ internal data class LibraryUiState(val title: String, val folder: String, val fi
     val query: String, val folders: List<LibraryFolderUi>, val path: List<LibraryFolderUi>,
     val listMode: Boolean, val sortByTitle: Boolean, val selectionMode: Boolean,
     val selected: Set<String>, val narrow: Boolean, val searchOpen: Boolean,
-    val ocrMatches: Set<String> = emptySet())
+    val ocrMatches: Set<String> = emptySet(), val scrollReset: Int = 0)
 
 private val libraryBackground = Color(0xfff6f7fb)
 private val libraryPanel = Color.White
@@ -58,17 +55,16 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
     onFavorite: (String) -> Unit, onSelect: (String) -> Unit, onSelectionMode: () -> Unit,
     onSelectedTrash: () -> Unit, onSort: () -> Unit, onListMode: () -> Unit,
     onSettings: () -> Unit) {
-    var search by remember(state.folder, state.filter) { mutableStateOf(state.query) }
-    val visible = remember(documents, state, search) {
+    val visible = remember(documents, state.query, state.folder, state.filter, state.sortByTitle, state.ocrMatches) {
         documents.filter { item ->
             val doc = item.document
-            val matches = doc.title.contains(search, true) || doc.data.array("tags").toString().contains(search, true) ||
-                (search.isNotBlank() && doc.id in state.ocrMatches)
+            val matches = doc.title.contains(state.query, true) || doc.data.array("tags").toString().contains(state.query, true) ||
+                (state.query.isNotBlank() && doc.id in state.ocrMatches)
             matches && when (state.filter) {
                 "trash" -> doc.trashed
                 "favorite" -> !doc.trashed && doc.favorite
                 "shared" -> !doc.trashed && doc.data.optBoolean("shared")
-                else -> !doc.trashed && (search.isNotBlank() || doc.folder == state.folder)
+                else -> !doc.trashed && (state.query.isNotBlank() || doc.folder == state.folder)
             }
         }.let { if (state.sortByTitle) it.sortedBy { item -> item.document.title } else it }
     }
@@ -95,7 +91,9 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                     }
                 }
             }
-            LazyColumn(Modifier.fillMaxSize().padding(horizontal = pad.dp),
+            val groups = remember(visible, columns) { visible.chunked(columns) }
+            val listState = key(state.scrollReset) { rememberLazyListState() }
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = pad.dp), state = listState,
                 contentPadding = PaddingValues(top = if (state.narrow) 10.dp else 14.dp, bottom = if (state.narrow) 92.dp else 72.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 item {
@@ -109,13 +107,13 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                         IconAction("settings", translate("설정"), icon, Modifier.size(44.dp)) { onSettings() }
                     }
                 }
-                if (state.searchOpen || search.isNotBlank()) item {
-                    BasicTextField(search, { search = it; onQuery(it) }, singleLine = true,
+                if (state.searchOpen || state.query.isNotBlank()) item {
+                    BasicTextField(state.query, onQuery, singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(color = libraryText, fontSize = 15.sp),
                         modifier = Modifier.fillMaxWidth().background(libraryPanel, RoundedCornerShape(13.dp))
                             .padding(14.dp).semantics { contentDescription = translate("노트 검색") },
                         decorationBox = { inner -> Box {
-                            if (search.isEmpty()) Text(translate("노트 검색"), color = libraryMuted, fontSize = 15.sp)
+                            if (state.query.isEmpty()) Text(translate("노트 검색"), color = libraryMuted, fontSize = 15.sp)
                             inner()
                         } })
                 }
@@ -146,7 +144,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                         }
                     }
                 }
-                if (state.filter == "all" && search.isBlank()) {
+                if (state.filter == "all" && state.query.isBlank()) {
                     item {
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -173,7 +171,7 @@ internal fun NativeLibraryScreen(state: LibraryUiState, documents: List<LibraryD
                         LibraryAction(translate("새 노트"), true, Modifier.padding(top = 18.dp)) { onNewNote("grid") }
                     } }
                 } else {
-                    items(visible.chunked(columns)) { group ->
+                    items(groups) { group ->
                         Row(horizontalArrangement = Arrangement.spacedBy(gap.dp)) {
                             group.forEach { item ->
                                 LibraryCard(item, state.listMode, item.document.id in state.selected,
@@ -221,7 +219,9 @@ private fun LibraryCard(item: LibraryDocumentUi, listMode: Boolean, selected: Bo
         .getOrDefault(0xff2f7fb7.toInt())
     @Composable fun Cover(modifier: Modifier) {
         Box(modifier.background(Color.White, RoundedCornerShape(12.dp))) {
-            AndroidView(factory = { preview(doc.id, coverColor) }, modifier = Modifier.fillMaxSize())
+            key(doc.id, coverColor) {
+                AndroidView(factory = { preview(doc.id, coverColor) }, modifier = Modifier.fillMaxSize())
+            }
             IconAction(if (selectionMode) "check-circle" else "star",
                 translate(if (selectionMode) "문서 선택" else "즐겨찾기"), icon,
                 Modifier.align(Alignment.TopEnd).padding(7.dp).size(32.dp), selected || doc.favorite,
@@ -258,7 +258,9 @@ private fun LibraryCard(item: LibraryDocumentUi, listMode: Boolean, selected: Bo
 
 @Composable
 private fun NativeGlyph(name: String, tint: Int, size: Int, icon: (String, Int, Int) -> View) {
-    AndroidView(factory = { icon(name, tint, size) }, modifier = Modifier.size(size.dp))
+    key(name, tint, size) {
+        AndroidView(factory = { icon(name, tint, size) }, modifier = Modifier.size(size.dp))
+    }
 }
 
 @Composable
@@ -298,98 +300,5 @@ private fun LibraryAction(label: String, selected: Boolean, modifier: Modifier =
         contentAlignment = Alignment.Center) {
         Text(label, color = if (selected) libraryAccent else libraryText,
             fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-internal fun NativeSettingsScreen(initial: JSONObject, translate: (String) -> String,
-    onToggle: (String, Boolean) -> Unit, onOpacity: (Float) -> Unit,
-    onLanguage: () -> Unit, onOcrPolicy: () -> Unit, onUpdate: () -> Unit,
-    onNotices: () -> Unit, onBackup: () -> Unit, onShortcuts: () -> Unit, onClose: () -> Unit) {
-    val toggles = remember { mutableStateMapOf<String, Boolean>().apply {
-        listOf("stylusOnly" to true, "scribbleErase" to true, "drawHold" to true,
-            "telemetry" to false, "continuous" to true, "autoOcr" to true,
-            "autoMath" to false, "pdfDarkMode" to false).forEach { (key, fallback) -> put(key, initial.optBoolean(key, fallback)) }
-    } }
-    var opacity by remember { mutableFloatStateOf(initial.f("hudTextOpacity", 1f).coerceIn(.35f, 1f)) }
-    val language = when (initial.optString("language", "ko")) {
-        "en" -> "English"; "ja" -> "日本語"; "zh" -> "中文"; "pt" -> "Português"; else -> "한국어"
-    }
-    val ocrPolicy = when (initial.optString("ocrLanguagePolicy", "ko-primary")) {
-        "en-primary" -> "English first"; "mixed-review" -> translate("한·영 검토")
-        "ja" -> "日本語"; "zh" -> "中文"; "pt" -> "Português"; else -> translate("한국어 우선")
-    }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SettingChoice(translate("언어"), translate("앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다."),
-            language, onLanguage)
-        SettingChoice(translate("손글씨 OCR 언어"), translate("한국어와 영어가 섞인 필기를 함께 인식합니다."),
-            ocrPolicy, onOcrPolicy)
-        listOf(
-            Triple("stylusOnly", "스타일러스 전용 필기", "손바닥과 손가락 입력을 필기에서 제외합니다."),
-            Triple("scribbleErase", "낙서해서 지우기", "펜으로 글자 위를 지그재그로 문지르면 반복해서 닿은 필기를 지웁니다."),
-            Triple("drawHold", "그려서 도형 만들기", "일반 펜으로 그린 뒤 펜촉을 댄 채 멈추면 직선·곡선·원·타원·사각형으로 변환합니다."),
-            Triple("telemetry", "스타일러스 정보 표시", "필압, 기울기, 입력 장치를 화면에 표시합니다."),
-            Triple("continuous", "연속 페이지 보기", "모든 페이지를 세로로 이어 표시합니다."),
-            Triple("autoOcr", "손글씨 OCR 자동 등록", "필기를 인식해 문서 검색에 등록합니다."),
-            Triple("autoMath", "손글씨 수식 자동 계산", "등호로 끝나는 수식을 인식해 계산합니다."),
-            Triple("pdfDarkMode", "PDF 다크 모드", "화면의 PDF 배경만 반전하며 필기와 내보내기 색상은 유지합니다.")
-        ).forEach { (key, label, description) ->
-            Row(Modifier.fillMaxWidth().background(Color(0xfff4f6f8), RoundedCornerShape(13.dp))
-                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(translate(label), color = Color(0xff172b42), fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text(translate(description), color = Color(0xff607185), fontSize = 11.sp)
-                }
-                AndroidView(factory = { context -> CheckBox(context).apply {
-                    buttonTintList = ColorStateList.valueOf(0xff1397ed.toInt())
-                    contentDescription = translate(label)
-                    isChecked = toggles[key] == true
-                } }, update = { control ->
-                    control.setOnCheckedChangeListener(null)
-                    control.isChecked = toggles[key] == true
-                    control.contentDescription = translate(label)
-                    control.setOnCheckedChangeListener { _, value ->
-                        toggles[key] = value; onToggle(key, value)
-                    }
-                }, modifier = Modifier.size(42.dp))
-            }
-        }
-        Column(Modifier.fillMaxWidth().background(Color(0xfff4f6f8), RoundedCornerShape(13.dp)).padding(12.dp)) {
-            Text(translate("HUD 텍스트 투명도"), color = Color(0xff172b42), fontWeight = FontWeight.Bold)
-            Text(translate("S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다."),
-                color = Color(0xff607185), fontSize = 11.sp)
-            Text("${(opacity * 100).toInt()}%", color = Color(0xff607185))
-            Slider(value = opacity, onValueChange = { opacity = it; onOpacity(it) }, valueRange = .35f..1f)
-        }
-        SettingAction(translate("업데이트 확인"), "bad note ${BuildConfig.VERSION_NAME}", onUpdate)
-        SettingAction(translate("자동 백업"), translate("지정한 폴더에 변경된 노트의 복사본을 저장합니다."), onBackup)
-        SettingAction(translate("키보드 단축키"), translate("실행 취소와 숫자 도구 전환을 확인합니다."), onShortcuts)
-        SettingAction(translate("PDFium 오픈소스 고지"), translate("PDF 원문 검색 엔진의 라이선스와 포함된 고지를 읽습니다."), onNotices)
-        SettingAction(translate("완료"), "", onClose)
-    }
-}
-
-@Composable
-private fun SettingChoice(label: String, description: String, value: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Color(0xfff4f6f8), RoundedCornerShape(13.dp))
-        .clickable(onClick = onClick).semantics { contentDescription = label }.padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(label, color = Color(0xff172b42), fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(description, color = Color(0xff607185), fontSize = 11.sp)
-        }
-        Box(Modifier.background(Color(0xfff0f2f5), RoundedCornerShape(12.dp))
-            .heightIn(min = 38.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-            Text(value, color = Color(0xff202228), fontSize = 14.sp, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun SettingAction(label: String, description: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Color(0xfff4f6f8), RoundedCornerShape(13.dp))
-        .clickable(onClick = onClick).semantics { contentDescription = label }.padding(14.dp)) {
-        Text(label, color = Color(0xff172b42), fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        if (description.isNotBlank()) Text(description, color = Color(0xff607185), fontSize = 11.sp)
     }
 }

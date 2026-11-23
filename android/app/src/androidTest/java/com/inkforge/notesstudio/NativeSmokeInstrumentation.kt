@@ -107,6 +107,14 @@ class NativeSmokeInstrumentation:Instrumentation(){
         try{
             check(targetContext.packageName.endsWith(".debug"),"Refusing to test a release app")
             if(android.os.Build.VERSION.SDK_INT>=33)android.graphics.HardwareRenderer.setDrawingEnabled(true)
+            if (localChecks?.getString("settingsSheetOnly") == "true") {
+                SettingsSheetChecks.run(this, result)
+                result.putString("passed", "true"); finish(0, result); return
+            }
+            if (localChecks?.getString("libraryPresentationOnly") == "true") {
+                LibraryPresentationChecks.run(this, result, localChecks?.getString("expectStableLibrary") == "true")
+                result.putString("passed", "true"); finish(0, result); return
+            }
             if(assetCleanupOnly){
                 AssetCleanupChecks.run(targetContext)
                 result.putString("assetCleanup","owned_shared_trash_clipboard_rollback_deferred_retry_verified")
@@ -482,7 +490,9 @@ class NativeSmokeInstrumentation:Instrumentation(){
         check(ui{hasCompose(activity.findViewById(android.R.id.content))},"Canonical library must use ComposeView")
         result.putString("uiLibraryScreenshot",screen("library.png"))
         click("설정");result.putString("uiSettingsScreenshot",screen("settings.png"))
-        click("언어");click("English")
+        click("언어")
+        await("English option") { visible("English") }
+        click("English")
         await("English Compose settings and saved preference"){
             visible("Language")&&visible("Settings")&&
                 JSONObject(repository.setting("preferences","{}")).optString("language")=="en"
@@ -505,12 +515,16 @@ class NativeSmokeInstrumentation:Instrumentation(){
         click("Settings")
         await("English Compose help text") { visible("Language")&&visible("Change the app display language. The note contents and file name will not be changed.") }
         result.putString("uiEnglishSettingsScreenshot",screen("settings-en.png"))
-        click("Language");click("korean")
+        click("Language")
+        await("Korean option") { visible("korean") }
+        click("korean")
         await("Korean Compose settings restored"){
             visible("언어")&&JSONObject(repository.setting("preferences","{}")).optString("language","ko")=="ko"
         }
         result.putString("uiLocale","English_selected_rendered_persisted_reentered_then_Korean_restored")
-        click("완료");click("신규");click("닫기")
+        ui { activity.onBackPressedDispatcher.onBackPressed() }
+        await("settings dismissed") { visible("신규") }
+        click("신규");click("닫기")
         result.putString("uiScreenWidthDp",activity.resources.configuration.screenWidthDp.toString())
         result.putString("classicUi","PASS: page management consumer flow; highlighter overflow; pen settings; color sheet; canonical Compose library/settings/new-note; original paper width")
     }

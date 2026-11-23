@@ -250,6 +250,21 @@ class ProductivityInstrumentation : Instrumentation() {
             check(beforeNavigation == ordered(repository) { repository.backupStamp(doc.id) }) { "Navigation triggered backup" }
             val first = SafBackup.run(targetContext, repository) { false }
             check(first.written == 1)
+            val successfulAStatus = prefs.status
+            val treeB = DocumentsContract.buildTreeDocumentUri("${targetContext.packageName}.backup-test",
+                "status-scope-${System.nanoTime()}").toString()
+            val scheduledSelection = prefs.enabled
+            prefs.folder = treeB
+            val untouchedBStatus = prefs.status
+            check(untouchedBStatus == "아직 백업하지 않았습니다.") { "New destination inherited another backup status" }
+            val lateAStatus = "$successfulAStatus · 지연 완료"
+            prefs.status(tree.toString(), lateAStatus)
+            check(prefs.folder == treeB && prefs.enabled == scheduledSelection) {
+                "Late backup status changed the selected destination or schedule"
+            }
+            check(prefs.status == untouchedBStatus) { "Destination B received destination A's late status" }
+            prefs.folder = tree.toString()
+            check(prefs.status == lateAStatus) { "Destination A did not retain its late status" }
             val journal = prefs.journal(tree.toString()); val old = journal.previous(doc.id)!!
             check(!Uri.parse(old.uri).lastPathSegment.orEmpty().endsWith(".pending"))
             val digest = MessageDigest.getInstance("SHA-256")

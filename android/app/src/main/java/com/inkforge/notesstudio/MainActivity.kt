@@ -19,6 +19,7 @@ import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.*
+import android.view.animation.PathInterpolator
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -32,6 +33,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.*
 
@@ -66,6 +70,10 @@ open class MainActivity:ComponentActivity(){
     private var folder="root"
     private var libraryFilter="all"
     private var query=""
+    private val librarySections = mapOf(
+        "all" to "문서", "favorite" to "즐겨찾기", "shared" to "공유됨",
+        "templates" to "템플릿", "trash" to "휴지통"
+    )
     private var settings=JSONObject()
     private var settingsBaseline=JSONObject()
     private var folders=JSONArray()
@@ -86,11 +94,19 @@ open class MainActivity:ComponentActivity(){
     private var saving=false
     private var saveFailed=false
     private var libraryGeneration=0
+    private var refreshLibraryRows: (() -> Unit)? = null
+    private var hasHadWindowFocus = false
     private var librarySearchGeneration=0L
     private var librarySearchTask:Runnable?=null
     private var lastActivityIntentHandled=false
     private val ui by lazy { ClassicUi(this,::t) }
     private var modal:FrameLayout?=null
+    private var settingsOpen = false
+    private var settingsClosing = false
+    private val settingsPage = mutableStateOf<SettingsPage?>(null)
+    private val settingsSnapshot = mutableStateOf(JSONObject())
+    private val settingsBackup = mutableStateOf(BackupSettingsUi(false, null, "", false))
+    private var settingsBackgroundAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
     private var editorSurface:FrameLayout?=null
     private var editorWorkspace:LinearLayout?=null
     private var editorNavbar:LinearLayout?=null
@@ -140,8 +156,15 @@ open class MainActivity:ComponentActivity(){
             val restore=if(savedInstanceState!=null)savedInstanceState.getString("documentId").orEmpty()
                 else DocumentWindows.documentId(intent)?:repository.setting("last-open-document")
             showLibrary()
+            val restoreSettings = {
+                if (savedInstanceState?.getBoolean("settingsOpen") == true) {
+                    val pageName = savedInstanceState.getString("settingsPage")
+                    showSettings(SettingsPage.entries.firstOrNull { it.name == pageName })
+                }
+            }
             if (intent?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) handleIncoming(intent)
-            else if(restore.isNotBlank())openDocument(restore,savedInstanceState?.getInt("pageIndex",0))
+            else if (restore.isNotBlank()) openDocument(restore, savedInstanceState?.getInt("pageIndex", 0), restoreSettings)
+            else restoreSettings()
         }
     }
     private fun makeRoot(){
@@ -264,6 +287,7 @@ open class MainActivity:ComponentActivity(){
     private fun clearScreen(){
         textEditor?.finish();textEditor=null
         pageGrid?.dispose();pageGrid=null;thumbnails.cancelPending()
+        refreshLibraryRows = null
         librarySearchTask?.let{handler.removeCallbacks(it)}
         librarySearchGeneration++
         cancelManualOcr("손글씨 인식을 취소했습니다.")
@@ -297,20 +321,54 @@ open class MainActivity:ComponentActivity(){
             LibraryFolderUi(id,if(id in setOf("root","study","work"))t(item.optString("title")) else item.optString("title"),item.optString("parentId","root"),
                 ComposeColor(runCatching { ui.color(item.optString("color","#67c8ff")) }.getOrDefault(ui.accent)),0)
         }
-        val path=mutableListOf<LibraryFolderUi>()
-        var node=allFolders.firstOrNull{it.id==folder}
-        val visited=mutableSetOf<String>()
-        while(node!=null&&node.id!="root"&&visited.add(node.id)){
-            path.add(0,node);node=allFolders.firstOrNull{it.id==node.parentId}
+        fun title(folders: List<LibraryFolderUi>, activeFolder: String, filter: String): String {
+            if (filter == "all" && activeFolder != "root") {
+                return folders.firstOrNull { it.id == activeFolder }?.title ?: t("문서")
+            }
+            return t(librarySections[filter] ?: "문서")
         }
-        val active=allFolders.firstOrNull{it.id==folder}
-        val title=if(libraryFilter=="all"&&folder!="root")active?.title?:t("문서")
-            else t(mapOf("all" to "문서","favorite" to "즐겨찾기","shared" to "공유됨",
-                "templates" to "템플릿","trash" to "휴지통")[libraryFilter]?:"문서")
-        val state=mutableStateOf(LibraryUiState(title,folder,libraryFilter,query,allFolders,path,
-            settings.optBoolean("listMode"),settings.optString("librarySort") == "title",
-            selectionMode,selectedDocuments.toSet(),narrow,globalSearchOpen))
-        val documentState=mutableStateOf<List<LibraryDocumentUi>>(emptyList())
+        fun path(folders: List<LibraryFolderUi>, activeFolder: String): List<LibraryFolderUi> {
+            val byId = folders.associateBy { it.id }
+            val visited = mutableSetOf<String>()
+            val result = mutableListOf<LibraryFolderUi>()
+            var node = byId[activeFolder]
+            while (node != null && node.id != "root" && visited.add(node.id)) {
+                result.add(node)
+                node = byId[node.parentId]
+            }
+            return result.asReversed()
+        }
+        val state = mutableStateOf(
+            LibraryUiState(title(allFolders, folder, libraryFilter), folder, libraryFilter, query,
+                allFolders, path(allFolders, folder), settings.optBoolean("listMode"),
+                settings.optString("librarySort") == "title", selectionMode, selectedDocuments.toSet(),
+                narrow, globalSearchOpen)
+        )
+        val documentState = mutableStateOf<List<LibraryDocumentUi>>(emptyList())
+
+        fun updateLayout(presentation: LibraryUiState) {
+            state.value = presentation.copy(scrollReset = state.value.scrollReset + 1)
+        }
+        fun publishSelection() {
+            updateLayout(state.value.copy(selectionMode = selectionMode, selected = selectedDocuments.toSet()))
+        }
+        fun toggleSelected(id: String) {
+            if (!selectedDocuments.add(id)) selectedDocuments.remove(id)
+            publishSelection()
+        }
+        fun browse(activeFolder: String, filter: String) {
+            folder = activeFolder
+            libraryFilter = filter
+            val current = state.value
+            updateLayout(current.copy(
+                title = title(current.folders, folder, filter),
+                folder = folder,
+                filter = filter,
+                path = path(current.folders, folder),
+                selectionMode = selectionMode,
+                selected = selectedDocuments.toSet()
+            ))
+        }
         fun searchOcrMatches(value:String){
             val request=++librarySearchGeneration
             librarySearchTask?.let{handler.removeCallbacks(it)}
@@ -332,39 +390,76 @@ open class MainActivity:ComponentActivity(){
             setContent { NativeLibraryScreen(state.value,documentState.value,
                 {id,cover->thumbnail(id,null).apply{coverColor=cover}},
                 {name,tint,size->ui.icon(name,tint,size)},::t,
-                onQuery={query=it;searchOcrMatches(it)},
-                onSearch={globalSearchOpen=!globalSearchOpen;showLibrary()},
-                onFilter={libraryFilter=it;selectionMode=false;selectedDocuments.clear();showLibrary()},
-                onFolder={folder=it;libraryFilter="all";showLibrary()},
+                onQuery = {
+                    query = it
+                    state.value = state.value.copy(query = it)
+                    searchOcrMatches(it)
+                },
+                onSearch = {
+                    globalSearchOpen = !globalSearchOpen
+                    updateLayout(state.value.copy(searchOpen = globalSearchOpen))
+                },
+                onFilter = {
+                    selectionMode = false
+                    selectedDocuments.clear()
+                    browse(folder, it)
+                },
+                onFolder = { browse(it, "all") },
                 onFolderMenu={id->folders.objects().firstOrNull{it.optString("id")==id}?.let(::folderMenu)},
                 onNewFolder={newFolder()},onNewNote={newNote(it)},onImport={pick("note")},
-                onDocument={id->if(selectionMode){if(!selectedDocuments.add(id))selectedDocuments.remove(id);showLibrary()}
-                    else openDocument(id)},
+                onDocument = { id -> if (selectionMode) toggleSelected(id) else openDocument(id) },
                 onDocumentMenu={id->documentState.value.firstOrNull{it.document.id==id}?.let{documentMenu(it.document)}},
                 onFavorite={id->documentState.value.firstOrNull{it.document.id==id}?.let{item->
                     mutateDocument(item.document){put("favorite",!item.document.favorite)}}},
-                onSelect={id->if(!selectedDocuments.add(id))selectedDocuments.remove(id);showLibrary()},
-                onSelectionMode={selectionMode=!selectionMode;selectedDocuments.clear();showLibrary()},
+                onSelect = ::toggleSelected,
+                onSelectionMode = {
+                    selectionMode = !selectionMode
+                    selectedDocuments.clear()
+                    publishSelection()
+                },
                 onSelectedTrash={val selected=selectedDocuments.toSet();confirm("휴지통으로 이동","${selected.size}개 문서를 이동할까요?"){
                     work("문서를 이동하는 중…",{repository.documents().filter{it.id in selected}.forEach{
                         repository.putDocument(DocumentInfo(it.id,it.data.put("trashed",true)))
                     }}){selectedDocuments.clear();selectionMode=false;showLibrary()}}},
-                onSort={settings.put("librarySort",if(settings.optString("librarySort")=="title")"date" else "title");saveSettings();showLibrary()},
-                onListMode={settings.put("listMode",!settings.optBoolean("listMode"));saveSettings();showLibrary()},
+                onSort = {
+                    val byTitle = !state.value.sortByTitle
+                    updateLayout(state.value.copy(sortByTitle = byTitle))
+                    settings.put("librarySort", if (byTitle) "title" else "date")
+                    saveSettings()
+                },
+                onListMode = {
+                    val listMode = !state.value.listMode
+                    updateLayout(state.value.copy(listMode = listMode))
+                    settings.put("listMode", listMode)
+                    saveSettings()
+                },
                 onSettings={showSettings()}) }
         }
         body.addView(compose,LinearLayout.LayoutParams(-1,0,1f))
         searchOcrMatches(query)
-        repository.executor.execute{
-            val docs=repository.documents()
-            val pageCounts=repository.pageCounts()
-            val counts=docs.filter{!it.trashed}.groupingBy{it.folder}.eachCount()
-            val rows=docs.map{LibraryDocumentUi(it,formatDocumentDate(it.data),pageCounts[it.id]?:0)}
-            runOnUiThread{if(generation==libraryGeneration&&document==null){
-                documentState.value=rows
-                state.value=state.value.copy(folders=allFolders.map{it.copy(count=counts[it.id]?:0)})
-            }}
+        val refreshRows = {
+            repository.executor.execute{
+                val docs=repository.documents()
+                val pageCounts=repository.pageCounts()
+                val counts = docs.asSequence().filterNot { it.trashed }.groupingBy { it.folder }.eachCount()
+                val dateFormat = SimpleDateFormat("yyyy. M. d.", Locale.getDefault())
+                val legacyDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+                val rows = docs.map { LibraryDocumentUi(
+                    it, formatDocumentDate(it.data, dateFormat, legacyDateFormat), pageCounts[it.id] ?: 0
+                ) }
+                runOnUiThread {
+                    if (generation == libraryGeneration && document == null && !isDestroyed) {
+                        val countedFolders = allFolders.map { it.copy(count = counts[it.id] ?: 0) }
+                        documentState.value = rows
+                        state.value = state.value.copy(
+                            folders = countedFolders, path = path(countedFolders, folder)
+                        )
+                    }
+                }
+            }
         }
+        refreshLibraryRows = refreshRows
+        refreshRows()
     }
 
     private fun showLibraryLegacy(){
@@ -485,10 +580,15 @@ open class MainActivity:ComponentActivity(){
         card.addView(meta,if(listMode)LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(14)}else LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
         return card
     }
-    private fun formatDocumentDate(data:JSONObject):String{
-        val value=data.opt("updatedAt")?:data.opt("createdAt")?:return ""
-        val date=if(value is Number)java.util.Date(value.toLong())else runCatching{java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss",java.util.Locale.US).parse(value.toString())}.getOrNull()
-        return date?.let{java.text.SimpleDateFormat("yyyy. M. d.",java.util.Locale.getDefault()).format(it)}?:""
+    private fun formatDocumentDate(
+        data: JSONObject,
+        format: SimpleDateFormat = SimpleDateFormat("yyyy. M. d.", Locale.getDefault()),
+        legacyFormat: SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+    ): String {
+        val value = data.opt("updatedAt") ?: data.opt("createdAt") ?: return ""
+        val date = if (value is Number) Date(value.toLong())
+            else runCatching { legacyFormat.parse(value.toString()) }.getOrNull()
+        return date?.let(format::format).orEmpty()
     }
     private fun thumbnail(documentId:String?,pageId:String?):NotePreview=
         NotePreview(this).also{thumbnails.bind(it,documentId,pageId)}
@@ -538,7 +638,9 @@ open class MainActivity:ComponentActivity(){
             }
         }
     }
-    fun openDocument(id:String,index:Int?=null){
+    fun openDocument(id: String, index: Int? = null) = openDocument(id, index) {}
+
+    private fun openDocument(id: String, index: Int?, onOpened: () -> Unit) {
         closeSearchDrawer()
         if(this is DocumentActivity&&DocumentWindows.documentId(intent)?.let{it!=id}==true){openDocumentWindow(id);return}
         inkView?.finishContact()
@@ -551,7 +653,7 @@ open class MainActivity:ComponentActivity(){
             val existing=app.windows.claim(id,this)
             if(existing!=null){
                 if(existing.isDestroyed||existing.isFinishing)existing.afterSaved{
-                    app.windows.release(id,existing);if(!isDestroyed&&!isFinishing)openDocument(id,index)
+                    app.windows.release(id,existing);if(!isDestroyed&&!isFinishing)openDocument(id,index,onOpened)
                 }else{DocumentWindows.focus(existing);message("이 문서는 열려 있는 창에서 이어서 편집합니다.")}
                 return@work
             }
@@ -561,7 +663,9 @@ open class MainActivity:ComponentActivity(){
             setTaskDescription(android.app.ActivityManager.TaskDescription(doc.title,null,ui.blue))
             val remembered=doc.data.optString("lastPageId");val found=pageIds.indexOf(remembered)
             val pageIndex=(index?:if(found>=0)found else doc.data.optInt("lastPageIndex",0)).coerceIn(0,pageIds.lastIndex)
-            showEditor(pageIndex);enqueueSave({repository.setting("last-open-document",id,true)})
+            showEditor(pageIndex)
+            enqueueSave({ repository.setting("last-open-document", id, true) })
+            onOpened()
         }
     }
     internal fun openDocumentWindow(id:String){
@@ -1381,9 +1485,15 @@ open class MainActivity:ComponentActivity(){
     @Deprecated("Uses platform result contracts for API 23 compatibility")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data)
         if(requestCode==NativeFileExport.REQUEST_SAVE){fileExport.result(resultCode,data);return}
-        if(requestCode==REQUEST_BACKUP_FOLDER&&resultCode==RESULT_OK){
-            data?.data?.let{uri->try{BackupSchedule.chooseFolder(this,uri,data.flags);showBackupSettings()}
-                catch(error:Exception){message(error.message?:"백업 폴더를 지정하지 못했습니다.")}}
+        if (requestCode == REQUEST_BACKUP_FOLDER) {
+            if (resultCode == RESULT_OK && data != null) data.data?.let { uri ->
+                try {
+                    BackupSchedule.chooseFolder(this, uri, data.flags)
+                    showSettings(SettingsPage.BACKUP)
+                } catch (error: Exception) {
+                    message(error.message ?: "백업 폴더를 지정하지 못했습니다.")
+                }
+            }
             return
         }
         if(requestCode==REQUEST_IMPORT&&resultCode==RESULT_OK)data?.data?.let{importUri(it,importMode)}
@@ -1636,101 +1746,223 @@ open class MainActivity:ComponentActivity(){
     }
     override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<String>,grantResults:IntArray){super.onRequestPermissionsResult(requestCode,permissions,grantResults)
         if(requestCode==REQUEST_AUDIO){if(grantResults.firstOrNull()==PackageManager.PERMISSION_GRANTED&&document!=null)toggleRecording()else message("녹음 권한이 필요합니다.")}}
-    private fun showSettings(){
-        val content=showSheet("bad note","설정",680)
-        val compose=ComposeView(this).apply{
+    private fun showSettings(page: SettingsPage? = null) {
+        if (settingsOpen && !settingsClosing) {
+            settingsPage.value = page
+            refreshSettings()
+            return
+        }
+        closeSheet()
+        inkView?.finishContact()
+        settingsPage.value = page
+        refreshSettings()
+        val shade = FrameLayout(this).apply {
+            setBackgroundColor(0x61000000)
+            setOnClickListener { closeSettings() }
+        }
+        val compose = ComposeView(this).apply {
+            isClickable = true
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            setContent { NativeSettingsScreen(settings.copyJson(),::t,
-                onToggle={key,value->settings.put(key,value);inkView?.let{applySettings(it)
-                    if(key=="continuous")changePageMode(value)};saveSettings()},
-                onOpacity={value->settings.put("hudTextOpacity",value);applyHudOpacity();saveSettings()},
-                onLanguage={val languages=listOf("ko","en","ja","zh","pt")
-                    val names=listOf("한국어","English","日本語","中文","Português")
-                    choose("언어",names){index->settings.put("language",languages[index]);loadDictionary();saveSettings()
-                        val page=inkView?.currentIndex?:0;if(document==null)showLibrary()else showEditor(page);showSettings()}},
-                onOcrPolicy={val policies=listOf("ko-primary","en-primary","mixed-review","ja","zh","pt")
-                    val names=listOf("한국어 우선","English first","한·영 검토","日本語","中文","Português")
-                    choose("손글씨 OCR 언어",names){index->settings.put("ocrLanguagePolicy",policies[index]);saveSettings();scheduleOcr();showSettings()}},
-                onUpdate={closeSheet();checkUpdates()},
-                onNotices={val notices=assets.open("pdfium-notices.txt").bufferedReader(Charsets.UTF_8).use{it.readText()}
-                    val viewer=showSheet("Open Source","PDFium 라이선스",680)
-                    viewer.addView(ui.text(notices,11f,ui.ink).apply{setTextIsSelectable(true)})},
-                onBackup={showBackupSettings()},onShortcuts={shortcutGuide()},onClose={closeSheet()}) }
-        }
-        content.addView(compose,LinearLayout.LayoutParams(-1,-2))
-    }
-
-    private fun showBackupSettings(){
-        val prefs=BackupPreferences(this);val content=showSheet("Backup","자동 백업")
-        content.addView(ui.text("선택한 폴더에 변경된 문서의 .ifnote 복사본을 저장합니다. 이전 복사본은 보관합니다. 예약 백업은 약 12시간마다 충전·유휴 상태에서 실행되며 Android가 시점을 조절합니다.",13f,ui.muted))
-        content.addView(ui.text(prefs.status,12f,ui.ink),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12);bottomMargin=dp(12)})
-        if(prefs.folder.isNotBlank())content.addView(ui.text(Uri.parse(prefs.folder).lastPathSegment?:"백업 폴더",12f,ui.muted))
-        menuItem(content,"백업 폴더 선택","folder","읽기·쓰기와 파일 이름 변경을 지원하는 폴더를 선택합니다."){
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION),REQUEST_BACKUP_FOLDER)
-        }
-        menuItem(content,if(prefs.enabled)"자동 백업 끄기"else"자동 백업 켜기","settings"){
-            if(prefs.folder.isBlank())message("백업 폴더를 먼저 선택해 주세요.")else{
-                prefs.enabled=!prefs.enabled
-                try{BackupSchedule.restore(this)}catch(error:Exception){prefs.enabled=false;message(error.message?:"예약 실패")}
-                showBackupSettings()
+            setContent {
+                NativeSettingsScreen(
+                    preferences = settingsSnapshot.value,
+                    page = settingsPage.value,
+                    backup = settingsBackup.value,
+                    translate = ::t,
+                    icon = ui::icon,
+                    onNavigate = { if (backupCancel == null) settingsPage.value = it },
+                    onToggle = { key, value ->
+                        settings.put(key, value)
+                        inkView?.let {
+                            applySettings(it)
+                            if (key == "continuous") changePageMode(value)
+                        }
+                        saveSettings()
+                        refreshSettings()
+                    },
+                    onOpacity = { value ->
+                        settings.put("hudTextOpacity", value)
+                        applyHudOpacity()
+                    },
+                    onOpacityFinished = ::saveSettingsOpacity,
+                    onLanguage = { language ->
+                        if (settings.optString("language", "ko") != language) {
+                            settings.put("language", language)
+                            loadDictionary()
+                            saveSettings()
+                            val index = inkView?.currentIndex ?: 0
+                            if (document == null) showLibrary() else showEditor(index)
+                            showSettings()
+                            afterSaved {
+                                if (!isDestroyed && !isFinishing && settings.optString("language") == language) {
+                                    message("변경되었습니다")
+                                }
+                            }
+                        }
+                    },
+                    onOcrPolicy = { policy ->
+                        settings.put("ocrLanguagePolicy", policy)
+                        saveSettings()
+                        scheduleOcr()
+                        settingsPage.value = null
+                        refreshSettings()
+                    },
+                    onPickBackupFolder = ::pickBackupFolder,
+                    onBackupEnabled = ::setAutoBackup,
+                    onBackupNow = ::runBackupNow,
+                    onCancelBackup = { backupCancel?.set(true) },
+                    onUpdate = {
+                        closeSheet()
+                        checkUpdates()
+                    },
+                    onClose = ::closeSettings
+                )
             }
         }
-        menuItem(content,"지금 백업","export","휴지통 문서와 PDF 가져오기가 진행 중인 문서는 건너뜁니다."){runBackupNow()}
-    }
-    private fun runBackupNow(){
-        if(BackupPreferences(this).folder.isBlank()){message("백업 폴더를 먼저 선택해 주세요.");return}
-        inkView?.finishContact();setBusy(true,"변경된 노트를 백업하고 있습니다.")
-        val cancel=java.util.concurrent.atomic.AtomicBoolean();backupCancel=cancel
-        afterSaved{backupWorker.execute{
-            val result=runCatching{SafBackup.run(this,repository){cancel.get()}}
-            runOnUiThread{backupCancel=null;if(!isDestroyed&&!isFinishing){setBusy(false)
-                result.fold({message("${it.written}개 문서를 백업했습니다.")},{message(it.message?:"백업 실패")});showBackupSettings()}}
-        }}
-    }
-    private fun shortcutGuide(){
-        val content=showSheet("Keyboard","키보드 단축키")
-        content.addView(ui.text("Ctrl+Z 실행 취소 · Ctrl+Shift+Z / Ctrl+Y 다시 실행 · Ctrl+S 현재 필기 저장\n\n1 펜 · 2 형광펜 · 3 지우개 · 4 올가미 · 5 손 도구 · 6 텍스트 · 7 도형 · 8 암기 테이프 · 9 레이저\n\n텍스트 입력창과 대화상자에서는 편집기 단축키를 적용하지 않습니다.",14f,ui.ink))
+        val narrow = resources.configuration.screenWidthDp <= 840
+        val panel = ui.col().apply {
+            setPadding(dp(if (narrow) 17 else 22), dp(if (narrow) 20 else 22),
+                dp(if (narrow) 17 else 22), dp(if (narrow) 20 else 22))
+            background = ui.rounded(Color.WHITE, 22f)
+            if (narrow) {
+                val radius = dp(22).toFloat()
+                (background as GradientDrawable).cornerRadii =
+                    floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f)
+            }
+            clipToOutline = true
+            elevation = dp(18).toFloat()
+            isClickable = true
+        }
+        val header = ui.row().apply {
+            gravity = Gravity.TOP
+            minimumHeight = dp(56)
+        }
+        val labels = ui.col().apply { setPadding(0, dp(6), 0, 0) }
+        labels.addView(ui.text("bad note", 11f, ui.color("#66809a"), true).apply { letterSpacing = .05f })
+        labels.addView(ui.text("설정", 21f, ui.ink, true),
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        header.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(ui.iconButton("close", "닫기", action = ::closeSettings))
+        panel.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+        panel.addView(compose, LinearLayout.LayoutParams(-1, 0, 1f))
+        ViewCompat.setAccessibilityPaneTitle(panel, t("설정"))
+
+        fun panelHeight(height: Int) =
+            min(dp(if (narrow) 820 else 780), (height * if (narrow) .88f else .84f).roundToInt())
+        val availableHeight = root.height.takeIf { it > 0 } ?: dp(resources.configuration.screenHeightDp)
+        val params = FrameLayout.LayoutParams(
+            if (narrow) -1 else dp(min(680, resources.configuration.screenWidthDp - 28)),
+            panelHeight(availableHeight).coerceAtLeast(1),
+            if (narrow) Gravity.BOTTOM else Gravity.CENTER
+        )
+        shade.addView(panel, params)
+        settingsBackgroundAccessibility = body.importantForAccessibility
+        body.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        shade.alpha = 0f
+        panel.translationY = dp(10).toFloat()
+        root.addView(shade, FrameLayout.LayoutParams(-1, -1))
+        modal = shade
+        settingsOpen = true
+        shade.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val height = panelHeight(bottom - top)
+            if (height > 0 && height != panel.layoutParams.height) {
+                panel.layoutParams = panel.layoutParams.apply { this.height = height }
+            }
+        }
+        val enterEasing = PathInterpolator(.2f, 0f, 0f, 1f)
+        shade.animate().alpha(1f).setDuration(280).setInterpolator(enterEasing).start()
+        panel.animate().translationY(0f).setDuration(280).setInterpolator(enterEasing).start()
     }
 
-    private fun showSettingsLegacy(){
-        val content=showSheet("bad note","설정",680)
-        fun setting(label:String,description:String,control:View){
-            val line=ui.row().apply{setPadding(dp(12),dp(10),dp(12),dp(10));minimumHeight=dp(68);background=ui.rounded(ui.color("#f4f6f8"),13f)}
-            val copy=ui.col();copy.addView(ui.text(label,13f,ui.ink,true));copy.addView(ui.text(description,11f,ui.muted).apply{setLineSpacing(dp(3).toFloat(),1f)},LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(3)})
-            line.addView(copy,LinearLayout.LayoutParams(0,-2,1f).apply{rightMargin=dp(16)});line.addView(control)
-            content.addView(line,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)})
+    private fun closeSettings() {
+        val cancel = backupCancel
+        if (cancel != null) {
+            cancel.set(true)
+            return
         }
-        fun toggle(label:String,description:String,key:String,default:Boolean){
-            val check=CheckBox(this).apply{isChecked=settings.optBoolean(key,default);buttonTintList=android.content.res.ColorStateList.valueOf(ui.accent);contentDescription=t(label)
-                setOnCheckedChangeListener{_,checked->settings.put(key,checked);inkView?.let{applySettings(it);if(key=="continuous")changePageMode(checked)};saveSettings()}}
-            setting(label,description,check)
-        }
-        val languages=listOf("ko","en","ja","zh","pt");val names=listOf("한국어","English","日本語","中文","Português")
-        setting("언어","앱 표시 언어를 바꿉니다. 노트 내용과 파일명은 변경하지 않습니다.",ui.button(names[languages.indexOf(settings.optString("language","ko")).coerceAtLeast(0)],height=38){choose("언어",names){i->settings.put("language",languages[i]);loadDictionary();saveSettings();val index=inkView?.currentIndex?:0;if(document==null)showLibrary()else showEditor(index);showSettings()}})
-        val ocrPolicies=listOf("ko-primary","en-primary","mixed-review","ja","zh","pt")
-        val ocrNames=listOf("한국어 우선","English first","한·영 검토","日本語","中文","Português")
-        setting("손글씨 OCR 언어","한국어와 영어가 섞인 필기를 함께 인식합니다.",
-            ui.button(ocrNames[ocrPolicies.indexOf(ocrPolicy()).coerceAtLeast(0)],height=38){
-                choose("손글씨 OCR 언어",ocrNames){i->settings.put("ocrLanguagePolicy",ocrPolicies[i]);saveSettings();scheduleOcr();showSettings()}
-            })
-        toggle("스타일러스 전용 필기","손바닥과 손가락 입력을 필기에서 제외합니다.","stylusOnly",true)
-        toggle("낙서해서 지우기","펜으로 글자 위를 지그재그로 문지르면 반복해서 닿은 필기를 지웁니다.","scribbleErase",true)
-        toggle("그려서 도형 만들기","일반 펜으로 그린 뒤 펜촉을 댄 채 멈추면 직선·곡선·원·타원·사각형으로 변환합니다.","drawHold",true)
-        toggle("스타일러스 정보 표시","필압, 기울기, 입력 장치를 화면에 표시합니다.","telemetry",false)
-        val opacity=ui.col();val output=ui.text("${(settings.f("hudTextOpacity",1f)*100).toInt()}%",12f,ui.ink,true).apply{gravity=Gravity.RIGHT};opacity.addView(output)
-        opacity.addView(range((settings.f("hudTextOpacity",1f)*100).toInt(),35,100){value->output.text="$value%";settings.put("hudTextOpacity",value/100f);applyHudOpacity();saveSettings()},LinearLayout.LayoutParams(dp(160),dp(28)))
-        setting("HUD 텍스트 투명도","S Pen 지우개와 상태 표시 글자의 투명도를 조절합니다.",opacity)
-        toggle("연속 페이지 보기","모든 페이지를 세로로 이어서 표시합니다.","continuous",true)
-        toggle("손글씨 OCR 자동 등록","필기를 인식해 문서 검색에 등록합니다.","autoOcr",true)
-        menuItem(content,"업데이트 확인","download","bad note ${BuildConfig.VERSION_NAME}"){checkUpdates()}
-        menuItem(content,"PDFium 오픈소스 고지","page-plus","PDF 원문 검색 엔진의 라이선스와 포함된 고지를 읽습니다."){
-            val notices=assets.open("pdfium-notices.txt").bufferedReader(Charsets.UTF_8).use{it.readText()}
-            val viewer=showSheet("Open Source","PDFium 라이선스",680)
-            viewer.addView(ui.text(notices,11f,ui.ink).apply{setTextIsSelectable(true)})
-        }
-        sheetActions(content,"완료","check",false){closeSheet()}
+        val shade = modal ?: return
+        if (settingsClosing) return
+        settingsClosing = true
+        shade.animate().alpha(0f).setDuration(220)
+            .setInterpolator(PathInterpolator(.3f, 0f, .8f, .15f))
+            .withEndAction { if (modal === shade) closeSheet() }
+            .start()
     }
+
+    private fun saveSettingsOpacity() {
+        if (settings.optDouble("hudTextOpacity", 1.0) != settingsBaseline.optDouble("hudTextOpacity", 1.0)) {
+            saveSettings()
+            if (settingsOpen) refreshSettings()
+        }
+    }
+
+    private fun refreshSettings() {
+        settingsSnapshot.value = settings.copyJson().apply { put("ocrLanguagePolicy", ocrPolicy()) }
+        val prefs = BackupPreferences(this)
+        val folderName = prefs.folder.takeIf { it.isNotBlank() }?.let {
+            val uri = Uri.parse(it)
+            val path = runCatching { android.provider.DocumentsContract.getTreeDocumentId(uri) }
+                .getOrNull() ?: uri.lastPathSegment.orEmpty()
+            path.substringAfter(':').substringAfterLast('/').ifBlank { t("백업 폴더") }
+        }
+        settingsBackup.value = BackupSettingsUi(prefs.enabled, folderName, prefs.status, backupCancel != null)
+    }
+
+    private fun pickBackupFolder() {
+        if (backupCancel != null) return
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(flags), REQUEST_BACKUP_FOLDER)
+    }
+
+    private fun setAutoBackup(enabled: Boolean) {
+        if (backupCancel != null) return
+        val prefs = BackupPreferences(this)
+        if (prefs.folder.isBlank()) {
+            message("백업 폴더를 먼저 선택해 주세요.")
+            return
+        }
+        prefs.enabled = enabled
+        try {
+            BackupSchedule.restore(this)
+        } catch (error: Exception) {
+            prefs.enabled = false
+            message(error.message ?: "예약 실패")
+        }
+        refreshSettings()
+    }
+
+    private fun runBackupNow() {
+        if (busy || saveFailed) return
+        if (BackupPreferences(this).folder.isBlank()) {
+            message("백업 폴더를 먼저 선택해 주세요.")
+            return
+        }
+        inkView?.finishContact()
+        val cancel = java.util.concurrent.atomic.AtomicBoolean()
+        backupCancel = cancel
+        setBusy(true, "변경된 노트를 백업하고 있습니다.")
+        refreshSettings()
+        afterSaved {
+            if (isDestroyed || isFinishing) return@afterSaved
+            backupWorker.execute {
+                val result = runCatching { SafBackup.run(this, repository) { cancel.get() } }
+                runOnUiThread {
+                    backupCancel = null
+                    if (!isDestroyed && !isFinishing) {
+                        setBusy(false)
+                        if (settingsOpen) refreshSettings()
+                        result.fold(
+                            { message("${it.written}개 문서를 백업했습니다.") },
+                            { message(it.message ?: "백업 실패") }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun shortcutGuide() = showSettings(SettingsPage.SHORTCUTS)
     private fun applyHudOpacity(){val opacity=settings.f("hudTextOpacity",1f).coerceIn(.35f,1f);pageLabel?.alpha=opacity;zoomLabel?.alpha=opacity;status.alpha=opacity;ocrStatusText?.alpha=opacity;inkView?.telemetry=settings.optBoolean("telemetry");inkView?.hudOpacity=opacity}
     private fun range(value:Int,minimum:Int=0,maximum:Int=100,changed:(Int)->Unit)=SeekBar(this).apply{
         max=maximum-minimum;progress=(value-minimum).coerceIn(0,max);setPadding(dp(4),0,dp(4),0)
@@ -1883,7 +2115,18 @@ open class MainActivity:ComponentActivity(){
         return content
     }
     private fun closeSheet(){
-        modal?.let{root.removeView(it)};modal=null
+        val previous = modal
+        modal = null
+        previous?.let {
+            if (settingsOpen) it.animate().cancel()
+            root.removeView(it)
+        }
+        if (settingsOpen) {
+            settingsOpen = false
+            settingsClosing = false
+            saveSettingsOpacity()
+            body.importantForAccessibility = settingsBackgroundAccessibility
+        }
         (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.hideSoftInputFromWindow(root.windowToken,0)
     }
     private fun showSheet(eyebrow:String,title:String,width:Int=680):LinearLayout{
@@ -1948,7 +2191,16 @@ open class MainActivity:ComponentActivity(){
         sheetActions(content){closeSheet();action(selected);renderActiveDock()}
     }
     override fun dispatchTouchEvent(event:MotionEvent):Boolean{textEditor?.onOutsideTouch(event);return super.dispatchTouchEvent(event)}
-    private fun navigateBack(){if(modal!=null){closeSheet();return};if(textEditor?.active==true){textEditor?.finish(returnToLasso=true);return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){backupCancel?.set(true);fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
+    private fun navigateBack(){
+        if (settingsOpen) {
+            if (backupCancel != null) closeSettings()
+            else when (settingsPage.value) {
+                null -> closeSettings()
+                else -> settingsPage.value = null
+            }
+            return
+        }
+        if(modal!=null){closeSheet();return};if(textEditor?.active==true){textEditor?.finish(returnToLasso=true);return};if(searchDrawer!=null){searchDocument();return};if(pageSidebar!=null){togglePages();return};if(busy){backupCancel?.set(true);fileExport.cancel();return};if(document!=null){inkView?.finishContact();afterSaved{showLibrary()}}else afterSaved{finish()}}
     private fun handleEditorShortcut(event:KeyEvent):Boolean{
         val key=when(event.keyCode){KeyEvent.KEYCODE_Z->"Z";KeyEvent.KEYCODE_Y->"Y";KeyEvent.KEYCODE_S->"S"
             in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9->(event.keyCode-KeyEvent.KEYCODE_0).toString();else->""}
@@ -1983,12 +2235,35 @@ open class MainActivity:ComponentActivity(){
     }
     override fun onSaveInstanceState(outState:Bundle){textEditor?.finish();inkView?.finishContact();outState.putString("documentId",document?.id)
         outState.putInt("pageIndex",inkView?.currentIndex?:0);outState.putString("activeTool",inkView?.tool?.name)
-        outState.putString("pendingExport",fileExport.pendingPath());super.onSaveInstanceState(outState)}
+        outState.putString("pendingExport",fileExport.pendingPath())
+        outState.putBoolean("settingsOpen", settingsOpen && !settingsClosing)
+        outState.putString("settingsPage", settingsPage.value?.name)
+        super.onSaveInstanceState(outState)
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            // Another document window can save while this library has lost focus.
+            if (hasHadWindowFocus) refreshLibraryRows?.invoke()
+            hasHadWindowFocus = true
+        }
+    }
     override fun onResume(){super.onResume();if(::pageOcr.isInitialized){recognition.setActive(true);pageOcr.setActive(true)}}
     override fun onPause(){textEditor?.finish();pageGrid?.cancelDrag();ocrTask?.let{handler.removeCallbacks(it)};cancelManualOcr("손글씨 인식을 취소했습니다.")
         if(::pageOcr.isInitialized){pageOcr.setActive(false);recognition.setActive(false)}
         inkView?.finishContact();ocrTask?.let{handler.removeCallbacks(it)};if(audio.recording)stopRecording();super.onPause()}
-    override fun onConfigurationChanged(newConfig:Configuration){textEditor?.finish();pageGrid?.cancelDrag();super.onConfigurationChanged(newConfig);val index=inkView?.currentIndex?:0;afterSaved{if(document==null)showLibrary()else showEditor(index)}}
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        textEditor?.finish()
+        pageGrid?.cancelDrag()
+        super.onConfigurationChanged(newConfig)
+        val index = inkView?.currentIndex ?: 0
+        afterSaved {
+            val reopenSettings = settingsOpen && !settingsClosing
+            val page = settingsPage.value
+            if (document == null) showLibrary() else showEditor(index)
+            if (reopenSettings) showSettings(page)
+        }
+    }
     override fun onTrimMemory(level:Int){super.onTrimMemory(level);if(level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW){
         if(::repository.isInitialized)repository.clearOcrMemoryCache()
         recognition.releaseIdle()

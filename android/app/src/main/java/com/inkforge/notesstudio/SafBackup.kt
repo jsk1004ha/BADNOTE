@@ -19,17 +19,22 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class BackupPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("saf-backup", Context.MODE_PRIVATE)
+    private fun treeHash(tree: String) = MessageDigest.getInstance("SHA-256")
+        .digest(tree.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
     var folder: String
         get() = prefs.getString("folder", "").orEmpty()
         set(value) { check(prefs.edit().putString("folder", value).commit()) }
     var enabled: Boolean
         get() = prefs.getBoolean("enabled", false)
         set(value) { check(prefs.edit().putBoolean("enabled", value).commit()) }
-    val status get() = prefs.getString("status", "아직 백업하지 않았습니다.").orEmpty()
-    fun status(value: String) { check(prefs.edit().putString("status", value).commit()) }
+    // The previous global status carries no destination identity.
+    val status get() = prefs.getString("status:${treeHash(folder)}", "아직 백업하지 않았습니다.").orEmpty()
+    fun status(value: String) = status(folder, value)
+    fun status(tree: String, value: String) {
+        check(prefs.edit().putString("status:${treeHash(tree)}", value).commit())
+    }
     fun journal(tree: String): BackupEngine.Journal {
-        val prefix = "checkpoint:" + MessageDigest.getInstance("SHA-256")
-            .digest(tree.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) } + ":"
+        val prefix = "checkpoint:${treeHash(tree)}:"
         return object : BackupEngine.Journal {
             override fun previous(id: String): BackupEngine.Checkpoint? = prefs.getString(prefix + id, null)?.let {
                 runCatching { JSONObject(it).let { item ->
@@ -98,10 +103,10 @@ internal object SafBackup {
             val result = BackupEngine.run(source, SafBackupDestination(context, Uri.parse(tree)), prefs.journal(tree),
                 repository.workDirectory, interrupted)
             val date = java.text.DateFormat.getDateTimeInstance().format(java.util.Date())
-            prefs.status("$date · ${result.written}개 저장, ${result.skipped}개 변경 없음 또는 가져오기 진행 중")
+            prefs.status(tree, "$date · ${result.written}개 저장, ${result.skipped}개 변경 없음 또는 가져오기 진행 중")
             return result
         } catch (error: Exception) {
-            prefs.status(if (error is InterruptedIOException) "백업 취소 · 완료된 이전 백업은 보관됩니다."
+            prefs.status(tree, if (error is InterruptedIOException) "백업 취소 · 완료된 이전 백업은 보관됩니다."
                 else "백업 실패 · ${error.message ?: error.javaClass.simpleName}")
             throw error
         } finally { running.set(false) }
